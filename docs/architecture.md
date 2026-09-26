@@ -25,7 +25,7 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)
 
 **引擎和游戏分开**（2026-09-27，用户决定：做支持 2D 和 3D 的通用引擎，但功能仍由具体需求驱动）：
 - 引擎 crate（`loom_core`、`loom_platform`、`loom_render`、`loom_scene`，以及以后的远程控制等）里**不许出现具体游戏的概念**。例如 `loom_render` 只认网格、材质、相机、光，不认「角色」；`loom_scene` 的组件要是通用的，不能是某个游戏专用的。
-- 游戏逻辑放在游戏自己的 crate 里。现在只有 `loom_sim`，装的是类魂原型的角色、相机和碰撞。第二个游戏（E4 的 2D 示例）出现时，再决定 `loom_sim` 怎么拆分或改名、`loom` 命令行怎么选游戏。接口等有了两个使用者再定，不提前抽象。
+- 游戏逻辑放在游戏自己的 crate 里。现在只有 `loom_sim`，装的是类魂原型的角色、相机和碰撞。第二个游戏（E4 的 2D roguelike 示例，暂名 `rogue`）出现时，再决定 `loom_sim` 怎么拆分或改名、`loom` 命令行怎么选游戏。接口等有了两个使用者再定，不提前抽象。
 - 判断一个功能该不该进引擎：至少要有一个真实的使用者需要它；放进引擎的那一部分，另一个游戏也用得上。
 
 ## 2. 两种运行模式
@@ -606,7 +606,17 @@ aseprite-rs（`B:\Material\Project\claude\ports\aseprite-rs`，ADR-0004）和 lo
 - 先只支持 `--format json-array`。`json-hash` 用对象的键表示帧，serde_json 默认按键排序，帧顺序会错（`x 10` 排在 `x 2` 前面）。
 - 索引色精灵导出的 sheet 是索引色 PNG（`meta.format` 为 `I8`），读入时要展开成 RGBA。
 - 帧时长是毫秒（`duration`，例如 100），不一定是 tick（1/60 s）的整数倍。换算规则要定成整数运算，保证确定性。
-- 测试精灵不用 aseprite 仓库里的样例（受它的 EULA 约束），用 Lua 脚本通过原版生成我们自己的。
+- 测试精灵和游戏素材都不用 aseprite 仓库里的样例（受它的 EULA 约束），要自己画。
+
+**美术管线**（2026-09-27，用户决定）：
+- 用 aseprite-rs 的 MCP（`ase-mcp`）画，AI 通过它的 `create_sprite`、`run_lua`、`preview`、`export_sheet` 等工具操作。
+- **注册方式**：按 aseprite-rs 那边给的方案，用 `claude mcp add aseprite --scope local` 注册在本机的 loom 项目上，**不进仓库**，写在用户的 `~/.claude.json` 里。`--root` 是 loom 的 `assets/art`，所有文件操作都限制在这个目录里。
+  - 代价：它直接运行 aseprite-rs 的 `target/release/ase-mcp.exe`。只要有 loom 会话开着它，aseprite-rs 那边就重新编译不了这个 exe（Windows 的文件锁）。遇到时在 loom 会话里用 `/mcp` 断开即可。
+- **文件**：
+  - `assets/art/<名字>.aseprite` 是源文件（二进制，走 Git LFS）；
+  - 导出的 `<名字>.png`（LFS）和 `<名字>.json`（文本）放在同一个目录；
+  - 导出用 `json-array`，带上 tag。
+- **命名**：每张瓦片或每个精灵用 **tag** 命名，一个 tag 覆盖它的帧。loom 按 tag 名找帧，不依赖帧的顺序和文件名。
 
 ## 13. 远程控制 `loom serve`（E3 起）
 
