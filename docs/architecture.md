@@ -490,9 +490,10 @@ right   = Vec3( c, 0, -s)
 dir     = right * v.x + forward * v.y
 
 // 4. 移动，然后把胶囊体推出碰撞体（G1.3，见下文「碰撞」）
+//    G2.1 起这一步换成下文「耐力、翻滚、冲刺」里的第 4 步；没有按翻滚键时结果和这里逐位相同
 position = resolve(position + dir * (run_speed / 60.0))
 
-// 5. 转身：朝 dir 转，每个 tick 最多转 turn_speed 度的 1/60
+// 5. 转身：朝 dir 转，每个 tick 最多转 turn_speed 度的 1/60（G2.1 起，翻滚和后撤步期间不做）
 if v.length_squared() > 0.0 {
     target = libm::atan2f(-dir.x, -dir.z)
     diff   = wrap(target - facing)
@@ -534,6 +535,119 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 ```
 
 - `camera.distance`（G1.7 起）：`cam_distance`，相机当前离 `pivot` 的距离
+- `player` 的 `stamina`、`stamina_wait`、`action`、`action_tick`、`invulnerable`（G2.1 起）见下文「耐力、翻滚、冲刺」
+
+### 耐力、翻滚、冲刺（G2.1 起）
+
+用户决定（2026-09-27）：
+- 耐力和翻滚一起做（原 G2.1、G2.2 合并）。
+- 一个键（`roll`，空格）：**点按松开时翻滚，按住超过一小段时间就冲刺**，和黑魂 3 一样。
+- **只要耐力大于 0 就能出招**，扣到 0 为止。
+- **不推方向时按翻滚是后撤步**：向身后跳一小步，距离短、无敌帧少、消耗少。
+
+**参数**写在角色节点的 `props` 里（第 10 节），热重载就能调。
+- 都可以省略，省略时用下表的默认值；演示场景把它们全部显式写出来。这里和 `rogue` 不同，没有要求必填：参数有 16 个，要求必填的话，每个测试场景都得抄一遍。
+- 写了不认识的名字就报错（防拼写错误）。
+
+| prop | 默认 | 单位、规则 |
+|---|---|---|
+| `stamina_max` | 100 | > 0 |
+| `stamina_regen` | 45 | 每秒恢复，> 0 |
+| `stamina_delay_ticks` | 30 | 用过耐力后，等多少 tick 才开始恢复；整数 ≥ 0 |
+| `tap_ticks` | 15 | 按住不超过这么多 tick 就松开算「点按」；整数 ≥ 1 |
+| `sprint_speed` | 6 | 米/秒，> 0 |
+| `sprint_cost` | 15 | 冲刺时每秒消耗，> 0 |
+| `roll_cost` | 20 | > 0 |
+| `roll_ticks` | 32 | 翻滚持续的 tick 数，整数 ≥ 1 |
+| `roll_distance` | 3.2 | 米，> 0 |
+| `roll_invuln_from`、`roll_invuln_to` | 1、20 | 无敌帧：翻滚的第几个 tick 到第几个 tick（从 1 数，含两端），整数，`1 ≤ from ≤ to ≤ roll_ticks` |
+| `backstep_cost` | 12 | > 0 |
+| `backstep_ticks` | 20 | 整数 ≥ 1 |
+| `backstep_distance` | 1.5 | 米，> 0 |
+| `backstep_invuln_from`、`backstep_invuln_to` | 1、8 | 同上，`≤ backstep_ticks` |
+
+- 加载时换算成每 tick 的量：`sprint_step = sprint_speed / 60`，`sprint_drain = sprint_cost / 60`，`regen_step = stamina_regen / 60`，`roll_step = roll_distance / roll_ticks`，`backstep_step = backstep_distance / backstep_ticks`。props 是 f64，先 `as f32` 再算。
+- 和 `run_speed` 一样防穿墙：`sprint_step`、`roll_step`、`backstep_step` 都必须**小于胶囊体半径**。
+- 报错（`souls::GameError`，按「场景无效」报出；`<名字>` 是角色节点的路径）：
+  - `the character "<名字>": unknown prop "<p>"`
+  - `the character "<名字>": prop "<p>" must be greater than 0, got v`
+  - `the character "<名字>": prop "<p>" must be a whole number of at least N, got v`（N 是 1，`stamina_delay_ticks` 是 0）
+  - `the character "<名字>": needs 1 <= roll_invuln_from <= roll_invuln_to <= roll_ticks`（后撤步同理，把 `roll` 换成 `backstep`）
+  - `the character "<名字>": <sprint|roll|backstep> moves d m per tick, which must be less than the capsule radius r`
+  - 检查顺序：不认识的名字（按文件顺序）→ 每个 prop 的取值（按上表顺序）→ 无敌帧区间（先 roll 后 backstep）→ 每 tick 距离（sprint、roll、backstep）。
+
+**状态**（除了原有的 `position`、`facing`）：
+- `stamina`（f32，开局 = `stamina_max`）、`stamina_wait`（还要等多少 tick 才恢复，开局 0）；
+- `action`：`idle`、`sprint`、`roll`、`backstep` 之一；`action_tick`：翻滚或后撤步进行到第几个 tick（从 1 数），其他时候是 0；
+- 不进状态导出的内部状态：`hold`（翻滚键已经连续按住了几个 tick）、`spent`（这次按住的冲刺已经把耐力用光）、`action_dir`（翻滚或后撤步的方向，单位向量）。
+
+**每个 tick**：第 1–3 步不变，第 4、5 步换成下面这样，第 6 步不变。
+
+```text
+// 0.（在第 1 步之前）翻滚键
+if input.pressed("roll") {
+    hold = min(hold + 1, tap_ticks + 1)                          // 封顶，不会溢出
+    tap = false
+} else {
+    tap = input.just_released("roll") && hold <= tap_ticks       // hold 是松开前按住的 tick 数
+    hold = 0; spent = false
+}
+
+// 4. 动作和移动
+busy = true                                                       // 这个 tick 有没有用耐力或处于动作中
+if action == roll || action == backstep {
+    action_tick += 1
+    position = resolve(position + action_dir * step_of(action))
+    if action_tick == ticks_of(action) { action = idle; action_tick = 0 }     // 最后一个 tick 仍然移动
+} else if tap && stamina > 0 {
+    if v.length_squared() > 0.0 {                                  // 翻滚：朝输入方向，立刻转过去
+        action = roll; action_dir = dir / dir.length()
+        facing = wrap(libm::atan2f(-action_dir.x, -action_dir.z))
+        if facing == 0.0 { facing = 0.0 }                          // 把 -0.0 规范成 0.0，同初始状态
+    } else {                                                       // 后撤步：朝身后，不转身
+        action = backstep
+        action_dir = Vec3(libm::sinf(facing), 0.0, libm::cosf(facing))
+    }
+    stamina = max(stamina - cost_of(action), 0.0); stamina_wait = stamina_delay_ticks
+    action_tick = 1
+    position = resolve(position + action_dir * step_of(action))
+    if ticks_of(action) == 1 { action = idle; action_tick = 0 }
+} else {
+    sprinting = input.pressed("roll") && hold > tap_ticks && !spent && stamina > 0.0 && v.length_squared() > 0.0
+    position = resolve(position + dir * (sprinting ? sprint_step : run_step))
+    if sprinting {
+        action = sprint
+        stamina = max(stamina - sprint_drain, 0.0); stamina_wait = stamina_delay_ticks
+        if stamina == 0.0 { spent = true }
+    } else {
+        action = idle; busy = false
+    }
+    第 5 步：转身（原样）
+}
+
+// 5b. 耐力恢复
+if !busy {
+    if stamina_wait > 0 { stamina_wait -= 1 } else { stamina = min(stamina + regen_step, stamina_max) }
+}
+invulnerable = (action == roll || action == backstep) && invuln_from_of(action) <= action_tick <= invuln_to_of(action)
+```
+
+- `run_step` 就是原来的 `run_speed / 60.0`。没按翻滚键时 `sprinting` 是 false，第 4 步和 G1 逐位相同。
+- **点按**：`tap` 在松开的那个 tick 触发，所以翻滚比按下晚出，晚的时间就是按住的时间（黑魂 3 同样如此）。两次采样之间按下又松开的短按，`hold` 是 1，照样算点按。
+- **冲刺**：按住超过 `tap_ticks` 并且推着方向才冲刺，松开时不翻滚。冲刺把耐力用光后（`spent`），这次按住就只能普通跑，要松开重按才能再冲刺。
+- **翻滚和后撤步期间**：移动输入和转身都不起作用，相机照常能转；按键的松开不会排队，动作期间的点按直接丢掉。
+- 翻滚方向用的是开始那个 tick 的 `dir`（相对相机），角色立刻转向翻滚方向。
+- 结束的那个 tick（`action_tick == ticks`）算作动作中：仍然移动，`busy` 为 true，不恢复耐力；`invulnerable` 按结束后的 `idle` 算，是 false。
+- 只用加减乘除、`sqrt`、`min`、`max` 和 libm 的三角函数，符合第 4 节。
+
+**状态导出**的 `player`（G2.1 起，字段按这个顺序）：
+
+```json
+"player": { "position": [x, y, z], "facing": f, "stamina": 100.0, "stamina_wait": 0, "action": "idle", "action_tick": 0, "invulnerable": false }
+```
+
+- 无敌帧现在只是状态，还没有东西会打到角色。攻击判定是 G3 的事。
+- **没有画面上的耐力条**：要显示得先有 HUD 或文字渲染，还没有使用者。目前在状态导出里看。
 
 ### 碰撞（G1.3 起）
 
