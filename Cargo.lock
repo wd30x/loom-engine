@@ -1207,9 +1207,10 @@ dependencies = [
  "loom_platform",
  "loom_render",
  "loom_scene",
- "loom_sim",
+ "rogue",
  "serde",
  "serde_json",
+ "souls",
 ]
 
 [[package]]
@@ -1255,18 +1256,6 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "ron",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "loom_sim"
-version = "0.1.0"
-dependencies = [
- "glam",
- "libm",
- "loom_core",
- "loom_scene",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -2080,6 +2069,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rogue"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "loom_core",
+ "loom_scene",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "ron"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2351,6 +2352,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "souls"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "libm",
+ "loom_core",
+ "loom_scene",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -110,6 +110,7 @@ impl Session {
                     Describe {
                         tick_hz: TICK_HZ,
                         tick: self.tick(),
+                        game: self.sim.game().name(),
                         scene: self.sim.scene_path(),
                         actions,
                         axes,
@@ -135,6 +136,7 @@ impl Session {
                     id,
                     LoadSceneResult {
                         tick: self.tick(),
+                        game: self.sim.game().name(),
                         scene: self.sim.scene_path(),
                     },
                 )
@@ -502,6 +504,8 @@ struct RecordParams {
 struct Describe<'a> {
     tick_hz: u32,
     tick: u64,
+    /// The current scene's game.
+    game: &'static str,
     scene: Option<String>,
     /// Sorted by name.
     actions: Vec<&'a str>,
@@ -512,6 +516,7 @@ struct Describe<'a> {
 #[derive(Serialize)]
 struct LoadSceneResult {
     tick: u64,
+    game: &'static str,
     scene: Option<String>,
 }
 

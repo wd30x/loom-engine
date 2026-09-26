@@ -7,8 +7,8 @@ use loom_scene::Scene;
 const DEMO_BINDINGS: &str = include_str!("demo_bindings.ron");
 const DEMO_SCENE: &str = include_str!("demo.scene.ron");
 
-/// The demo's key bindings.
-pub fn demo_bindings() -> ActionMap {
+/// The game's key bindings.
+pub fn bindings() -> ActionMap {
     ActionMap::parse(DEMO_BINDINGS)
         .expect("the embedded demo bindings are valid (checked by a unit test)")
 }
@@ -25,7 +25,7 @@ mod tests {
 
     #[test]
     fn demo_bindings_define_exactly_the_game_axes() {
-        let map = demo_bindings();
+        let map = bindings();
         assert_eq!(map.actions().count(), 0);
         let mut axes: Vec<_> = map.axes().collect();
         axes.sort_unstable();

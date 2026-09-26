@@ -8,9 +8,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use loom_core::input::{ActionMap, ActionSet, ActionState};
 use loom_scene::Transform;
-use loom_sim::{Game, GameState};
 use serde::Serialize;
 
+use crate::games::{AnyGame, AnyGameState};
 use crate::output::ensure_parent_dir;
 
 #[derive(Debug, Serialize)]
@@ -23,12 +23,13 @@ pub(crate) struct StateDump {
     pub axes: BTreeMap<String, f32>,
     /// Local transform of every scene node, keyed by path (sorted).
     pub nodes: BTreeMap<String, Transform>,
-    /// Game state (`docs/architecture.md` section 11).
-    pub game: GameState,
+    /// Game state: souls' (`docs/architecture.md` section 11) or rogue's
+    /// (section 15), unwrapped.
+    pub game: AnyGameState,
 }
 
 impl StateDump {
-    pub fn of(game: &Game, input: &ActionState, bindings: &ActionMap) -> Self {
+    pub fn of(game: &AnyGame, input: &ActionState, bindings: &ActionMap) -> Self {
         Self {
             tick: game.clock().tick(),
             sim_time: game.clock().sim_time(),
@@ -68,12 +69,12 @@ mod tests {
 
     #[test]
     fn dump_is_pretty_json_with_trailing_newline() {
-        let mut game = Game::new(loom_sim::demo_scene()).unwrap();
+        let mut game = AnyGame::builtin().unwrap();
         let input = ActionState::new();
         for _ in 0..60 {
             game.tick(&input);
         }
-        let json = StateDump::of(&game, &input, &loom_sim::demo_bindings()).to_json();
+        let json = StateDump::of(&game, &input, &game.bindings()).to_json();
         // Field order, and node paths sorted; exact bytes are checked by the CLI tests.
         assert!(json.starts_with(concat!(
             "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"actions\": [],\n",

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "games/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,7 +16,8 @@ loom_core = { path = "crates/loom_core" }
 loom_platform = { path = "crates/loom_platform" }
 loom_render = { path = "crates/loom_render" }
 loom_scene = { path = "crates/loom_scene" }
-loom_sim = { path = "crates/loom_sim" }
+rogue = { path = "games/rogue" }
+souls = { path = "games/souls" }
 
 # windowing / graphics
 winit = "0.30.13"

@@ -11,6 +11,8 @@ pub(crate) type Triple = (f32, f32, f32);
 #[serde(deny_unknown_fields)]
 pub(crate) struct SceneFile {
     pub version: u32,
+    /// Which game runs the scene; `loom_scene` knows no game names.
+    pub game: Option<String>,
     /// Path of the active camera node.
     pub camera: String,
     /// Ambient light, linear RGB.

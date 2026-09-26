@@ -75,6 +75,7 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
         record,
         input: sim.input_report(),
         scene: sim.scene_path(),
+        game: sim.game().name(),
         reloads: 0,
         reload_errors: 0,
         adapter,
@@ -161,6 +162,7 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
         record: app.record,
         input: app.sim.input_report(),
         scene: app.sim.scene_path(),
+        game: app.sim.game().name(),
         reloads: app.reloads,
         reload_errors: app.reload_errors,
         adapter: Some(adapter.into()),
@@ -200,11 +202,13 @@ struct WindowRun<'a> {
 }
 
 impl WindowRun<'_> {
-    /// Captures (or releases) the mouse for live input; replaying a script
-    /// or `--no-capture` leaves the pointer alone.
+    /// Captures (or releases) the mouse for live input to bindings with a
+    /// mouse axis; replaying a script, `--no-capture` or keyboard-only
+    /// bindings leave the pointer alone.
     fn capture_mouse(&self, captured: bool) {
         if let Some(window) = &self.window
             && self.sim.is_live()
+            && self.sim.bindings().uses_mouse()
             && !self.args.no_capture
         {
             loom_platform::set_cursor_captured(window, captured);
@@ -260,6 +264,12 @@ impl WindowRun<'_> {
             || reload::read_source(path),
         ) {
             Poll::Reloaded(loaded) => {
+                let running = self.sim.game().name();
+                if let Err(e) = reload::check_same_game(running, loaded.game.name()) {
+                    self.reload_errors += 1;
+                    log::error!("scene {} not reloaded: {e:#}", path.display());
+                    return false;
+                }
                 self.sim.restart(*loaded);
                 self.reloads += 1;
                 log::info!("scene {} reloaded; restarting from tick 0", path.display());

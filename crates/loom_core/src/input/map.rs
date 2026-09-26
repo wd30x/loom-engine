@@ -131,6 +131,12 @@ impl ActionMap {
     }
 
     /// Action names in file order.
+    /// Whether any axis reads mouse motion; the window captures the mouse
+    /// only then (`docs/architecture.md` section 9).
+    pub fn uses_mouse(&self) -> bool {
+        self.axes.iter().any(|a| a.mouse.is_some())
+    }
+
     pub fn actions(&self) -> impl Iterator<Item = &str> {
         self.bindings.iter().map(|(a, _)| a.as_str())
     }
@@ -194,6 +200,41 @@ mod tests {
 
     fn axes(list: &str) -> String {
         format!("(axes: [{list}])")
+    }
+
+    #[test]
+    fn uses_mouse_only_when_an_axis_reads_the_mouse() {
+        let keys_only = axes(r#"(axis: "move_x", keys: [(KeyD, 1.0)])"#);
+        assert!(!ActionMap::parse(&keys_only).unwrap().uses_mouse());
+        let no_axes = actions(r#"(action: "wait", keys: [Period])"#);
+        assert!(!ActionMap::parse(&no_axes).unwrap().uses_mouse());
+        let mouse = axes(
+            r#"(axis: "move_x", keys: [(KeyD, 1.0)]), (axis: "look_x", keys: [], mouse: X, mouse_scale: 0.01)"#,
+        );
+        assert!(ActionMap::parse(&mouse).unwrap().uses_mouse());
+    }
+
+    #[test]
+    fn numpad_and_period_keys_parse_by_their_winit_names() {
+        let src = actions(
+            r#"(action: "step", keys: [Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9, Period])"#,
+        );
+        let map = ActionMap::parse(&src).unwrap();
+        for key in [
+            Key::Numpad1,
+            Key::Numpad2,
+            Key::Numpad3,
+            Key::Numpad4,
+            Key::Numpad5,
+            Key::Numpad6,
+            Key::Numpad7,
+            Key::Numpad8,
+            Key::Numpad9,
+            Key::Period,
+        ] {
+            let pressed = map.actions_for(&BTreeSet::from([key]));
+            assert!(pressed.contains("step"), "{key:?}");
+        }
     }
 
     #[test]

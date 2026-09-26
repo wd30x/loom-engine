@@ -1,0 +1,19 @@
+[package]
+name = "souls"
+description = "Soulslike combat prototype: a capsule character, an orbit camera and collision. Deterministic: libm, not std, for transcendental math."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+loom_core.workspace = true
+loom_scene.workspace = true
+glam.workspace = true
+libm.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

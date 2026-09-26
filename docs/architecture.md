@@ -377,14 +377,14 @@ RON，所有结构体 `deny_unknown_fields`：
 )
 ```
 
-顶层字段 `version`、`camera`、`ambient`、`nodes` **都必填**（E2 审查决定：场景文件多由 AI 手写，宁可显式）。
+顶层字段 `version`、`camera`、`ambient`、`nodes` **都必填**（E2 审查决定：场景文件多由 AI 手写，宁可显式）。可选字段不用写 `Some(...)`，解析时开了 ron 的 `IMPLICIT_SOME` 扩展。
 
 E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场景（第 1 节「选择游戏」）。`loom_scene` 不认识具体游戏，只检查写了的话不能是空串，`Scene::game()` 返回 `Option<&str>`。
 - `loom run`、`loom serve` 必须有 `game`，缺了或不认识就按「场景无效」报错：
   - 缺：`the scene does not say which game runs it: add game: "rogue" or game: "souls" at the top level`
   - 不认识：`unknown game "rouge": the games are "rogue" and "souls"`
 - `loom view` 不跑游戏，所以 `game` 可以不写（例如 `assets/scenes/tiles_preview.ron`）。
-- **热重载不能换游戏**（E4.3 规划者决定）：改过的场景写的 `game` 和正在跑的不同时，按重载失败处理（`reload_errors` 加 1，旧场景继续跑），日志写 `hot reload cannot switch games: the scene now says "rogue", but "souls" is running; restart loom to switch`。换游戏会连带换键位表，正在回放的 `--input` 脚本、抓鼠标的状态都要跟着变，不值得为这种用法处理。serve 的 `load_scene` 是显式换场景，可以换游戏（第 13 节）。可选字段不用写 `Some(...)`，解析时开了 ron 的 `IMPLICIT_SOME` 扩展。
+- **热重载不能换游戏**（E4.3 规划者决定）：改过的场景写的 `game` 和正在跑的不同时，按重载失败处理（`reload_errors` 加 1，旧场景继续跑），日志写 `hot reload cannot switch games: the scene now says "rogue", but "souls" is running; restart loom to switch`。换游戏会连带换键位表，正在回放的 `--input` 脚本、抓鼠标的状态都要跟着变，不值得为这种用法处理。serve 的 `load_scene` 是显式换场景，可以换游戏（第 13 节）。
 
 节点字段（除 `name` 外都可省略）：
 
@@ -820,6 +820,7 @@ E4.3 只有地图、玩家、八方向移动、墙和原地等待。僵尸、攻
 - 根节点 `map`，带 `tilemap`。**`#` 是墙**，挡路；legend 里的其他字符都是能走的地面。
 - 根节点 `player`，带 `sprite`。
 - `map` 和 `player` 都**只能平移**：`rotation` 不写或全 0，`scale` 不写或 `(1, 1, 1)`，不能用 `look_at`。
+  - 实际检查的是运行时的变换：旋转等于单位四元数、缩放等于 `(1, 1, 1)`。运行时的节点不记录是否用过 `look_at`，所以恰好算出单位旋转的 `look_at`（看向正 -Z）也能通过，效果和不写一样，不算问题（E4.3 审查决定）。
 - 玩家所在的格子：`c = player.x - map.x`，`r = map.y - player.y`（第 14 节：格子 `(c, r)` 的中心在地图局部的 `(c, -r)`）。两者都必须是整数，并且在地图范围内（`0 ≤ c < 宽`，`0 ≤ r < 高`），格子不能是墙。
 - `player.z > map.z`，玩家画在地图前面。
 - 相机是场景里写的，游戏不动它。E4.3 的地图一屏放得下，跟随相机以后需要时再加。

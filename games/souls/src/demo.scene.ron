@@ -1,6 +1,7 @@
 // Built-in demo scene, used when `loom run` gets no --scene (docs/architecture.md sections 10 and 11).
 (
     version: 1,
+    game: "souls",                    // 用哪个游戏跑这个场景
     camera: "main_cam",               // 当前相机节点的路径
     ambient: (0.2, 0.2, 0.25),        // 环境光，线性 RGB
     nodes: [

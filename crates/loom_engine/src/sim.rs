@@ -11,34 +11,35 @@ use loom_core::input::{
     TickInput, canonical_axis_value,
 };
 use loom_render::{RenderError, Renderer};
-use loom_sim::{Game, demo_bindings, demo_scene};
+use loom_scene::Scene;
 
 use crate::RunArgs;
+use crate::games::AnyGame;
 use crate::output::ensure_parent_dir;
 use crate::report::InputReport;
 use crate::sheet::Sheets;
 use crate::state::StateDump;
 use crate::view::render_scene;
 
-/// A scene ready to simulate: the game and the sprite sheets its scene
-/// uses, loaded together so a missing sheet or tag fails the load like any
-/// other invalid scene.
+/// A scene ready to simulate: the game its top-level `game` names and the
+/// sprite sheets it uses, loaded together so a missing sheet or tag fails
+/// the load like any other invalid scene.
 pub(crate) struct LoadedScene {
-    pub game: Game,
+    pub game: AnyGame,
     pub sheets: Sheets,
 }
 
 impl LoadedScene {
     pub fn from_source(src: &str) -> Result<Self> {
-        Self::new(Game::from_source(src)?)
+        Self::new(AnyGame::new(Scene::parse(src)?)?)
     }
 
-    /// The built-in demo scene.
+    /// The built-in souls demo scene.
     pub fn builtin() -> Result<Self> {
-        Self::new(Game::new(demo_scene())?)
+        Self::new(AnyGame::builtin()?)
     }
 
-    fn new(game: Game) -> Result<Self> {
+    fn new(game: AnyGame) -> Result<Self> {
         let sheets = Sheets::load(game.scene())?;
         Ok(Self { game, sheets })
     }
@@ -62,10 +63,11 @@ enum InputSource {
 }
 
 pub(crate) struct Sim {
-    game: Game,
+    game: AnyGame,
     /// Sheets of `game`'s scene; only ever drawn with one renderer.
     sheets: Sheets,
     actions: ActionState,
+    /// The game's key bindings.
     bindings: ActionMap,
     source: InputSource,
     recorder: Option<InputRecorder>,
@@ -90,7 +92,8 @@ impl Sim {
             }
             None => (LoadedScene::builtin()?, None),
         };
-        let bindings = demo_bindings();
+        // The script names this game's actions, so it is read after the scene.
+        let bindings = loaded.game.bindings();
         let source = match &args.input {
             Some(path) => {
                 let script = load_script(path, &bindings)?;
@@ -125,10 +128,10 @@ impl Sim {
         scene_source: Option<String>,
     ) -> Self {
         Self {
+            bindings: loaded.game.bindings(),
             game: loaded.game,
             sheets: loaded.sheets,
             actions: ActionState::new(),
-            bindings: demo_bindings(),
             source: InputSource::Held(TickInput::default()),
             recorder: Some(InputRecorder::new()),
             scene_path,
@@ -138,8 +141,9 @@ impl Sim {
 
     /// Starts over from tick 0 with `loaded` (a reloaded scene): the clock,
     /// action state, recording and script replay restart; keys held on the
-    /// keyboard stay held.
+    /// keyboard stay held. The bindings are `loaded`'s game's.
     pub fn restart(&mut self, loaded: LoadedScene) {
+        self.bindings = loaded.game.bindings();
         self.game = loaded.game;
         self.sheets = loaded.sheets;
         self.actions = ActionState::new();
@@ -248,7 +252,7 @@ impl Sim {
         matches!(self.source, InputSource::Live(_))
     }
 
-    pub fn game(&self) -> &Game {
+    pub fn game(&self) -> &AnyGame {
         &self.game
     }
 

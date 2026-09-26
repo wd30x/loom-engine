@@ -9,7 +9,7 @@
 mod demo;
 mod game;
 
-pub use demo::{demo_bindings, demo_scene};
+pub use demo::{bindings, demo_scene};
 pub use game::{
     CameraState, Game, GameError, GameState, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, PlayerState,
 };

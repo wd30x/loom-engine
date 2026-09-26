@@ -1,6 +1,6 @@
 use super::*;
 
-const DEMO: &str = include_str!("../../loom_sim/src/demo.scene.ron");
+const DEMO: &str = include_str!("../../../games/souls/src/demo.scene.ron");
 
 /// A scene file with a camera node `cam` followed by `nodes`.
 fn scene_with(nodes: &str) -> String {
@@ -897,4 +897,22 @@ fn sheet_and_tag_names_must_not_be_empty() {
         let p = node_problem(&node, "n");
         assert_eq!(p, Problem::EmptyField(field), "{node}");
     }
+}
+
+#[test]
+fn top_level_game_is_optional_and_returned_as_written() {
+    let without = Scene::parse(&scene_with(r#"(name: "a")"#)).unwrap();
+    assert_eq!(without.game(), None);
+    let src =
+        scene_with(r#"(name: "a")"#).replacen("(version: 1,", r#"(version: 1, game: "rogue","#, 1);
+    let with = Scene::parse(&src).unwrap();
+    assert_eq!(with.game(), Some("rogue"));
+}
+
+#[test]
+fn empty_game_name_is_rejected() {
+    let src = scene_with(r#"(name: "a")"#).replacen("(version: 1,", r#"(version: 1, game: "","#, 1);
+    let err = Scene::parse(&src).unwrap_err();
+    assert_eq!(err.to_string(), "game must not be empty");
+    assert!(matches!(err, SceneError::Game(Problem::EmptyField("game"))));
 }

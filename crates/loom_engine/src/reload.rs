@@ -99,6 +99,19 @@ impl SceneWatcher {
     }
 }
 
+/// Hot reload keeps the running game: a reloaded scene naming another game
+/// is rejected like an invalid one (`docs/architecture.md` section 10).
+/// Switching would also switch the bindings, the replayed script and the
+/// mouse capture.
+pub(crate) fn check_same_game(running: &str, reloaded: &str) -> anyhow::Result<()> {
+    if running == reloaded {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "hot reload cannot switch games: the scene now says {reloaded:?}, but {running:?} is running; restart loom to switch"
+    )
+}
+
 /// Stats the scene file for [`SceneWatcher::poll`].
 pub(crate) fn modified_time(path: &std::path::Path) -> io::Result<SystemTime> {
     std::fs::metadata(path)?.modified()
@@ -114,7 +127,7 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    const GOOD: &str = include_str!("../../loom_sim/src/demo.scene.ron");
+    const GOOD: &str = include_str!("../../../games/souls/src/demo.scene.ron");
 
     fn at(secs: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -241,7 +254,10 @@ mod tests {
             panic!("expected a reload");
         };
         let game = &loaded.game;
-        assert_eq!(game.state().player.position, glam::Vec3::new(3.0, 0.0, 0.0));
+        let crate::games::AnyGameState::Souls(state) = game.state() else {
+            panic!("the demo scene is a souls scene");
+        };
+        assert_eq!(state.player.position, glam::Vec3::new(3.0, 0.0, 0.0));
         assert_eq!(game.clock().tick(), 0);
         // The new content is now current: touching it again is no reload.
         assert!(matches!(
@@ -296,6 +312,16 @@ mod tests {
             poll_with(&mut w, t0 + CHECK_INTERVAL * 2, 3, &with_sprite("player")),
             Poll::Reloaded(_)
         ));
+    }
+
+    #[test]
+    fn hot_reload_that_switches_games_is_rejected() {
+        assert!(check_same_game("souls", "souls").is_ok());
+        let error = check_same_game("souls", "rogue").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "hot reload cannot switch games: the scene now says \"rogue\", but \"souls\" is running; restart loom to switch"
+        );
     }
 
     #[test]

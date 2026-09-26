@@ -1,4 +1,4 @@
-// Key bindings for the cube demo. Key names are W3C KeyboardEvent.code values
+// Key bindings of the souls game. Key names are W3C KeyboardEvent.code values
 // (docs/architecture.md section 9). Axis units are defined by the game:
 // move_x/move_y in [-1, 1], look_x/look_y in radians per tick.
 (

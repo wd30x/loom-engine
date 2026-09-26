@@ -1,0 +1,42 @@
+// The rogue game's scene (docs/architecture.md section 15):
+//   loom run --scene assets/scenes/rogue.ron
+// Move with the numpad or the vi keys (hjkl yubn), wait with numpad 5 or '.'.
+// The camera and the map are those of tiles_preview.ron. Pixel alignment: at the default
+// 1280x720 and ortho height 11.25, one cell is 720 / 11.25 = 64 pixels (the 16-pixel tiles scaled
+// 4x) and the view is 20 cells wide. The camera at (9.5, -5.125) puts the view's left edge at
+// x = -0.5 and its top edge at y = 0.5, so row r, column c covers [64c, 64c + 64) x [64r, 64r + 64)
+// of the screen; only the top 16 pixels of the last row show.
+// Cells: the map is at the origin, so cell (c, r) is centered at (c, -r); the player at
+// (3, -2, 1) stands on column 3, row 2, and each step moves it by one whole unit.
+(
+    version: 1,
+    game: "rogue",
+    camera: "cam",
+    ambient: (1.0, 1.0, 1.0),         // sprites are unlit: any value will do
+    nodes: [
+        (name: "cam", position: (9.5, -5.125, 10.0),
+            camera: (ortho: (height: 11.25), near: 0.1, far: 100.0)),
+        // '#' is a wall; every other legend character is floor
+        (name: "map", tilemap: (
+            sheet: "assets/art/tiles.json",
+            legend: [('#', "wall"), ('.', "floor")],
+            rows: [
+                "####################",
+                "#..................#",
+                "#..................#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#######....#",
+                "#..................#",
+                "#..................#",
+                "####################",
+            ],
+        )),
+        // z = 1: in front of the map
+        (name: "player", position: (3.0, -2.0, 1.0),
+            sprite: (sheet: "assets/art/tiles.json", tag: "player")),
+    ],
+)

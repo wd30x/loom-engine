@@ -35,6 +35,9 @@ pub enum SceneError {
     UnsupportedVersion(u32),
     #[error("ambient: {0}")]
     Ambient(Problem),
+    /// The top-level `game`.
+    #[error("{0}")]
+    Game(Problem),
     #[error("camera {0:?} does not name a node")]
     CameraNotFound(String),
     #[error("camera {0:?} names a node without a camera component")]
@@ -277,6 +280,8 @@ pub struct Scene {
     /// Nodes with a sprite or a tilemap, in pre-order.
     sprite_nodes: Vec<NodeId>,
     ambient: Vec3,
+    /// The top-level `game`: which game runs the scene. Never empty.
+    game: Option<String>,
 }
 
 impl Scene {
@@ -291,6 +296,9 @@ impl Scene {
             return Err(SceneError::UnsupportedVersion(file.version));
         }
         let ambient = color(file.ambient, "ambient").map_err(SceneError::Ambient)?;
+        if let Some(game) = &file.game {
+            not_empty(game, "game").map_err(SceneError::Game)?;
+        }
 
         let mut builder = Builder {
             nodes: Vec::new(),
@@ -311,6 +319,7 @@ impl Scene {
             colliders: builder.colliders,
             sprite_nodes: builder.sprite_nodes,
             ambient,
+            game: file.game,
         };
         // The target is a path from a root, resolved once the whole tree
         // exists: it may name a node that comes later in the file.
@@ -445,6 +454,12 @@ impl Scene {
     /// Ambient light, linear RGB.
     pub fn ambient(&self) -> Vec3 {
         self.ambient
+    }
+
+    /// The top-level `game`, as written: which game runs the scene
+    /// (`docs/architecture.md` sections 1 and 10). Never empty.
+    pub fn game(&self) -> Option<&str> {
+        self.game.as_deref()
     }
 }
 

@@ -11,7 +11,6 @@ use loom_render::{
     DirectionalLight, DrawItem, Frame, Projection, RenderError, Renderer, SpriteDraw,
 };
 use loom_scene::Scene;
-use loom_sim::demo_scene;
 
 use crate::ViewArgs;
 use crate::report::ViewReport;
@@ -132,26 +131,16 @@ fn mesh_kind(kind: loom_scene::MeshKind) -> loom_render::MeshKind {
 }
 
 /// `loom view`: renders the scene as loaded, without a game (so it needs no
-/// character) and without ticking, and saves a screenshot. The scene and
-/// its sheets are checked before the GPU is touched. `started` is the
-/// process start, for `renderer_init_ms`.
+/// `game`, nor what a game requires) and without ticking, and saves a
+/// screenshot. The scene and its sheets are checked before the GPU is
+/// touched. `started` is the process start, for `renderer_init_ms`.
 pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
-    let (scene, mut sheets) = match &args.scene {
-        Some(path) => {
-            let src = std::fs::read_to_string(path)
-                .with_context(|| format!("reading scene {}", path.display()))?;
-            let scene =
-                Scene::parse(&src).with_context(|| format!("invalid scene {}", path.display()))?;
-            let sheets = Sheets::load(&scene)
-                .with_context(|| format!("invalid scene {}", path.display()))?;
-            (scene, sheets)
-        }
-        None => {
-            let scene = demo_scene();
-            let sheets = Sheets::load(&scene)?;
-            (scene, sheets)
-        }
-    };
+    let path = &args.scene;
+    let src = std::fs::read_to_string(path)
+        .with_context(|| format!("reading scene {}", path.display()))?;
+    let scene = Scene::parse(&src).with_context(|| format!("invalid scene {}", path.display()))?;
+    let mut sheets =
+        Sheets::load(&scene).with_context(|| format!("invalid scene {}", path.display()))?;
     let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
     let renderer_init_ms = millis_since(started);
     render_scene(&mut renderer, &scene, &mut sheets)?;
@@ -163,7 +152,7 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
         mode: "view",
         screenshot,
         size: [args.size.width, args.size.height],
-        scene: args.scene.as_ref().map(|p| p.display().to_string()),
+        scene: path.display().to_string(),
         adapter: adapter.into(),
         renderer_init_ms,
     })

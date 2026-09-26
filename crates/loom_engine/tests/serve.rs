@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
-const DEMO_SCENE: &str = include_str!("../../loom_sim/src/demo.scene.ron");
+const DEMO_SCENE: &str = include_str!("../../../games/souls/src/demo.scene.ron");
 
 struct Session {
     code: i32,
@@ -19,8 +19,20 @@ struct Session {
 /// Starts `loom serve`, writes `requests` one per line, closes stdin and
 /// collects every reply until the process exits.
 fn serve_raw(requests: &[String]) -> Session {
+    serve_raw_in(std::path::Path::new("."), requests)
+}
+
+/// The repository root: scenes under `assets/` name their sheets relative
+/// to it.
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// [`serve_raw`] with `dir` as the working directory.
+fn serve_raw_in(dir: &std::path::Path, requests: &[String]) -> Session {
     let mut child = Command::new(env!("CARGO_BIN_EXE_loom"))
         .arg("serve")
+        .current_dir(dir)
         .env("RUST_LOG", "off")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -54,7 +66,12 @@ fn serve_raw(requests: &[String]) -> Session {
 /// [`serve_raw`], checking the exit code 0 and one reply per request.
 /// Returns the parsed replies.
 fn serve(requests: &[String]) -> Vec<Value> {
-    let session = serve_raw(requests);
+    serve_in(std::path::Path::new("."), requests)
+}
+
+/// [`serve`] with `dir` as the working directory.
+fn serve_in(dir: &std::path::Path, requests: &[String]) -> Vec<Value> {
+    let session = serve_raw_in(dir, requests);
     assert_eq!(session.code, 0, "{:?}", session.lines);
     assert_eq!(
         session.lines.len(),
@@ -103,14 +120,14 @@ fn path_str(path: &std::path::Path) -> &str {
 fn describe_lists_the_demo_bindings_sorted_without_a_scene_path() {
     let replies = serve(&[req(1, "describe", json!({}))]);
     let r = result(&replies[0]);
-    let bindings = loom_sim::demo_bindings();
+    let bindings = souls::bindings();
     let mut actions: Vec<&str> = bindings.actions().collect();
     let mut axes: Vec<&str> = bindings.axes().collect();
     actions.sort_unstable();
     axes.sort_unstable();
     assert_eq!(
         *r,
-        json!({"tick_hz": 60, "tick": 0, "scene": null, "actions": actions, "axes": axes})
+        json!({"tick_hz": 60, "tick": 0, "game": "souls", "scene": null, "actions": actions, "axes": axes})
     );
     assert_eq!(r["axes"], json!(["look_x", "look_y", "move_x", "move_y"]));
 }
@@ -354,7 +371,10 @@ fn reset_restarts_the_scene_loaded_from_source() {
         req(10, "state", json!({})),
     ];
     let replies = serve(&requests);
-    assert_eq!(*result(&replies[1]), json!({"tick": 0, "scene": null}));
+    assert_eq!(
+        *result(&replies[1]),
+        json!({"tick": 0, "game": "souls", "scene": null})
+    );
     let start = json!([2.0, 0.0, -1.0]);
     assert_eq!(result(&replies[3])["game"]["player"]["position"], start);
     assert_eq!(*result(&replies[6]), json!({"tick": 0}));
@@ -419,4 +439,123 @@ fn session_without_screenshot_reports_no_adapter() {
         // The key, quoted: the test directory's name contains the word.
         assert!(!line.contains("\"adapter\""), "{line}");
     }
+}
+
+/// `load_scene` of the rogue scene, for a session in the repository root.
+fn load_rogue(id: u64) -> String {
+    req(id, "load_scene", json!({"path": "assets/scenes/rogue.ron"}))
+}
+
+#[test]
+fn describe_on_a_rogue_scene_lists_its_nine_actions_and_no_axes() {
+    let replies = serve_in(
+        &repo_root(),
+        &[load_rogue(1), req(2, "describe", json!({}))],
+    );
+    assert_eq!(
+        *result(&replies[0]),
+        json!({"tick": 0, "game": "rogue", "scene": "assets/scenes/rogue.ron"})
+    );
+    let r = result(&replies[1]);
+    assert_eq!(r["game"], "rogue");
+    assert_eq!(
+        r["actions"],
+        json!([
+            "move_e", "move_n", "move_ne", "move_nw", "move_s", "move_se", "move_sw", "move_w",
+            "wait"
+        ])
+    );
+    assert_eq!(r["axes"], json!([]));
+}
+
+#[test]
+fn held_rogue_action_steps_once_and_replays_from_its_recording() {
+    let dir = test_dir("held_rogue_action_steps_once_and_replays_from_its_recording");
+    let record = dir.join("rec.ron");
+    let dump = dir.join("dump.json");
+    let requests = [
+        load_rogue(1),
+        req(2, "input", json!({"actions": {"move_e": true}})),
+        req(3, "step", json!({"ticks": 5})),
+        req(4, "state", json!({})),
+        req(5, "input", json!({"actions": {"move_e": false}})),
+        req(6, "step", json!({})),
+        req(7, "input", json!({"actions": {"move_e": true}})),
+        req(8, "step", json!({})),
+        req(9, "state", json!({})),
+        req(10, "record", json!({"path": path_str(&record)})),
+    ];
+    let session = serve_raw_in(&repo_root(), &requests);
+    assert_eq!(session.code, 0);
+    assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
+    let replies: Vec<Value> = session
+        .lines
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("JSON"))
+        .collect();
+    // Held for 5 ticks: one step.
+    assert_eq!(
+        result(&replies[3])["game"],
+        json!({"turn": 1, "player": {"cell": [4, 2]}})
+    );
+    // Released for a tick, pressed again: a second step.
+    assert_eq!(result(&replies[7])["tick"], 7);
+    assert_eq!(
+        result(&replies[8])["game"],
+        json!({"turn": 2, "player": {"cell": [5, 2]}})
+    );
+    assert_eq!(
+        *result(&replies[9]),
+        json!({"path": path_str(&record), "ticks": 7})
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .args([
+            "run",
+            "--headless",
+            "--frames",
+            "7",
+            "--scene",
+            "assets/scenes/rogue.ron",
+        ])
+        .arg("--input")
+        .arg(&record)
+        .arg("--dump-state")
+        .arg(&dump)
+        .current_dir(repo_root())
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("loom run can be started");
+    assert!(out.status.success(), "{out:?}");
+    let line = &session.lines[8];
+    let raw = line
+        .strip_prefix(r#"{"jsonrpc":"2.0","id":9,"result":"#)
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or_else(|| panic!("unexpected state reply: {line}"));
+    let dumped: String = fs::read_to_string(&dump)
+        .expect("the state dump was written")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert_eq!(raw, dumped);
+}
+
+#[test]
+fn load_scene_switches_games_and_their_bindings() {
+    let requests = [
+        load_rogue(1),
+        req(2, "input", json!({"axes": {"move_x": 1.0}})),
+        req(3, "load_scene", json!({})),
+        req(4, "input", json!({"axes": {"move_x": 1.0}})),
+        req(5, "describe", json!({})),
+    ];
+    let replies = serve_in(&repo_root(), &requests);
+    assert_eq!(result(&replies[0])["game"], "rogue");
+    assert_eq!(error_code(&replies[1]), -32602);
+    assert_eq!(
+        *result(&replies[2]),
+        json!({"tick": 0, "game": "souls", "scene": null})
+    );
+    assert_eq!(result(&replies[3])["axes"], json!({"move_x": 1.0}));
+    assert_eq!(result(&replies[4])["game"], "souls");
 }

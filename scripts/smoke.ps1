@@ -393,6 +393,45 @@ Test-Check 'H7' 'mcp screenshot returns the PNG inline' {
     }
 }
 
+# The frame {x, y, w, h} of `tag` in assets/art/tiles.json.
+function Get-TileFrame([string]$tag) {
+    $sheetJson = Get-Content -Raw (Join-Path $root 'assets/art/tiles.json') | ConvertFrom-Json
+    $from = ($sheetJson.meta.frameTags | Where-Object name -EQ $tag).from
+    $sheetJson.frames[$from].frame
+}
+
+# Checks the 64x64 cell at screen (left, top) of the screenshot $png pixel
+# by pixel against the sheet frame $top (from Get-TileFrame) scaled 4x:
+# every sheet pixel must become one 4x4 block. Where $top is transparent,
+# the frame $under shows instead (pass $null for an opaque $top). No
+# tolerance: the sRGB round trip must be exact.
+function Assert-TileCell([string]$png, [int]$left, [int]$top, $frame, $under, [string]$what) {
+    Add-Type -AssemblyName System.Drawing
+    $sheetImage = [Drawing.Bitmap]::new((Join-Path $root 'assets/art/tiles.png'))
+    $shot = [Drawing.Bitmap]::new((Join-Path $root $png))
+    try {
+        $bad = 0; $first = ''
+        for ($y = 0; $y -lt 64; $y++) {
+            for ($x = 0; $x -lt 64; $x++) {
+                $sx = [int][Math]::Floor($x / 4); $sy = [int][Math]::Floor($y / 4)
+                $want = $sheetImage.GetPixel($frame.x + $sx, $frame.y + $sy)
+                if ($null -ne $under -and $want.A -eq 0) {
+                    $want = $sheetImage.GetPixel($under.x + $sx, $under.y + $sy)
+                }
+                $got = $shot.GetPixel($left + $x, $top + $y)
+                if ($got.ToArgb() -ne $want.ToArgb()) {
+                    if ($bad -eq 0) { $first = "($($left + $x),$($top + $y)) is $($got.Name), expected $($want.Name)" }
+                    $bad++
+                }
+            }
+        }
+        Assert-True ($bad -eq 0) "${what}: $bad of 4096 pixels differ, first $first"
+    } finally {
+        $sheetImage.Dispose()
+        $shot.Dispose()
+    }
+}
+
 Test-Check 'H8' 'view renders the tile preview pixel-exact' {
     foreach ($n in 'a', 'b') {
         $r = Invoke-Loom @('view', '--scene', 'assets/scenes/tiles_preview.ron', '--screenshot', "$out/h8_$n.png")
@@ -403,50 +442,32 @@ Test-Check 'H8' 'view renders the tile preview pixel-exact' {
     $size = Get-PngSize "$out/h8_a.png"
     Assert-True ($size -eq '1280x720') "PNG is $size"
     $script:detail = "sha256 $((Get-FileHash "$out/h8_a.png").Hash)"
+    # 64 screen pixels per cell: row r, column c is [64c, 64c+64) x [64r, 64r+64).
+    Assert-TileCell "$out/h8_a.png" 0 0 (Get-TileFrame 'wall') $null 'wall cell (row 0, column 0)'
+    Assert-TileCell "$out/h8_a.png" 192 128 (Get-TileFrame 'player') (Get-TileFrame 'floor') 'player cell (row 2, column 3)'
+}
 
-    # 64 screen pixels per cell: each sheet pixel must become one 4x4 block.
-    Add-Type -AssemblyName System.Drawing
-    $sheetJson = Get-Content -Raw 'assets/art/tiles.json' | ConvertFrom-Json
-    $frameOf = {
-        param([string]$tag)
-        $from = ($sheetJson.meta.frameTags | Where-Object name -EQ $tag).from
-        $sheetJson.frames[$from].frame
-    }
-    $sheetImage = [Drawing.Bitmap]::new((Join-Path $root 'assets/art/tiles.png'))
-    $shot = [Drawing.Bitmap]::new((Join-Path $root "$out/h8_a.png"))
-    try {
-        # Compares the cell at screen (left, top) with what $expected (sx, sy
-        # in 0..15) says; returns the mismatch count and the first mismatch.
-        $compare = {
-            param([int]$left, [int]$top, [scriptblock]$expected)
-            $bad = 0; $first = ''
-            for ($y = 0; $y -lt 64; $y++) {
-                for ($x = 0; $x -lt 64; $x++) {
-                    $want = & $expected ([int][Math]::Floor($x / 4)) ([int][Math]::Floor($y / 4))
-                    $got = $shot.GetPixel($left + $x, $top + $y)
-                    if ($got.ToArgb() -ne $want.ToArgb()) {
-                        if ($bad -eq 0) { $first = "($($left + $x),$($top + $y)) is $($got.Name), expected $($want.Name)" }
-                        $bad++
-                    }
-                }
-            }
-            @($bad, $first)
+Test-Check 'H9' 'rogue run moves the player sprite' {
+    # The CLI test's script (rogue_replay_moves_turn_by_turn_to_the_expected_state):
+    # from (3, 2) east, south-east, wait, north twice, north into the wall.
+    $events = @(
+        foreach ($e in @(@(1, 'move_e'), @(3, 'move_se'), @(5, 'wait'), @(7, 'move_n'), @(9, 'move_n'), @(11, 'move_n'))) {
+            "(tick: $($e[0]), action: `"$($e[1])`", down: true)"
+            "(tick: $($e[0] + 1), action: `"$($e[1])`", down: false)"
         }
-        $wall = & $frameOf 'wall'
-        $bad, $first = & $compare 0 0 { param($sx, $sy) $sheetImage.GetPixel($wall.x + $sx, $wall.y + $sy) }
-        Assert-True ($bad -eq 0) "wall cell (row 0, column 0): $bad of 4096 pixels differ, first $first"
-        $floor = & $frameOf 'floor'
-        $player = & $frameOf 'player'
-        $bad, $first = & $compare 192 128 {
-            param($sx, $sy)
-            $p = $sheetImage.GetPixel($player.x + $sx, $player.y + $sy)
-            if ($p.A -eq 0) { $sheetImage.GetPixel($floor.x + $sx, $floor.y + $sy) } else { $p }
-        }
-        Assert-True ($bad -eq 0) "player cell (row 2, column 3): $bad of 4096 pixels differ, first $first"
-    } finally {
-        $sheetImage.Dispose()
-        $shot.Dispose()
-    }
+    ) -join ', '
+    $script = "$out/h9_script.ron"
+    [IO.File]::WriteAllText((Join-Path $root $script), "(version: 1, tick_hz: 60, events: [$events])`n")
+    $r = Invoke-Loom @('run', '--headless', '--frames', '14', '--scene', 'assets/scenes/rogue.ron',
+        '--input', $script, '--screenshot', "$out/h9.png", '--dump-state', "$out/h9_state.json")
+    Assert-ExitOk $r
+    Assert-True ($r.Json.game -eq 'rogue') "game is $($r.Json.game)"
+    $state = Get-Content -Raw "$out/h9_state.json" | ConvertFrom-Json
+    $cell = $state.game.player.cell -join ','
+    Assert-True ($cell -eq '5,1' -and $state.game.turn -eq 5) "state has cell $cell, turn $($state.game.turn)"
+    $script:detail = "sha256 $((Get-FileHash "$out/h9.png").Hash)"
+    Assert-TileCell "$out/h9.png" 320 64 (Get-TileFrame 'player') (Get-TileFrame 'floor') 'player cell (column 5, row 1)'
+    Assert-TileCell "$out/h9.png" 192 128 (Get-TileFrame 'floor') $null 'start cell (column 3, row 2)'
 }
 
 # ---------------------------------------------------------------- W: window
@@ -627,7 +648,7 @@ if (-not $HeadlessOnly) {
 
     Test-Check 'W8' 'scene hot reload restarts on a good edit and ignores a broken one' {
         $scene = "$out/w8.scene.ron"
-        $demo = [IO.File]::ReadAllText((Join-Path $root 'crates/loom_sim/src/demo.scene.ron'))
+        $demo = [IO.File]::ReadAllText((Join-Path $root 'games/souls/src/demo.scene.ron'))
         $playerAt = '(name: "player", position: (0.0, 0.0, 0.0)'
         Assert-True ($demo.Contains($playerAt)) 'the demo scene no longer has the expected player line'
         $good = $demo.Replace($playerAt, '(name: "player", position: (3.0, 0.0, 0.0)')

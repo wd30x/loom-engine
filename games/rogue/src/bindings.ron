@@ -1,0 +1,16 @@
+// Key bindings of the rogue game: the numpad and vi keys, as in CDDA
+// (docs/architecture.md section 15). Key names are W3C KeyboardEvent.code
+// values (section 9). One press is one step; there are no axes.
+(
+    actions: [
+        (action: "move_n", keys: [Numpad8, KeyK]),
+        (action: "move_ne", keys: [Numpad9, KeyU]),
+        (action: "move_e", keys: [Numpad6, KeyL]),
+        (action: "move_se", keys: [Numpad3, KeyN]),
+        (action: "move_s", keys: [Numpad2, KeyJ]),
+        (action: "move_sw", keys: [Numpad1, KeyB]),
+        (action: "move_w", keys: [Numpad4, KeyH]),
+        (action: "move_nw", keys: [Numpad7, KeyY]),
+        (action: "wait", keys: [Numpad5, Period]),
+    ],
+)

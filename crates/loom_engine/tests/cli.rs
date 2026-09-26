@@ -440,8 +440,20 @@ struct Output {
 }
 
 fn run_loom(args: &[&str]) -> Output {
+    run_loom_in(std::path::Path::new("."), args)
+}
+
+/// The repository root: scenes under `assets/` name their sheets relative
+/// to it.
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// [`run_loom`] with `dir` as the working directory.
+fn run_loom_in(dir: &std::path::Path, args: &[&str]) -> Output {
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
         .args(args)
+        .current_dir(dir)
         .env("RUST_LOG", "off")
         .output()
         .expect("the loom binary can be started");
@@ -968,9 +980,10 @@ fn input_events_after_the_final_tick_are_counted_as_unapplied() {
     assert_eq!(r["input"]["applied"], 0);
 }
 
-/// A minimal valid scene: a character `hero` (line 6) and its orbit camera.
+/// A minimal valid souls scene: a character `hero` (line 6) and its orbit
+/// camera.
 const MINIMAL_SCENE: &str = r#"(
-    version: 1,
+    version: 1, game: "souls",
     camera: "cam",
     ambient: (0.3, 0.3, 0.3),
     nodes: [
@@ -1289,4 +1302,199 @@ fn headless_run_accepts_a_scene_with_a_valid_sprite() {
     let r = report(&out);
     assert_eq!(out.code, 0, "{r}");
     assert_eq!(r["adapter"], Value::Null);
+}
+
+/// The E4.3 replay script: each key is released the tick after it is
+/// pressed. From (3, 2): east to (4, 2), south-east to (5, 3), wait, north
+/// to (5, 2) and (5, 1), then north into the wall at (5, 0).
+const ROGUE_SCRIPT: [&str; 12] = [
+    r#"(tick: 1, action: "move_e", down: true)"#,
+    r#"(tick: 2, action: "move_e", down: false)"#,
+    r#"(tick: 3, action: "move_se", down: true)"#,
+    r#"(tick: 4, action: "move_se", down: false)"#,
+    r#"(tick: 5, action: "wait", down: true)"#,
+    r#"(tick: 6, action: "wait", down: false)"#,
+    r#"(tick: 7, action: "move_n", down: true)"#,
+    r#"(tick: 8, action: "move_n", down: false)"#,
+    r#"(tick: 9, action: "move_n", down: true)"#,
+    r#"(tick: 10, action: "move_n", down: false)"#,
+    r#"(tick: 11, action: "move_n", down: true)"#,
+    r#"(tick: 12, action: "move_n", down: false)"#,
+];
+
+/// State after [`ROGUE_SCRIPT`] and 14 ticks of `assets/scenes/rogue.ron`:
+/// five turns (four moves and a wait; the wall bump takes none), the
+/// player on cell (5, 1), so its node at (5, -1, 1).
+const ROGUE_STATE: &str = concat!(
+    "{\n",
+    "  \"tick\": 14,\n",
+    "  \"sim_time\": 0.23333333333333334,\n",
+    "  \"actions\": [],\n",
+    "  \"axes\": {},\n",
+    "  \"nodes\": {\n",
+    "    \"cam\": {\n",
+    "      \"position\": [\n",
+    "        9.5,\n",
+    "        -5.125,\n",
+    "        10.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"map\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        5.0,\n",
+    "        -1.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    }\n",
+    "  },\n",
+    "  \"game\": {\n",
+    "    \"turn\": 5,\n",
+    "    \"player\": {\n",
+    "      \"cell\": [\n",
+    "        5,\n",
+    "        1\n",
+    "      ]\n",
+    "    }\n",
+    "  }\n",
+    "}\n",
+);
+
+#[test]
+fn rogue_replay_moves_turn_by_turn_to_the_expected_state() {
+    let dir = test_dir("rogue_replay_moves_turn_by_turn_to_the_expected_state");
+    let script = write_script(&dir, "rogue.ron", &ROGUE_SCRIPT);
+    let state = dir.join("state.json");
+    let out = run_loom_in(
+        &repo_root(),
+        &[
+            "run",
+            "--headless",
+            "--frames",
+            "14",
+            "--scene",
+            "assets/scenes/rogue.ron",
+            "--input",
+            path_str(&script),
+            "--dump-state",
+            path_str(&state),
+        ],
+    );
+    let r = report(&out);
+    assert_eq!(out.code, 0, "{r}");
+    assert_eq!(r["game"], "rogue");
+    assert_eq!(r["scene"], "assets/scenes/rogue.ron");
+    assert_eq!(r["input"]["applied"], 12);
+    let dump = fs::read_to_string(&state).expect("the state dump was written");
+    assert_eq!(dump, ROGUE_STATE);
+}
+
+#[test]
+fn souls_run_reports_its_game() {
+    let out = run_loom(&["run", "--headless", "--frames", "1"]);
+    let r = report(&out);
+    assert_eq!(out.code, 0, "{r}");
+    assert_eq!(r["game"], "souls");
+}
+
+/// Runs [`MINIMAL_SCENE`] with its `game: "souls",` replaced by `game`, and
+/// returns the error of the (failed) run and the scene path.
+fn run_with_game(test: &str, game: &str) -> (String, String) {
+    let dir = test_dir(test);
+    let src = MINIMAL_SCENE.replacen("game: \"souls\",", game, 1);
+    assert_ne!(src, MINIMAL_SCENE);
+    let scene = write_file(&dir, "game.scene.ron", &src);
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "1",
+        "--scene",
+        path_str(&scene),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 1, "{r}");
+    let error = r["error"].as_str().expect("error is a string").to_owned();
+    (error, path_str(&scene).to_owned())
+}
+
+#[test]
+fn scene_without_a_game_is_a_runtime_error_naming_both_games() {
+    let (error, scene) = run_with_game(
+        "scene_without_a_game_is_a_runtime_error_naming_both_games",
+        "",
+    );
+    assert_eq!(
+        error,
+        format!(
+            "invalid scene {scene}: the scene does not say which game runs it: \
+             add game: \"rogue\" or game: \"souls\" at the top level"
+        )
+    );
+}
+
+#[test]
+fn scene_with_an_unknown_game_is_a_runtime_error_listing_the_games() {
+    let (error, scene) = run_with_game(
+        "scene_with_an_unknown_game_is_a_runtime_error_listing_the_games",
+        "game: \"rouge\",",
+    );
+    assert_eq!(
+        error,
+        format!(
+            "invalid scene {scene}: unknown game \"rouge\": the games are \"rogue\" and \"souls\""
+        )
+    );
+}
+
+#[test]
+fn view_without_scene_is_an_argument_error() {
+    let dir = test_dir("view_without_scene_is_an_argument_error");
+    let shot = dir.join("shot.png");
+    let out = run_loom(&["view", "--screenshot", path_str(&shot)]);
+    let r = report(&out);
+    assert_eq!(out.code, 2, "{r}");
+    assert_eq!(r["status"], "error");
+    let error = r["error"].as_str().expect("error is a string");
+    assert!(error.contains("--scene"), "{error}");
+    assert!(!shot.exists());
 }

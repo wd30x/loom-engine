@@ -4,6 +4,7 @@
 //! `loom serve`, whose stdout is one JSON-RPC reply per line; logs go to
 //! stderr.
 
+mod games;
 mod output;
 mod reload;
 mod report;
@@ -89,9 +90,9 @@ pub(crate) struct ServeArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ViewArgs {
-    /// Scene file to render instead of the built-in demo scene.
+    /// Scene file to render. Its `game` is ignored: nothing is simulated.
     #[arg(long, value_name = "PATH")]
-    scene: Option<PathBuf>,
+    scene: PathBuf,
     /// Where to save the PNG. Parent directories are created.
     #[arg(long, value_name = "PATH")]
     screenshot: PathBuf,

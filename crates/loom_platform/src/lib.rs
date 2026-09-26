@@ -294,6 +294,16 @@ pub fn translate_key(code: KeyCode) -> Option<Key> {
         KeyCode::ControlRight => Key::ControlRight,
         KeyCode::AltLeft => Key::AltLeft,
         KeyCode::AltRight => Key::AltRight,
+        KeyCode::Numpad1 => Key::Numpad1,
+        KeyCode::Numpad2 => Key::Numpad2,
+        KeyCode::Numpad3 => Key::Numpad3,
+        KeyCode::Numpad4 => Key::Numpad4,
+        KeyCode::Numpad5 => Key::Numpad5,
+        KeyCode::Numpad6 => Key::Numpad6,
+        KeyCode::Numpad7 => Key::Numpad7,
+        KeyCode::Numpad8 => Key::Numpad8,
+        KeyCode::Numpad9 => Key::Numpad9,
+        KeyCode::Period => Key::Period,
         _ => return None,
     })
 }
@@ -310,5 +320,27 @@ mod tests {
         assert_eq!(translate_key(KeyCode::ShiftLeft), Some(Key::ShiftLeft));
         assert_eq!(translate_key(KeyCode::Escape), None);
         assert_eq!(translate_key(KeyCode::F5), None);
+    }
+
+    #[test]
+    fn numpad_digits_and_period_translate_to_their_own_keys() {
+        let numpad = [
+            (KeyCode::Numpad1, Key::Numpad1),
+            (KeyCode::Numpad2, Key::Numpad2),
+            (KeyCode::Numpad3, Key::Numpad3),
+            (KeyCode::Numpad4, Key::Numpad4),
+            (KeyCode::Numpad5, Key::Numpad5),
+            (KeyCode::Numpad6, Key::Numpad6),
+            (KeyCode::Numpad7, Key::Numpad7),
+            (KeyCode::Numpad8, Key::Numpad8),
+            (KeyCode::Numpad9, Key::Numpad9),
+            (KeyCode::Period, Key::Period),
+        ];
+        for (code, key) in numpad {
+            assert_eq!(translate_key(code), Some(key), "{code:?}");
+        }
+        // Keys rogue does not bind stay outside the supported range.
+        assert_eq!(translate_key(KeyCode::Numpad0), None);
+        assert_eq!(translate_key(KeyCode::NumpadDecimal), None);
     }
 }

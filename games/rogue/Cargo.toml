@@ -1,6 +1,6 @@
 [package]
-name = "loom_sim"
-description = "Game simulation (for now the cube demo). Deterministic: libm, not std, for transcendental math."
+name = "rogue"
+description = "2D roguelike example: a player moving turn by turn on a tile map, one step per key press."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,11 @@ publish.workspace = true
 loom_core.workspace = true
 loom_scene.workspace = true
 glam.workspace = true
-libm.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true
