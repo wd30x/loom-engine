@@ -357,6 +357,7 @@ RON，所有结构体 `deny_unknown_fields`：
 | `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
 | `character` | `(run_speed, turn_speed)` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒 |
 | `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度 |
+| `collider` | `Box` | 无 | 静态碰撞体（第 11 节「碰撞」，G1.3 起）：和 `Cube` 一样是单位立方体，用节点的 `scale`、`rotation`、`position` 定大小、朝向和位置。只挡角色，不参与渲染（要看得见就另外写 `mesh: Cube`） |
 | `children` | 节点列表 | `[]` | |
 
 `look_at` 的算法**固定如下**（换一种等价算法，四元数的最后一位可能不同，状态导出就对不上了）：
@@ -376,13 +377,14 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - `Capsule`：`radius > 0`，`height ≥ 2 × radius`
 - `character`：`run_speed > 0`，`turn_speed > 0`
 - `orbit_camera`：节点上必须也有 `camera`；`target` 必须指向带 `character` 的节点；`pivot_height`、`distance` 有限且 `distance > 0`；`-90 < pitch_min < pitch_max < 90`；`pitch` 在 `[pitch_min, pitch_max]` 里
+- `collider`（G1.3）：自己的旋转只能绕 Y 轴（`rotation` 的 x、z 分量必须是 0，不能用 `look_at`）；**所有祖先节点**只能平移（`rotation` 不写或写 `(0, 0, 0)`，没有 `look_at`，`scale` 不写或写 `(1, 1, 1)`）；不能和 `character` 在同一个节点上
 - `rotation` 和 `look_at` 不能同时出现；`look_at` 的目标不能等于 `position`，方向也不能和 Y 轴平行（`right` 会退化）
 - 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间（节点 `color`、`light.color`、`ambient` 都是）；`light.intensity` ≥ 0；`fov_y` 在 (0, 180) 之间；`0 < near < far`
 
 ### 游戏和场景的关系
 
 - 不给 `--scene` 时，用 `loom_sim` 里内置的演示场景，用 `include_str!` 嵌进程序。
-- G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。不满足就报错。游戏逻辑见第 11 节。
+- G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。G1.3 起，角色节点必须带 `mesh: Capsule(...)`（它同时是碰撞形状），`run_speed / 60` 必须小于胶囊体半径（否则一个 tick 可能穿过薄墙）；`collider` 不能在角色或相机节点的子树里（碰撞体必须是静态的）。不满足就报错。游戏逻辑见第 11 节。
 - E0–G1.1 的旋转立方体演示（根节点 `cube`）在 G1.2 被角色取代。
 
 ### 渲染
@@ -432,8 +434,8 @@ forward = Vec3(-s, 0, -c)
 right   = Vec3( c, 0, -s)
 dir     = right * v.x + forward * v.y
 
-// 4. 移动
-position += dir * (run_speed / 60.0)
+// 4. 移动，然后把胶囊体推出碰撞体（G1.3，见下文「碰撞」）
+position = resolve(position + dir * (run_speed / 60.0))
 
 // 5. 转身：朝 dir 转，每个 tick 最多转 turn_speed 度的 1/60
 if v.length_squared() > 0.0 {
@@ -456,8 +458,9 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 ### 初始状态（tick 0）
 
 - `position`：角色节点在场景里的位置（胶囊体的底部，也就是脚下）
-- `facing`：由角色节点在场景里的旋转算出：`f = rotation * Vec3::NEG_Z; facing = libm::atan2f(-f.x, -f.z)`，**再把 `-0.0` 规范成 `0.0`**（没有旋转时 `-f.x` 是 `-0.0`，`atan2f(-0.0, 1.0)` 得 `-0.0`）
-- `yaw`、`pitch`：来自 `orbit_camera` 的 `yaw`、`pitch`（度转弧度）
+- `facing`：由角色节点在场景里的旋转算出：`f = rotation * Vec3::NEG_Z; facing = wrap(libm::atan2f(-f.x, -f.z))`，**再把 `-0.0` 规范成 `0.0`**（没有旋转时 `-f.x` 是 `-0.0`，`atan2f(-0.0, 1.0)` 得 `-0.0`，`wrap` 保留负零）
+- `yaw`：`wrap(orbit_camera.yaw.to_radians())`；`pitch`：`orbit_camera.pitch.to_radians()`
+- G1.3 起初始的 `yaw`、`facing` 也经过 `wrap`，所以任何时刻都在 `[-π, π)` 里（G1.2 时 tick 0 可能是场景里写的 270° 或 `atan2f` 给出的 `+π`）。初始位置**不做**碰撞推出，第 1 个 tick 才推
 - 加载时就按第 6 步写一次相机节点，所以 tick 0 的画面已经是正确的环绕视角
 
 ### 状态导出
@@ -469,8 +472,56 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 }
 ```
 
-### 已知限制（G1.2）
+### 碰撞（G1.3 起）
 
-- **没有碰撞**（G1.3 做）：角色能穿过柱子。
+用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
+
+G1 只有平地，没有重力和跳跃，角色的 y 永远不变，所以「对地面的碰撞」不需要计算。剩下的是**竖直胶囊体对只绕 Y 旋转的方块**，等价于 XZ 平面上的**圆对有向矩形**，再加一个高度范围的判断。
+
+加载时，按节点的先序（场景数组的顺序）为每个 `collider` 算一次（`m = scene.world_matrix(id)`，`t` 是节点的局部变换）：
+
+```text
+center = Vec2(m.w_axis.x, m.w_axis.z)
+a3 = t.rotation * Vec3::X;  a = Vec2(a3.x, a3.z)      // 方块局部 X 轴在 XZ 平面上的方向
+b3 = t.rotation * Vec3::Z;  b = Vec2(b3.x, b3.z)      // 方块局部 Z 轴
+ha = 0.5 * t.scale.x;  hb = 0.5 * t.scale.z           // 半宽
+y_min = m.w_axis.y - 0.5 * t.scale.y;  y_max = m.w_axis.y + 0.5 * t.scale.y
+```
+
+（祖先只能平移，所以局部的旋转、缩放就是世界的旋转、缩放。）
+
+`resolve(p)`，其中 `r`、`h` 是角色胶囊体的 `radius`、`height`：
+
+```text
+repeat 4 times:
+  for box in colliders (先序):
+    if box.y_max <= p.y || box.y_min >= p.y + h: continue        // 高度上不重叠
+    d  = Vec2(p.x, p.z) - box.center
+    la = d.dot(box.a);  lb = d.dot(box.b)                         // 方块局部坐标
+    qa = clamp(la, -box.ha, box.ha);  qb = clamp(lb, -box.hb, box.hb)   // 最近点
+    if la == qa && lb == qb:                                      // 圆心在方块里
+      if box.ha - |la| <= box.hb - |lb|:                          // 从穿透最浅的一侧推出
+        na = (la >= 0 ? 1 : -1) * (box.ha + r);  nb = lb
+      else:
+        na = la;  nb = (lb >= 0 ? 1 : -1) * (box.hb + r)
+    else:
+      off = Vec2(la - qa, lb - qb);  d2 = off.length_squared()
+      if d2 >= r * r: continue                                    // 没碰到
+      n = Vec2(qa, qb) + off * (r / sqrt(d2));  na = n.x;  nb = n.y
+    push = box.a * (na - la) + box.b * (nb - lb)
+    p.x += push.x;  p.z += push.y
+return p
+```
+
+- 这就是「只保留沿墙分量」：推出只改变垂直于墙的那一维，沿墙的那一维不动。
+- 所有运算都是加减乘除和 `sqrt`（精确舍入），`clamp`、`abs` 也是精确的，不需要 libm。
+- 对轴对齐的方块，`a = (1, 0)`、`b = (0, 1)`，推出时另一个坐标**按位不变**。
+- 固定迭代 4 轮，不看是否已经收敛：轮数固定，结果才和机器无关。
+- 碰撞后，转身（第 5 步）仍然朝向**输入方向** `dir`，不是实际移动的方向：顶着墙跑时角色面朝墙。
+
+### 已知限制
+
+- **碰撞只对静态方块**：没有胶囊体对胶囊体、没有斜坡和台阶。高度上重叠的方块一律挡住，矮到脚下的（`y_max <= 脚的高度`）一律忽略，没有「迈上去」。
+- **两个方块夹出的窄缝和凹角**：4 轮推出不保证完全分开，可能留下很小的重叠（下一个 tick 继续推）。
 - **相机没有碰撞**：`pitch_max` 太大时相机会钻到地面以下（本机实测：`pivot_height` 1.5、`distance` 4 时，超过约 22° 就会穿地）。演示场景用 20°。以后做相机碰撞（被墙或地面挡住时拉近）再放开。
 - 没有加速和减速：移动速度在一个 tick 内从 0 到满。
