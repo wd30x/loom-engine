@@ -368,7 +368,7 @@ RON，所有结构体 `deny_unknown_fields`：
 | `camera` | `(fov_y, near, far)` | 无 | `fov_y` 是垂直视场角（度）；相机看向自己的 -Z |
 | `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
 | `character` | `(run_speed, turn_speed)` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒 |
-| `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度 |
+| `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max, collision_radius, return_speed)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度。`collision_radius`（米）、`return_speed`（米/秒）是 G1.7 起的相机碰撞参数，必填 |
 | `collider` | `Box` | 无 | 静态碰撞体（第 11 节「碰撞」，G1.3 起）：和 `Cube` 一样是单位立方体，用节点的 `scale`、`rotation`、`position` 定大小、朝向和位置。只挡角色，不参与渲染（要看得见就另外写 `mesh: Cube`） |
 | `children` | 节点列表 | `[]` | |
 
@@ -388,7 +388,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - 整个场景**最多一个** `light`（以后要多光源时再扩展）；**最多一个** `character`、**最多一个** `orbit_camera`（G1）
 - `Capsule`：`radius > 0`，`height ≥ 2 × radius`
 - `character`：`run_speed > 0`，`turn_speed > 0`
-- `orbit_camera`：节点上必须也有 `camera`；`target` 必须指向带 `character` 的节点；`pivot_height`、`distance` 有限且 `distance > 0`；`-90 < pitch_min < pitch_max < 90`；`pitch` 在 `[pitch_min, pitch_max]` 里
+- `orbit_camera`：节点上必须也有 `camera`；`target` 必须指向带 `character` 的节点；`pivot_height`、`distance` 有限且 `distance > 0`；`-90 < pitch_min < pitch_max < 90`；`pitch` 在 `[pitch_min, pitch_max]` 里；`collision_radius` 有限且 `0 < collision_radius < pivot_height`（相机球从地面以上出发）；`return_speed` 有限且 `> 0`
 - `collider`（G1.3）：自己的旋转只能绕 Y 轴（`rotation` 的 x、z 分量必须是 0，不能用 `look_at`）；**所有祖先节点**只能平移（`rotation` 不写或写 `(0, 0, 0)`，没有 `look_at`，`scale` 不写或写 `(1, 1, 1)`）；不能和 `character` 在同一个节点上
 - `rotation` 和 `look_at` 不能同时出现；`look_at` 的目标不能等于 `position`，方向也不能和 Y 轴平行（`right` 会退化）
 - 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间（节点 `color`、`light.color`、`ambient` 都是）；`light.intensity` ≥ 0；`fov_y` 在 (0, 180) 之间；`0 < near < far`
@@ -396,7 +396,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 ### 游戏和场景的关系
 
 - 不给 `--scene` 时，用 `loom_sim` 里内置的演示场景，用 `include_str!` 嵌进程序。
-- G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。G1.3 起，角色节点必须带 `mesh: Capsule(...)`（它同时是碰撞形状），`run_speed / 60` 必须小于胶囊体半径（否则一个 tick 可能穿过薄墙）；`collider` 不能在角色或相机节点的子树里（碰撞体必须是静态的）。不满足就报错。游戏逻辑见第 11 节。
+- G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。G1.3 起，角色节点必须带 `mesh: Capsule(...)`（它同时是碰撞形状），`run_speed / 60` 必须小于胶囊体半径（否则一个 tick 可能穿过薄墙）；`collider` 不能在角色或相机节点的子树里（碰撞体必须是静态的）。G1.7 起，角色节点的 `scale` 必须不写或写 `(1, 1, 1)`（渲染会缩放胶囊体，碰撞不会）。不满足就报错。游戏逻辑见第 11 节。
 - E0–G1.1 的旋转立方体演示（根节点 `cube`）在 G1.2 被角色取代。
 
 ### 渲染
@@ -460,12 +460,18 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 
 // 6. 写回节点
 角色节点：position = position，rotation = Quat::from_rotation_y(facing)
-相机节点：rot = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch)
-          position = position + Vec3(0, pivot_height, 0) + rot * Vec3(0, 0, distance)
+相机节点：rot    = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch)
+          pivot  = position + Vec3(0, pivot_height, 0)
+          target = obstruct(pivot, rot * Vec3::Z)          // G1.7，见下文「相机碰撞」
+          if target < cam_distance { cam_distance = target }                           // 挡住：立刻拉近
+          else { cam_distance = min(cam_distance + return_speed / 60.0, target) }      // 否则按固定速度退回
+          position = pivot + rot * Vec3(0, 0, cam_distance)
           rotation = rot
 ```
 
-其中 `run_speed`、`turn_speed`、`pivot_height`、`distance`、`pitch_min`、`pitch_max` 来自场景组件（角度在加载时转成弧度：`deg.to_radians()`）。
+其中 `run_speed`、`turn_speed`、`pivot_height`、`distance`、`pitch_min`、`pitch_max`、`collision_radius`、`return_speed` 来自场景组件（角度在加载时转成弧度：`deg.to_radians()`）。`return_speed / 60.0` 在加载时算一次。`cam_distance` 是相机当前离 `pivot` 的距离，属于游戏状态（进状态导出）；场景里的 `distance` 是它的上限。
+
+没有东西挡住时 `cam_distance == distance`，`min(distance + s, distance)` 就是 `distance`，相机位置和 G1.2 的公式逐位相同（`position + Vec3(0, pivot_height, 0)` 先算，和原来的结合顺序一样）。
 
 ### 初始状态（tick 0）
 
@@ -473,22 +479,24 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 - `facing`：由角色节点在场景里的旋转算出：`f = rotation * Vec3::NEG_Z; facing = wrap(libm::atan2f(-f.x, -f.z))`，**再把 `-0.0` 规范成 `0.0`**（没有旋转时 `-f.x` 是 `-0.0`，`atan2f(-0.0, 1.0)` 得 `-0.0`，`wrap` 保留负零）
 - `yaw`：`wrap(orbit_camera.yaw.to_radians())`；`pitch`：`orbit_camera.pitch.to_radians()`
 - G1.3 起初始的 `yaw`、`facing` 也经过 `wrap`，所以任何时刻都在 `[-π, π)` 里（G1.2 时 tick 0 可能是场景里写的 270° 或 `atan2f` 给出的 `+π`）。初始位置**不做**碰撞推出，第 1 个 tick 才推
-- 加载时就按第 6 步写一次相机节点，所以 tick 0 的画面已经是正确的环绕视角
+- 加载时就按第 6 步写一次相机节点，所以 tick 0 的画面已经是正确的环绕视角。G1.7 起，加载时 `cam_distance` **直接取** `obstruct(...)` 的结果（不经过「按固定速度退回」），所以 tick 0 的相机也不会穿墙
 
 ### 状态导出
 
 ```json
 "game": {
   "player": { "position": [x, y, z], "facing": f },
-  "camera": { "yaw": f, "pitch": f }
+  "camera": { "yaw": f, "pitch": f, "distance": f }
 }
 ```
+
+- `camera.distance`（G1.7 起）：`cam_distance`，相机当前离 `pivot` 的距离
 
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
 
-G1 只有平地，没有重力和跳跃，角色的 y 永远不变，所以「对地面的碰撞」不需要计算。剩下的是**竖直胶囊体对只绕 Y 旋转的方块**，等价于 XZ 平面上的**圆对有向矩形**，再加一个高度范围的判断。
+G1 只有平地，没有重力和跳跃，角色的 y 永远不变，所以角色「对地面的碰撞」不需要计算（相机对地面的碰撞见下文「相机碰撞」）。剩下的是**竖直胶囊体对只绕 Y 旋转的方块**，等价于 XZ 平面上的**圆对有向矩形**，再加一个高度范围的判断。
 
 加载时，按节点的先序（场景数组的顺序）为每个 `collider` 算一次（`m = scene.world_matrix(id)`，`t` 是节点的局部变换）：
 
@@ -531,11 +539,46 @@ return p
 - 固定迭代 4 轮，不看是否已经收敛：轮数固定，结果才和机器无关。
 - 碰撞后，转身（第 5 步）仍然朝向**输入方向** `dir`，不是实际移动的方向：顶着墙跑时角色面朝墙。
 
+### 相机碰撞（G1.7 起）
+
+用户决定（2026-09-27）：相机被挡住时**立刻拉近**，挡住的东西移开后**按固定速度退回**（`return_speed`，米/秒）；有了相机碰撞，演示场景的 `pitch_max` 从 20° 放开到 **60°**，仰视时相机碰到地面就拉近到角色身边。
+
+相机看作半径 `cr = collision_radius` 的球，从 `pivot` 沿方向 `u = rot * Vec3::Z` 出发，最远走 `distance`。`obstruct(pivot, u)` 返回球第一次碰到东西时走过的距离，没碰到就是 `distance`。挡住相机的东西：
+
+- **地面**：角色脚下的水平面（G1 只有平地，角色的 y 不变）。球心不能低于脚下 `cr`。
+- **所有 `collider: Box`**：用加载时算好的同一份 `BoxCollider`（上文），把方块在三个方向上各**向外扩 `cr`**，再做射线对扩大后的方块的求交（slab 方法）。
+
+```text
+obstruct(pivot, u):
+    t = distance
+    if u.y < 0.0 { t = min(t, (cr - pivot_height) / u.y) }       // 地面；pivot_height > cr，所以结果 > 0
+    uxz = Vec2(u.x, u.z)
+    for box in boxes（先序）:
+        o  = Vec2(pivot.x, pivot.z) - box.center
+        t0 = 0.0; t1 = distance
+        for (s, w, lo, hi) in [(o.dot(a),  uxz.dot(a), -(ha + cr),    ha + cr),     // 顺序固定：a、y、b
+                               (pivot.y,   u.y,        y_min - cr,    y_max + cr),
+                               (o.dot(b),  uxz.dot(b), -(hb + cr),    hb + cr)]:
+            if w == 0.0 {
+                if s < lo || s > hi { 跳过这个方块 }              // 平行于这一对面，而且在外面
+            } else {
+                ta = (lo - s) / w; tb = (hi - s) / w
+                t0 = max(t0, min(ta, tb)); t1 = min(t1, max(ta, tb))
+            }
+        if t0 <= t1 { t = min(t, t0) }                          // pivot 在扩大后的方块里时 t0 = 0
+    return t
+```
+
+- 只用加减乘除、`min`、`max`、比较，都是精确运算，不需要 libm。`w == 0.0` 的分支要保留：`yaw = 0` 时 `u.x` 恰好是 0，轴对齐方块的 `a = (1, 0)`，`w` 恰好是 0。
+- 角色自己不挡相机（它不是 `collider`）。
+- `collision_radius` 要大于相机近裁剪面的半对角线，否则贴着墙时近裁剪面会切进墙里。演示场景 `near` 0.1、`fov_y` 60°、16:9 时半对角线约 0.12 m，`collision_radius` 用 0.2。
+
 ### 已知限制
 
 - **碰撞只对静态方块**：没有胶囊体对胶囊体、没有斜坡和台阶。高度上重叠的方块一律挡住，矮到脚下的（`y_max <= 脚的高度`）一律忽略，没有「迈上去」。
 - **两个方块夹出的窄缝和凹角**：4 轮推出不保证完全分开，可能留下很小的重叠（下一个 tick 继续推）。
-- **相机没有碰撞**：`pitch_max` 太大时相机会钻到地面以下（本机实测：`pivot_height` 1.5、`distance` 4 时，超过约 22° 就会穿地）。演示场景用 20°。以后做相机碰撞（被墙或地面挡住时拉近）再放开。
+- **相机可能进到角色身体里**：背靠墙时相机被拉到很近（规划者原型：斜墙场景里约 0.16 m），会在胶囊体里面。以后如果需要，再在相机很近时隐藏或淡出角色。
+- **相机碰撞把方块的角当成方的**：方块向外扩 `cr` 得到的是更大的方块，而不是圆角方块，所以在方块的棱角附近，相机会比必要的早一点点拉近（棱附近最多多出约 `0.41 * cr`，顶点附近约 `0.73 * cr`）。
 - 没有加速和减速：移动速度在一个 tick 内从 0 到满。
 
 ## 12. 外部工具对接（2026-09-27 起的原则）
