@@ -17,3 +17,6 @@
 *.swp
 Thumbs.db
 .DS_Store
+
+# ase-mcp's private undo history inside a canvas root (docs/architecture.md section 12)
+.ase-mcp/

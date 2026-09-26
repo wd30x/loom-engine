@@ -617,6 +617,10 @@ aseprite-rs（`B:\Material\Project\claude\ports\aseprite-rs`，ADR-0004）和 lo
   - 导出的 `<名字>.png`（LFS）和 `<名字>.json`（文本）放在同一个目录；
   - 导出用 `json-array`，带上 tag。
 - **命名**：每张瓦片或每个精灵用 **tag** 命名，一个 tag 覆盖它的帧。loom 按 tag 名找帧，不依赖帧的顺序和文件名。
+- **`assets/art/README.md`** 是二进制源文件的文本说明：每个 tag 画的是什么、调色板、重建源文件用的 Lua、重新导出的参数。改图之前先读它，改完同步更新。
+- ase-mcp 会在 root 里建私有目录 `.ase-mcp/`，存 undo 快照，快照的扩展名也是 `.aseprite`。这个目录已经写进 `.gitignore`。
+- Aseprite 在 Windows 上导出的 JSON 用 CRLF 换行，git 按 `.gitattributes` 规范成 LF 存进仓库。所以读 sprite sheet 的代码**不能依赖换行符**，也不要拿导出文件和仓库里的文件逐字节比较。
+- 导出结果是确定的：同一个源文件导出两次，PNG 和 JSON 逐字节相同（E4.1 实测）。
 
 ## 13. 远程控制 `loom serve`（E3 起）
 
