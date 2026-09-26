@@ -12,6 +12,7 @@ use loom_render::Renderer;
 
 use crate::RunArgs;
 use crate::output::ensure_parent_dir;
+use crate::reload::{self, Poll, SceneWatcher};
 use crate::report::{InfoReport, RunReport};
 use crate::sim::Sim;
 use crate::state::write_state;
@@ -66,6 +67,8 @@ fn run_headless(args: &RunArgs) -> Result<RunReport> {
         record,
         input: sim.input_report(),
         scene: sim.scene_path(),
+        reloads: 0,
+        reload_errors: 0,
         adapter,
     })
 }
@@ -85,12 +88,24 @@ fn write_sim_outputs(args: &RunArgs, sim: &Sim) -> Result<(Option<String>, Optio
 }
 
 fn run_window(args: &RunArgs) -> Result<RunReport> {
-    // Loads --input before the window opens: a bad script never runs a tick.
+    // Stat before reading: if the file changes in between, the watcher sees
+    // a newer time than recorded and simply re-reads it.
+    let modified = args
+        .scene
+        .as_deref()
+        .and_then(|p| reload::modified_time(p).ok());
+    // Loads --scene and --input before the window opens: a bad file never runs a tick.
     let sim = Sim::new(args, true)?;
+    let watcher = sim
+        .scene_source()
+        .map(|src| SceneWatcher::new(Instant::now(), modified, src.to_owned()));
     let mut app = WindowRun {
         args,
         renderer: None,
         sim,
+        watcher,
+        reloads: 0,
+        reload_errors: 0,
         timestep: FixedTimestep::new(),
         last_frame: None,
         frames: 0,
@@ -126,6 +141,8 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         record: app.record,
         input: app.sim.input_report(),
         scene: app.sim.scene_path(),
+        reloads: app.reloads,
+        reload_errors: app.reload_errors,
         adapter: Some(renderer.adapter_summary().into()),
     })
 }
@@ -135,6 +152,10 @@ struct WindowRun<'a> {
     args: &'a RunArgs,
     renderer: Option<Renderer>,
     sim: Sim,
+    /// Watches `--scene` for changes; `None` without `--scene`.
+    watcher: Option<SceneWatcher>,
+    reloads: u64,
+    reload_errors: u64,
     timestep: FixedTimestep,
     last_frame: Option<Instant>,
     /// Frames actually rendered (minimized frames are not counted).
@@ -190,11 +211,45 @@ impl WindowRun<'_> {
         AppControl::Exit
     }
 
-    fn frame(&mut self) -> Result<AppControl> {
-        let Some(renderer) = &mut self.renderer else {
-            return Ok(AppControl::Continue);
+    /// Polls the scene file (every 0.5 s at most) and applies a reload.
+    /// Returns `true` if the simulation restarted on a new scene.
+    fn check_scene(&mut self, now: Instant) -> bool {
+        let (Some(watcher), Some(path)) = (&mut self.watcher, &self.args.scene) else {
+            return false;
         };
+        match watcher.poll(
+            now,
+            || reload::modified_time(path),
+            || reload::read_source(path),
+        ) {
+            Poll::Reloaded(game) => {
+                self.sim.restart(*game);
+                self.reloads += 1;
+                log::info!("scene {} reloaded; restarting from tick 0", path.display());
+                true
+            }
+            Poll::Failed(e) => {
+                self.reload_errors += 1;
+                log::warn!(
+                    "scene {} not reloaded, keeping the current scene: {e:#}",
+                    path.display()
+                );
+                false
+            }
+            Poll::NotChecked | Poll::Unchanged | Poll::FailedAgain => false,
+        }
+    }
+
+    fn frame(&mut self) -> Result<AppControl> {
+        if self.renderer.is_none() {
+            return Ok(AppControl::Continue);
+        }
         let now = Instant::now();
+        if self.check_scene(now) {
+            // Restarted from tick 0: no time has passed in the new run yet.
+            self.timestep = FixedTimestep::new();
+            self.last_frame = Some(now);
+        }
         let dt = self
             .last_frame
             .map_or(0.0, |last| (now - last).as_secs_f64());
@@ -204,6 +259,10 @@ impl WindowRun<'_> {
             self.sim.tick();
         }
 
+        let renderer = self
+            .renderer
+            .as_mut()
+            .expect("checked at the top of frame()");
         if !render_scene(renderer, self.sim.game().scene())? {
             return Ok(AppControl::Continue);
         }

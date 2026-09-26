@@ -737,3 +737,21 @@ fn regex_like_span(text: &str) -> Option<(u32, u32)> {
         })
         .next()
 }
+
+#[test]
+fn headless_run_reports_zero_reloads() {
+    let dir = test_dir("headless_run_reports_zero_reloads");
+    let scene = write_file(&dir, "min.scene.ron", MINIMAL_SCENE);
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "10",
+        "--scene",
+        path_str(&scene),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 0, "{r}");
+    assert_eq!(r["reloads"], 0);
+    assert_eq!(r["reload_errors"], 0);
+}

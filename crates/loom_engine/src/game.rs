@@ -52,6 +52,11 @@ pub(crate) struct CubeGame {
 }
 
 impl CubeGame {
+    /// Parses scene source text and starts a game on it.
+    pub fn from_source(src: &str) -> Result<Self> {
+        Self::new(Scene::parse(src)?)
+    }
+
     /// Takes over `scene`, which must have a root node `cube` with a mesh.
     pub fn new(scene: Scene) -> Result<Self> {
         let cube = match scene.find(CUBE) {

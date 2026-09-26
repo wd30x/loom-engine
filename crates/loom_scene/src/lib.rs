@@ -63,6 +63,8 @@ pub enum Problem {
     FovOutOfRange,
     #[error("camera must satisfy 0 < near < far")]
     NearFar,
+    #[error("light intensity must be at least 0")]
+    NegativeIntensity,
     #[error("a second light; the scene already has one at {0:?}")]
     SecondLight(String),
 }
@@ -376,6 +378,9 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         Some(l) => {
             if !l.intensity.is_finite() {
                 return Err(Problem::NotFinite("light intensity"));
+            }
+            if l.intensity < 0.0 {
+                return Err(Problem::NegativeIntensity);
             }
             Some(Light {
                 color: color(l.color, "light color")?,

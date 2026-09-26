@@ -4,6 +4,7 @@
 
 mod game;
 mod output;
+mod reload;
 mod report;
 mod run;
 mod sim;

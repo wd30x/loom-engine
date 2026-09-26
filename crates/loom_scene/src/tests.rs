@@ -187,6 +187,18 @@ fn scene_rejects_fov_out_of_range() {
 }
 
 #[test]
+fn scene_rejects_negative_light_intensity() {
+    let p = node_problem(
+        r#"(name: "sky", children: [(name: "sun", light: (color: (1.0, 1.0, 1.0), intensity: -0.5))])"#,
+        "sky/sun",
+    );
+    assert_eq!(p, Problem::NegativeIntensity);
+    // Zero is allowed: a light that is switched off.
+    let zero = r#"(name: "sun", light: (color: (1.0, 1.0, 1.0), intensity: 0.0))"#;
+    assert!(Scene::parse(&scene_with(zero)).is_ok());
+}
+
+#[test]
 fn scene_rejects_near_not_below_far() {
     for (near, far) in [
         ("1.0", "1.0"),

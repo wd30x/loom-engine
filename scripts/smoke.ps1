@@ -183,6 +183,13 @@ function Invoke-HeadlessReplay([string]$script, [int64]$ticks, [string]$state) {
     $state
 }
 
+# Headless run of `scene` for `ticks` ticks; returns the state file path.
+function Invoke-HeadlessReplayScene([string]$scene, [int64]$ticks, [string]$state) {
+    $r = Invoke-Loom @('run', '--headless', '--frames', "$ticks", '--scene', $scene, '--dump-state', $state)
+    Assert-ExitOk $r
+    $state
+}
+
 function Assert-SameBytes([string]$a, [string]$b) {
     $ha = (Get-FileHash $a).Hash; $hb = (Get-FileHash $b).Hash
     Assert-True ($ha -eq $hb) "$a ($ha) differs from $b ($hb)"
@@ -371,6 +378,51 @@ if (-not $HeadlessOnly) {
         } finally {
             Stop-Loom $run
         }
+    }
+
+    Test-Check 'W8' 'scene hot reload restarts on a good edit and ignores a broken one' {
+        $scene = "$out/w8.scene.ron"
+        $demo = [IO.File]::ReadAllText((Join-Path $root 'crates/loom_engine/src/demo.scene.ron'))
+        $cubeAt = '(name: "cube", position: (0.0, 0.5, 0.0)'
+        Assert-True ($demo.Contains($cubeAt)) 'the demo scene no longer has the expected cube line'
+        $good = $demo.Replace($cubeAt, '(name: "cube", position: (3.0, 0.5, 0.0)')
+        $broken = $good.TrimEnd().TrimEnd(')')
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        [IO.File]::WriteAllText($scene, $demo, $utf8)
+        [IO.File]::WriteAllText("$out/w8_good.scene.ron", $good, $utf8)
+
+        $run = Start-LoomWindow 'w8' @('--scene', $scene, '--dump-state', "$out/w8.json")
+        try {
+            # 2 s, not 1: the window appears before the renderer is ready, and
+            # the pre-edit ticks are what the restart check below relies on.
+            Start-Sleep -Milliseconds 2000
+            [IO.File]::WriteAllText($scene, $good, $utf8)     # reload: restart from tick 0
+            $goodWrittenAt = [DateTime]::Now
+            Start-Sleep -Milliseconds 1500
+            [IO.File]::WriteAllText($scene, $broken, $utf8)   # reload error: keep running
+            Start-Sleep -Milliseconds 1500
+            Send-Key $run 'Esc' $true
+            $r = Wait-Loom $run
+            Assert-ExitOk $r
+        } finally {
+            Stop-Loom $run
+        }
+        $lifetime = ($run.Process.ExitTime - $run.Process.StartTime).TotalSeconds
+        # The reload happens after the good edit (within one check interval),
+        # so the final run cannot have more ticks than the wall time since
+        # that edit. Without a restart it would also count the ~1 s before it.
+        $sinceEdit = ($run.Process.ExitTime - $goodWrittenAt).TotalSeconds
+        $maxTicks = [math]::Floor($sinceEdit * 60) + 3
+        $state = Get-Content "$out/w8.json" -Raw | ConvertFrom-Json
+        $script:detail = 'reloads {0}, reload_errors {1}; final run {2} ticks, at most {3} after the edit; {4:N2} s wall' -f `
+            $r.Json.reloads, $r.Json.reload_errors, $state.tick, $maxTicks, $lifetime
+        Assert-True ($r.Json.reloads -eq 1) "reloads is $($r.Json.reloads)"
+        Assert-True ($r.Json.reload_errors -eq 1) "reload_errors is $($r.Json.reload_errors)"
+        $pos = @($state.nodes.cube.position)
+        Assert-True (($pos -join ',') -eq '3,0.5,0') "cube position is [$($pos -join ', ')]"
+        Assert-True ($state.tick -le $maxTicks) "tick $($state.tick) is more than the $maxTicks possible since the edit: the reload did not restart from tick 0"
+        $replay = Invoke-HeadlessReplayScene "$out/w8_good.scene.ron" $state.tick "$out/w8_replay.json"
+        Assert-SameBytes "$out/w8.json" $replay
     }
 }
 

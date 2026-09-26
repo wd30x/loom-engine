@@ -9,7 +9,6 @@ use loom_core::input::{
     ActionMap, ActionSet, ActionState, InputCollector, InputRecorder, InputScript, Key,
     ScriptPlayer,
 };
-use loom_scene::Scene;
 
 use crate::RunArgs;
 use crate::game::{CubeGame, demo_bindings, demo_scene};
@@ -20,8 +19,13 @@ use crate::state::StateDump;
 enum InputSource {
     /// Headless without `--input`: every tick has no actions.
     Idle,
-    /// `--input`: replay a script. Keyboard input is ignored.
-    Script { player: ScriptPlayer, path: String },
+    /// `--input`: replay a script. Keyboard input is ignored. The parsed
+    /// script is kept so a scene reload can replay it from tick 1.
+    Script {
+        script: InputScript,
+        player: ScriptPlayer,
+        path: String,
+    },
     /// Window mode without `--input`: the keyboard.
     Live(InputCollector),
 }
@@ -34,24 +38,34 @@ pub(crate) struct Sim {
     recorder: Option<InputRecorder>,
     /// `--scene` as given; `None` for the built-in scene.
     scene_path: Option<String>,
+    /// Source text of `--scene` as loaded at start.
+    scene_source: Option<String>,
 }
 
 impl Sim {
     /// Reads and validates `--scene` and `--input` (if given) before any
     /// tick runs. Without a script, `live` selects keyboard input over none.
     pub fn new(args: &RunArgs, live: bool) -> Result<Self> {
-        let game = match &args.scene {
-            Some(path) => load_scene(path)
-                .and_then(CubeGame::new)
-                .with_context(|| format!("invalid scene {}", path.display()))?,
-            None => CubeGame::new(demo_scene())?,
+        let (game, scene_source) = match &args.scene {
+            Some(path) => {
+                let src = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading scene {}", path.display()))?;
+                let game = CubeGame::from_source(&src)
+                    .with_context(|| format!("invalid scene {}", path.display()))?;
+                (game, Some(src))
+            }
+            None => (CubeGame::new(demo_scene())?, None),
         };
         let bindings = demo_bindings();
         let source = match &args.input {
-            Some(path) => InputSource::Script {
-                player: ScriptPlayer::new(load_script(path, &bindings)?),
-                path: path.display().to_string(),
-            },
+            Some(path) => {
+                let script = load_script(path, &bindings)?;
+                InputSource::Script {
+                    player: ScriptPlayer::new(script.clone()),
+                    script,
+                    path: path.display().to_string(),
+                }
+            }
             None if live => InputSource::Live(InputCollector::new()),
             None => InputSource::Idle,
         };
@@ -62,7 +76,27 @@ impl Sim {
             source,
             recorder: args.record.is_some().then(InputRecorder::new),
             scene_path: args.scene.as_ref().map(|p| p.display().to_string()),
+            scene_source,
         })
+    }
+
+    /// Starts over from tick 0 with `game` (a reloaded scene): the clock,
+    /// action state, recording and script replay restart; keys held on the
+    /// keyboard stay held.
+    pub fn restart(&mut self, game: CubeGame) {
+        self.game = game;
+        self.actions = ActionState::new();
+        if self.recorder.is_some() {
+            self.recorder = Some(InputRecorder::new());
+        }
+        if let InputSource::Script { script, player, .. } = &mut self.source {
+            *player = ScriptPlayer::new(script.clone());
+        }
+    }
+
+    /// Source text of `--scene` as loaded at start; `None` for the built-in scene.
+    pub fn scene_source(&self) -> Option<&str> {
+        self.scene_source.as_deref()
     }
 
     /// Runs one tick: sample this tick's actions, advance the action state,
@@ -114,7 +148,7 @@ impl Sim {
     /// The `input` field of the run report.
     pub fn input_report(&self) -> Option<InputReport> {
         match &self.source {
-            InputSource::Script { player, path } => Some(InputReport {
+            InputSource::Script { player, path, .. } => Some(InputReport {
                 path: path.clone(),
                 events: player.event_count(),
                 applied: player.applied(),
@@ -144,9 +178,4 @@ fn load_script(path: &Path, bindings: &ActionMap) -> Result<InputScript> {
         .with_context(|| format!("reading input script {}", path.display()))?;
     InputScript::parse(&src, bindings)
         .with_context(|| format!("invalid input script {}", path.display()))
-}
-
-fn load_scene(path: &Path) -> Result<Scene> {
-    let src = std::fs::read_to_string(path).context("reading the file")?;
-    Ok(Scene::parse(&src)?)
 }
