@@ -10,7 +10,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-/// State after 60 ticks of the built-in scene without input.
+/// State after 60 ticks of the built-in scene without input (scenario A).
 const SCENARIO_A: &str = concat!(
     "{\n",
     "  \"tick\": 60,\n",
@@ -23,24 +23,6 @@ const SCENARIO_A: &str = concat!(
     "    \"move_y\": 0.0\n",
     "  },\n",
     "  \"nodes\": {\n",
-    "    \"cube\": {\n",
-    "      \"position\": [\n",
-    "        0.0,\n",
-    "        0.5,\n",
-    "        0.0\n",
-    "      ],\n",
-    "      \"rotation\": [\n",
-    "        0.1311443,\n",
-    "        0.47404212,\n",
-    "        -0.07164446,\n",
-    "        0.86772823\n",
-    "      ],\n",
-    "      \"scale\": [\n",
-    "        1.0,\n",
-    "        1.0,\n",
-    "        1.0\n",
-    "      ]\n",
-    "    },\n",
     "    \"ground\": {\n",
     "      \"position\": [\n",
     "        0.0,\n",
@@ -54,27 +36,135 @@ const SCENARIO_A: &str = concat!(
     "        1.0\n",
     "      ],\n",
     "      \"scale\": [\n",
-    "        20.0,\n",
+    "        40.0,\n",
     "        1.0,\n",
-    "        20.0\n",
+    "        40.0\n",
     "      ]\n",
     "    },\n",
     "    \"main_cam\": {\n",
     "      \"position\": [\n",
-    "        2.5,\n",
-    "        2.0,\n",
-    "        3.5\n",
+    "        0.0,\n",
+    "        2.5352764,\n",
+    "        3.8637035\n",
     "      ],\n",
     "      \"rotation\": [\n",
-    "        -0.15902498,\n",
-    "        0.30089226,\n",
-    "        0.05096195,\n",
-    "        0.9389238\n",
+    "        -0.1305262,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.9914449\n",
     "      ],\n",
     "      \"scale\": [\n",
     "        1.0,\n",
     "        1.0,\n",
     "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/a\": {\n",
+    "      \"position\": [\n",
+    "        3.0,\n",
+    "        1.5,\n",
+    "        -4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/b\": {\n",
+    "      \"position\": [\n",
+    "        -3.0,\n",
+    "        1.5,\n",
+    "        -4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/c\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.5,\n",
+    "        -9.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player/visor\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.5,\n",
+    "        -0.3\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.4,\n",
+    "        0.15,\n",
+    "        0.3\n",
     "      ]\n",
     "    },\n",
     "    \"sun\": {\n",
@@ -96,18 +186,24 @@ const SCENARIO_A: &str = concat!(
     "      ]\n",
     "    }\n",
     "  },\n",
-    "  \"demo\": {\n",
-    "    \"yaw\": 1.0,\n",
-    "    \"position\": [\n",
-    "      0.0,\n",
-    "      0.5,\n",
-    "      0.0\n",
-    "    ]\n",
+    "  \"game\": {\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"facing\": 0.0\n",
+    "    },\n",
+    "    \"camera\": {\n",
+    "      \"yaw\": 0.0,\n",
+    "      \"pitch\": -0.2617994\n",
+    "    }\n",
     "  }\n",
     "}\n",
 );
 
-/// State after 90 ticks, `move_x` at 1.0 for ticks 1..=60.
+/// State after 90 ticks, `move_y` at 1.0 for ticks 1..=60 (scenario S1).
 const SCENARIO_B: &str = concat!(
     "{\n",
     "  \"tick\": 90,\n",
@@ -120,24 +216,6 @@ const SCENARIO_B: &str = concat!(
     "    \"move_y\": 0.0\n",
     "  },\n",
     "  \"nodes\": {\n",
-    "    \"cube\": {\n",
-    "      \"position\": [\n",
-    "        1.9999994,\n",
-    "        0.5,\n",
-    "        0.0\n",
-    "      ],\n",
-    "      \"rotation\": [\n",
-    "        0.109342225,\n",
-    "        0.6739847,\n",
-    "        -0.10186283,\n",
-    "        0.7234728\n",
-    "      ],\n",
-    "      \"scale\": [\n",
-    "        1.0,\n",
-    "        1.0,\n",
-    "        1.0\n",
-    "      ]\n",
-    "    },\n",
     "    \"ground\": {\n",
     "      \"position\": [\n",
     "        0.0,\n",
@@ -151,27 +229,135 @@ const SCENARIO_B: &str = concat!(
     "        1.0\n",
     "      ],\n",
     "      \"scale\": [\n",
-    "        20.0,\n",
+    "        40.0,\n",
     "        1.0,\n",
-    "        20.0\n",
+    "        40.0\n",
     "      ]\n",
     "    },\n",
     "    \"main_cam\": {\n",
     "      \"position\": [\n",
-    "        2.5,\n",
-    "        2.0,\n",
-    "        3.5\n",
+    "        0.0,\n",
+    "        2.5352764,\n",
+    "        -0.13629532\n",
     "      ],\n",
     "      \"rotation\": [\n",
-    "        -0.15902498,\n",
-    "        0.30089226,\n",
-    "        0.05096195,\n",
-    "        0.9389238\n",
+    "        -0.1305262,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.9914449\n",
     "      ],\n",
     "      \"scale\": [\n",
     "        1.0,\n",
     "        1.0,\n",
     "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/a\": {\n",
+    "      \"position\": [\n",
+    "        3.0,\n",
+    "        1.5,\n",
+    "        -4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/b\": {\n",
+    "      \"position\": [\n",
+    "        -3.0,\n",
+    "        1.5,\n",
+    "        -4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/c\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.5,\n",
+    "        -9.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        -3.9999988\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player/visor\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.5,\n",
+    "        -0.3\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.4,\n",
+    "        0.15,\n",
+    "        0.3\n",
     "      ]\n",
     "    },\n",
     "    \"sun\": {\n",
@@ -193,13 +379,19 @@ const SCENARIO_B: &str = concat!(
     "      ]\n",
     "    }\n",
     "  },\n",
-    "  \"demo\": {\n",
-    "    \"yaw\": 1.5,\n",
-    "    \"position\": [\n",
-    "      1.9999994,\n",
-    "      0.5,\n",
-    "      0.0\n",
-    "    ]\n",
+    "  \"game\": {\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        -3.9999988\n",
+    "      ],\n",
+    "      \"facing\": 0.0\n",
+    "    },\n",
+    "    \"camera\": {\n",
+    "      \"yaw\": 0.0,\n",
+    "      \"pitch\": -0.2617994\n",
+    "    }\n",
     "  }\n",
     "}\n",
 );
@@ -320,27 +512,6 @@ fn state_dump_after_sixty_ticks_matches_expected_bytes() {
 }
 
 #[test]
-fn state_dump_yaw_wraps_into_zero_to_tau() {
-    let file = test_dir("state_dump_yaw_wraps_into_zero_to_tau").join("s.json");
-    let out = run_loom(&[
-        "run",
-        "--headless",
-        "--frames",
-        "400",
-        "--dump-state",
-        path_str(&file),
-    ]);
-    assert_eq!(out.code, 0);
-    report(&out);
-    let state: Value =
-        serde_json::from_str(&fs::read_to_string(&file).expect("state file was written"))
-            .expect("state file is valid JSON");
-    assert_eq!(state["tick"], 400);
-    assert_f64_bits(&state["sim_time"], 6.666666666666667);
-    assert_f64_bits(&state["demo"]["yaw"], 0.38348135948708073);
-}
-
-#[test]
 fn repeated_headless_runs_write_identical_state_dumps() {
     let dir = test_dir("repeated_headless_runs_write_identical_state_dumps");
     let files = [dir.join("first.json"), dir.join("second.json")];
@@ -397,6 +568,16 @@ fn state_dump_into_a_file_path_is_a_runtime_error() {
         error.contains("blocker"),
         "error should name the path: {error}"
     );
+}
+
+#[test]
+fn no_capture_together_with_headless_is_an_argument_error() {
+    let out = run_loom(&["run", "--headless", "--frames", "1", "--no-capture"]);
+    let r = report(&out);
+    assert_eq!(out.code, 2);
+    assert_eq!(r["status"], "error");
+    let error = r["error"].as_str().expect("error is a string");
+    assert!(error.contains("--no-capture"), "{error}");
 }
 
 #[test]
@@ -464,14 +645,14 @@ fn run_headless_replay(frames: &str, script: &std::path::Path, state: &std::path
 }
 
 #[test]
-fn replayed_input_moves_the_cube_to_the_expected_state() {
-    let dir = test_dir("replayed_input_moves_the_cube_to_the_expected_state");
+fn replayed_forward_run_writes_the_expected_state() {
+    let dir = test_dir("replayed_forward_run_writes_the_expected_state");
     let script = write_axis_script(
         &dir,
-        "b.ron",
+        "s1.ron",
         &[
-            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
-            r#"(tick: 61, axis: "move_x", value: 0.0)"#,
+            r#"(tick: 1, axis: "move_y", value: 1.0)"#,
+            r#"(tick: 61, axis: "move_y", value: 0.0)"#,
         ],
     );
     let state = dir.join("s.json");
@@ -486,39 +667,116 @@ fn replayed_input_moves_the_cube_to_the_expected_state() {
     );
 }
 
-#[test]
-// 0.707107 is the accumulated position, not an approximation of 1/sqrt(2).
-#[allow(clippy::approx_constant)]
-fn diagonal_replay_matches_the_expected_state() {
-    let dir = test_dir("diagonal_replay_matches_the_expected_state");
-    let script = write_axis_script(
-        &dir,
-        "c.ron",
-        &[
-            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
-            r#"(tick: 1, axis: "move_y", value: 1.0)"#,
-        ],
-    );
+/// Replays `axes` headless for `frames` ticks and returns the state dump.
+fn replay_state(name: &str, frames: &str, axes: &[&str]) -> Value {
+    let dir = test_dir(name);
+    let script = write_axis_script(&dir, "script.ron", axes);
     let state = dir.join("s.json");
-    run_headless_replay("30", &script, &state);
-    let dump: Value =
-        serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
-            .expect("state file is valid JSON");
-    assert_eq!(dump["tick"], 30);
-    assert_eq!(dump["actions"], serde_json::json!([]));
-    assert_eq!(
-        dump["axes"],
-        serde_json::json!({"look_x": 0.0, "look_y": 0.0, "move_x": 1.0, "move_y": 1.0})
-    );
-    for position in [
-        &dump["demo"]["position"],
-        &dump["nodes"]["cube"]["position"],
-    ] {
-        assert_f32_bits(position, [0.707107, 0.5, -0.707107]);
-    }
+    run_headless_replay(frames, &script, &state);
+    serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
+        .expect("state file is valid JSON")
 }
 
-/// The canonical recording of scenario D plus a one-tick look.
+fn assert_f32_value_bits(value: &Value, expected: f32) {
+    let actual = value.as_f64().expect("value is a number") as f32;
+    assert_eq!(
+        actual.to_bits(),
+        expected.to_bits(),
+        "{actual} != {expected}"
+    );
+}
+
+fn assert_quat_bits(value: &Value, expected: [f32; 4]) {
+    let actual: Vec<u32> = value
+        .as_array()
+        .expect("value is an array")
+        .iter()
+        .map(|v| (v.as_f64().expect("number") as f32).to_bits())
+        .collect();
+    assert_eq!(
+        actual,
+        expected.map(f32::to_bits),
+        "{value} != {expected:?}"
+    );
+}
+
+/// Checks `game.player` and the `player` node.
+fn assert_player(dump: &Value, position: [f32; 3], facing: f32, rotation: [f32; 4]) {
+    assert_f32_bits(&dump["game"]["player"]["position"], position);
+    assert_f32_value_bits(&dump["game"]["player"]["facing"], facing);
+    assert_f32_bits(&dump["nodes"]["player"]["position"], position);
+    assert_quat_bits(&dump["nodes"]["player"]["rotation"], rotation);
+}
+
+#[test]
+fn sideways_run_turns_the_player_to_face_right() {
+    let dump = replay_state(
+        "sideways_run_turns_the_player_to_face_right",
+        "30",
+        &[r#"(tick: 1, axis: "move_x", value: 1.0)"#],
+    );
+    assert_eq!(dump["tick"], 30);
+    assert_player(
+        &dump,
+        [2.0000007, 0.0, 0.0],
+        -1.5707964,
+        [0.0, -0.70710677, 0.0, 0.70710677],
+    );
+    assert_f32_bits(
+        &dump["nodes"]["main_cam"]["position"],
+        [2.0000007, 2.5352764, 3.8637035],
+    );
+}
+
+#[test]
+fn running_while_turning_the_camera_replays_to_the_expected_state() {
+    let dump = replay_state(
+        "running_while_turning_the_camera_replays_to_the_expected_state",
+        "60",
+        &[
+            r#"(tick: 1, axis: "move_y", value: 1.0)"#,
+            r#"(tick: 1, axis: "look_x", value: 0.04)"#,
+            r#"(tick: 31, axis: "look_x", value: 0.0)"#,
+        ],
+    );
+    assert_eq!(dump["tick"], 60);
+    assert_eq!(
+        dump["axes"],
+        serde_json::json!({"look_x": 0.0, "look_y": 0.0, "move_x": 0.0, "move_y": 1.0})
+    );
+    assert_player(
+        &dump,
+        [2.9577415, 0.0, -2.2566528],
+        -1.1999999,
+        [0.0, -0.5646424, 0.0, 0.8253356],
+    );
+    assert_f32_value_bits(&dump["game"]["camera"]["yaw"], -1.1999999);
+    assert_f32_bits(
+        &dump["nodes"]["main_cam"]["position"],
+        [-0.6433809, 2.5352762, -0.8566092],
+    );
+    assert_quat_bits(
+        &dump["nodes"]["main_cam"]["rotation"],
+        [-0.10772792, -0.55981183, -0.07370063, 0.8182748],
+    );
+}
+
+#[test]
+fn state_dump_camera_yaw_wraps_into_minus_pi_to_pi() {
+    let dump = replay_state(
+        "state_dump_camera_yaw_wraps_into_minus_pi_to_pi",
+        "40",
+        &[r#"(tick: 1, axis: "look_x", value: -0.1)"#],
+    );
+    // 40 * 0.1 = 4.0 without wrapping.
+    assert_f32_value_bits(&dump["game"]["camera"]["yaw"], -2.2831872);
+    assert_f32_bits(
+        &dump["nodes"]["main_cam"]["position"],
+        [-2.924056, 2.5352764, -2.5254908],
+    );
+}
+
+/// The canonical recording of a diagonal run plus a one-tick look.
 const AXIS_RECORDING: &str = concat!(
     "(\n",
     "    version: 1,\n",
@@ -569,31 +827,6 @@ fn recording_while_replaying_axes_reproduces_the_sorted_script() {
         fs::read_to_string(&record).expect("recording was written"),
         AXIS_RECORDING
     );
-}
-
-#[test]
-fn axis_script_moves_the_cube_with_normalized_diagonal() {
-    let dir = test_dir("axis_script_moves_the_cube_with_normalized_diagonal");
-    let script = write_axis_script(
-        &dir,
-        "d.ron",
-        &[
-            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
-            r#"(tick: 1, axis: "move_y", value: 0.5)"#,
-        ],
-    );
-    let state = dir.join("s.json");
-    run_headless_replay("45", &script, &state);
-    let dump: Value =
-        serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
-            .expect("state file is valid JSON");
-    assert_eq!(dump["tick"], 45);
-    for position in [
-        &dump["demo"]["position"],
-        &dump["nodes"]["cube"]["position"],
-    ] {
-        assert_f32_bits(position, [1.3416408, 0.5, -0.6708204]);
-    }
 }
 
 #[test]
@@ -678,15 +911,16 @@ fn input_events_after_the_final_tick_are_counted_as_unapplied() {
     assert_eq!(r["input"]["applied"], 0);
 }
 
-/// A minimal valid scene: the demo's `cube` plus a camera.
+/// A minimal valid scene: a character `hero` (line 6) and its orbit camera.
 const MINIMAL_SCENE: &str = r#"(
     version: 1,
     camera: "cam",
     ambient: (0.3, 0.3, 0.3),
     nodes: [
-        (name: "cube", mesh: Cube),
-        (name: "cam", position: (0.0, 1.0, 4.0), look_at: (0.0, 0.0, 0.0),
-            camera: (fov_y: 50.0, near: 0.1, far: 50.0)),
+        (name: "hero", mesh: Cube, character: (run_speed: 2.0, turn_speed: 360.0)),
+        (name: "cam", camera: (fov_y: 50.0, near: 0.1, far: 50.0),
+            orbit_camera: (target: "hero", pivot_height: 1.0, distance: 3.0,
+                yaw: 0.0, pitch: -10.0, pitch_min: -60.0, pitch_max: 30.0)),
     ],
 )
 "#;
@@ -723,20 +957,23 @@ fn custom_scene_is_loaded_and_reported() {
         .expect("nodes is an object")
         .keys()
         .collect();
-    assert_eq!(nodes, ["cam", "cube"]);
+    assert_eq!(nodes, ["cam", "hero"]);
 }
 
 #[test]
-fn scene_without_a_cube_is_a_runtime_error() {
-    let dir = test_dir("scene_without_a_cube_is_a_runtime_error");
-    let scene = write_file(
-        &dir,
-        "nocube.scene.ron",
-        &MINIMAL_SCENE.replace(
-            r#"(name: "cube", mesh: Cube),"#,
-            r#"(name: "box", mesh: Cube),"#,
-        ),
-    );
+fn scene_without_a_character_is_a_runtime_error() {
+    let dir = test_dir("scene_without_a_character_is_a_runtime_error");
+    // Without the character, the orbit camera has to go too.
+    let start = MINIMAL_SCENE
+        .find(",\n            orbit_camera")
+        .expect("scene has an orbit camera");
+    let end = MINIMAL_SCENE
+        .find("pitch_max: 30.0)")
+        .expect("scene has pitch_max")
+        + "pitch_max: 30.0)".len();
+    let src = format!("{}{}", &MINIMAL_SCENE[..start], &MINIMAL_SCENE[end..])
+        .replace(", character: (run_speed: 2.0, turn_speed: 360.0)", "");
+    let scene = write_file(&dir, "nocharacter.scene.ron", &src);
     let out = run_loom(&[
         "run",
         "--headless",
@@ -749,7 +986,7 @@ fn scene_without_a_cube_is_a_runtime_error() {
     assert_eq!(out.code, 1);
     assert_eq!(r["status"], "error");
     let error = r["error"].as_str().expect("error is a string");
-    for part in [path_str(&scene), "cube"] {
+    for part in [path_str(&scene), "character"] {
         assert!(
             error.contains(part),
             "error should contain {part:?}: {error}"
@@ -764,9 +1001,9 @@ fn invalid_scene_is_a_runtime_error_naming_the_node() {
         &dir,
         "bad.scene.ron",
         &MINIMAL_SCENE.replace(
-            r#"(name: "cube", mesh: Cube),"#,
-            r#"(name: "cube", mesh: Cube),
-        (name: "arena", children: [(name: "pillar_2", mesh: Cube, scale: (1.0, 0.0, 1.0))]),"#,
+            r#"        (name: "cam","#,
+            r#"        (name: "arena", children: [(name: "pillar_2", mesh: Cube, scale: (1.0, 0.0, 1.0))]),
+        (name: "cam","#,
         ),
     );
     let out = run_loom(&[

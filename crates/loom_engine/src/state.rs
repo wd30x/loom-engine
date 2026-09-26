@@ -6,10 +6,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use glam::Vec3;
 use loom_core::input::{ActionMap, ActionSet, ActionState};
 use loom_scene::Transform;
-use loom_sim::CubeGame;
+use loom_sim::{Game, GameState};
 use serde::Serialize;
 
 use crate::output::ensure_parent_dir;
@@ -24,21 +23,12 @@ pub(crate) struct StateDump {
     pub axes: BTreeMap<String, f32>,
     /// Local transform of every scene node, keyed by path (sorted).
     pub nodes: BTreeMap<String, Transform>,
-    /// Game state, under one field named after the game.
-    pub demo: DemoState,
-}
-
-/// State of the spinning-cube demo.
-#[derive(Debug, Serialize)]
-pub(crate) struct DemoState {
-    /// Spin angle around Y in radians, in `[0, 2π)`.
-    pub yaw: f64,
-    /// Position in meters; serialized as `[x, y, z]`.
-    pub position: Vec3,
+    /// Game state (`docs/architecture.md` section 11).
+    pub game: GameState,
 }
 
 impl StateDump {
-    pub fn of(game: &CubeGame, input: &ActionState, bindings: &ActionMap) -> Self {
+    pub fn of(game: &Game, input: &ActionState, bindings: &ActionMap) -> Self {
         Self {
             tick: game.clock().tick(),
             sim_time: game.clock().sim_time(),
@@ -49,10 +39,7 @@ impl StateDump {
                 .ids()
                 .map(|id| (game.scene().path(id), *game.scene().transform(id)))
                 .collect(),
-            demo: DemoState {
-                yaw: game.yaw(),
-                position: game.position(),
-            },
+            game: game.state(),
         }
     }
 
@@ -81,7 +68,7 @@ mod tests {
 
     #[test]
     fn dump_is_pretty_json_with_trailing_newline() {
-        let mut game = CubeGame::new(loom_sim::demo_scene()).unwrap();
+        let mut game = Game::new(loom_sim::demo_scene()).unwrap();
         let input = ActionState::new();
         for _ in 0..60 {
             game.tick(&input);
@@ -92,14 +79,17 @@ mod tests {
             "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"actions\": [],\n",
             "  \"axes\": {\n    \"look_x\": 0.0,\n    \"look_y\": 0.0,\n",
             "    \"move_x\": 0.0,\n    \"move_y\": 0.0\n  },\n",
-            "  \"nodes\": {\n    \"cube\": {"
+            "  \"nodes\": {\n    \"ground\": {"
         )));
         let order = [
-            "\"cube\"",
             "\"ground\"",
             "\"main_cam\"",
+            "\"pillars\"",
+            "\"pillars/a\"",
+            "\"player\"",
+            "\"player/visor\"",
             "\"sun\"",
-            "\"demo\"",
+            "\"game\"",
         ]
         .map(|k| json.find(k).unwrap());
         assert!(order.is_sorted(), "{order:?}");

@@ -9,7 +9,7 @@ use loom_core::input::{
     ActionMap, ActionState, InputCollector, InputRecorder, InputScript, Key, ScriptPlayer,
     TickInput,
 };
-use loom_sim::{CubeGame, demo_bindings, demo_scene};
+use loom_sim::{Game, demo_bindings, demo_scene};
 
 use crate::RunArgs;
 use crate::output::ensure_parent_dir;
@@ -31,7 +31,7 @@ enum InputSource {
 }
 
 pub(crate) struct Sim {
-    game: CubeGame,
+    game: Game,
     actions: ActionState,
     bindings: ActionMap,
     source: InputSource,
@@ -50,11 +50,11 @@ impl Sim {
             Some(path) => {
                 let src = std::fs::read_to_string(path)
                     .with_context(|| format!("reading scene {}", path.display()))?;
-                let game = CubeGame::from_source(&src)
+                let game = Game::from_source(&src)
                     .with_context(|| format!("invalid scene {}", path.display()))?;
                 (game, Some(src))
             }
-            None => (CubeGame::new(demo_scene())?, None),
+            None => (Game::new(demo_scene())?, None),
         };
         let bindings = demo_bindings();
         let source = match &args.input {
@@ -83,7 +83,7 @@ impl Sim {
     /// Starts over from tick 0 with `game` (a reloaded scene): the clock,
     /// action state, recording and script replay restart; keys held on the
     /// keyboard stay held.
-    pub fn restart(&mut self, game: CubeGame) {
+    pub fn restart(&mut self, game: Game) {
         self.game = game;
         self.actions = ActionState::new();
         if self.recorder.is_some() {
@@ -146,7 +146,7 @@ impl Sim {
         matches!(self.source, InputSource::Live(_))
     }
 
-    pub fn game(&self) -> &CubeGame {
+    pub fn game(&self) -> &Game {
         &self.game
     }
 

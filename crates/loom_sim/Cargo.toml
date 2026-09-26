@@ -12,6 +12,7 @@ loom_core.workspace = true
 loom_scene.workspace = true
 glam.workspace = true
 libm.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 
 [lints]

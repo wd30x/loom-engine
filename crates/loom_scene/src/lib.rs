@@ -2,7 +2,8 @@
 //! See `docs/architecture.md` section 10.
 //!
 //! A scene is a tree of named nodes. Each node has a local transform and may
-//! carry optional components (`mesh`, `camera`, `light`). Nodes are stored in
+//! carry optional components (`mesh`, `camera`, `light`, `character`,
+//! `orbit_camera`). Nodes are stored in
 //! one array in pre-order (a parent before its children, children in file
 //! order) and addressed by [`NodeId`] (an index) or by path (`arena/pillar`).
 //! The tree is simulation state: its structure is fixed after parsing, only
@@ -16,7 +17,7 @@ use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use serde::Serialize;
 
 pub use file::MeshKind;
-use file::{NodeDesc, SceneFile, Triple};
+use file::{NodeDesc, OrbitCameraDesc, SceneFile, Triple};
 
 /// The only scene file version so far.
 const VERSION: u32 = 1;
@@ -67,6 +68,26 @@ pub enum Problem {
     NegativeIntensity,
     #[error("a second light; the scene already has one at {0:?}")]
     SecondLight(String),
+    #[error("capsule must satisfy radius > 0 and height >= 2 * radius")]
+    CapsuleShape,
+    #[error("character run_speed and turn_speed must be greater than 0")]
+    CharacterSpeed,
+    #[error("a second character; the scene already has one at {0:?}")]
+    SecondCharacter(String),
+    #[error("a second orbit_camera; the scene already has one at {0:?}")]
+    SecondOrbitCamera(String),
+    #[error("orbit_camera needs a camera component on the same node")]
+    OrbitCameraWithoutCamera,
+    #[error("orbit_camera target {0:?} does not name a node")]
+    OrbitTargetNotFound(String),
+    #[error("orbit_camera target {0:?} names a node without a character component")]
+    OrbitTargetNotCharacter(String),
+    #[error("orbit_camera distance must be greater than 0")]
+    OrbitDistance,
+    #[error("orbit_camera must satisfy -90 < pitch_min < pitch_max < 90")]
+    OrbitPitchRange,
+    #[error("orbit_camera pitch must be between pitch_min and pitch_max")]
+    OrbitPitchOutOfRange,
 }
 
 /// Index of a node in its [`Scene`].
@@ -118,6 +139,29 @@ pub struct Light {
     pub intensity: f32,
 }
 
+/// A player character (`docs/architecture.md` section 11).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Character {
+    /// Meters per second.
+    pub run_speed: f32,
+    /// Degrees per second.
+    pub turn_speed_degrees: f32,
+}
+
+/// A camera orbiting a character (`docs/architecture.md` section 11). Always
+/// on a node that also has a [`Camera`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrbitCamera {
+    /// The node with the [`Character`] it orbits.
+    pub target: NodeId,
+    pub pivot_height: f32,
+    pub distance: f32,
+    pub yaw_degrees: f32,
+    pub pitch_degrees: f32,
+    pub pitch_min_degrees: f32,
+    pub pitch_max_degrees: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub name: String,
@@ -127,6 +171,8 @@ pub struct Node {
     pub mesh: Option<Mesh>,
     pub camera: Option<Camera>,
     pub light: Option<Light>,
+    pub character: Option<Character>,
+    pub orbit_camera: Option<OrbitCamera>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,6 +182,8 @@ pub struct Scene {
     roots: Vec<NodeId>,
     camera: NodeId,
     light: Option<NodeId>,
+    character: Option<NodeId>,
+    orbit_camera: Option<NodeId>,
     ambient: Vec3,
 }
 
@@ -155,6 +203,8 @@ impl Scene {
         let mut builder = Builder {
             nodes: Vec::new(),
             light: None,
+            character: None,
+            orbit_camera: None,
         };
         let roots = builder.add_siblings(&file.nodes, None, "")?;
         let mut scene = Self {
@@ -162,8 +212,35 @@ impl Scene {
             roots,
             camera: NodeId(0),
             light: builder.light,
+            character: builder.character,
+            orbit_camera: None,
             ambient,
         };
+        // The target is a path from a root, resolved once the whole tree
+        // exists: it may name a node that comes later in the file.
+        if let Some((id, desc)) = builder.orbit_camera {
+            let fail = |problem| SceneError::Node {
+                path: scene.path(id),
+                problem,
+            };
+            let target = match scene.find(&desc.target) {
+                None => return Err(fail(Problem::OrbitTargetNotFound(desc.target.clone()))),
+                Some(t) if scene.node(t).character.is_none() => {
+                    return Err(fail(Problem::OrbitTargetNotCharacter(desc.target.clone())));
+                }
+                Some(t) => t,
+            };
+            scene.nodes[id.0].orbit_camera = Some(OrbitCamera {
+                target,
+                pivot_height: desc.pivot_height,
+                distance: desc.distance,
+                yaw_degrees: desc.yaw,
+                pitch_degrees: desc.pitch,
+                pitch_min_degrees: desc.pitch_min,
+                pitch_max_degrees: desc.pitch_max,
+            });
+            scene.orbit_camera = Some(id);
+        }
         scene.camera = match scene.find(&file.camera) {
             None => return Err(SceneError::CameraNotFound(file.camera)),
             Some(id) if scene.node(id).camera.is_none() => {
@@ -246,6 +323,17 @@ impl Scene {
         self.light
     }
 
+    /// The scene's only node with a [`Character`], if any.
+    pub fn character(&self) -> Option<NodeId> {
+        self.character
+    }
+
+    /// The scene's only node with an [`OrbitCamera`], if any. It also has a
+    /// [`Camera`], but need not be the active camera.
+    pub fn orbit_camera(&self) -> Option<NodeId> {
+        self.orbit_camera
+    }
+
     /// Ambient light, linear RGB.
     pub fn ambient(&self) -> Vec3 {
         self.ambient
@@ -264,16 +352,19 @@ pub fn look_at_rotation(position: Vec3, target: Vec3) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(right, up, back))
 }
 
-struct Builder {
+struct Builder<'a> {
     nodes: Vec<Node>,
     light: Option<NodeId>,
+    character: Option<NodeId>,
+    /// Validated except for its target, which is resolved after the build.
+    orbit_camera: Option<(NodeId, &'a OrbitCameraDesc)>,
 }
 
-impl Builder {
+impl<'a> Builder<'a> {
     /// Adds `descs` (siblings) and their subtrees in pre-order.
     fn add_siblings(
         &mut self,
-        descs: &[NodeDesc],
+        descs: &'a [NodeDesc],
         parent: Option<NodeId>,
         parent_path: &str,
     ) -> Result<Vec<NodeId>, SceneError> {
@@ -303,6 +394,18 @@ impl Builder {
                 }
                 self.light = Some(id);
             }
+            if node.character.is_some() {
+                if let Some(first) = self.character {
+                    return Err(fail(Problem::SecondCharacter(self.path_of(first))));
+                }
+                self.character = Some(id);
+            }
+            if let Some(orbit) = &desc.orbit_camera {
+                if let Some((first, _)) = self.orbit_camera {
+                    return Err(fail(Problem::SecondOrbitCamera(self.path_of(first))));
+                }
+                self.orbit_camera = Some((id, orbit));
+            }
             self.nodes.push(node);
             let children = self.add_siblings(&desc.children, Some(id), &path)?;
             self.nodes[id.0].children = children;
@@ -320,7 +423,8 @@ impl Builder {
     }
 }
 
-/// Validates one node's own fields (not its name or children).
+/// Validates one node's own fields (not its name or children). The
+/// `orbit_camera` is validated but left out: its target is resolved later.
 fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Problem> {
     let position = finite(desc.position.unwrap_or((0.0, 0.0, 0.0)), "position")?;
     let scale = finite(desc.scale.unwrap_or((1.0, 1.0, 1.0)), "scale")?;
@@ -389,6 +493,32 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         }
         None => None,
     };
+    if let Some(MeshKind::Capsule { radius, height }) = desc.mesh {
+        if !(radius.is_finite() && height.is_finite()) {
+            return Err(Problem::NotFinite("mesh"));
+        }
+        if !(radius > 0.0 && height >= 2.0 * radius) {
+            return Err(Problem::CapsuleShape);
+        }
+    }
+    let character = match &desc.character {
+        Some(c) => {
+            if !(c.run_speed.is_finite() && c.turn_speed.is_finite()) {
+                return Err(Problem::NotFinite("character"));
+            }
+            if !(c.run_speed > 0.0 && c.turn_speed > 0.0) {
+                return Err(Problem::CharacterSpeed);
+            }
+            Some(Character {
+                run_speed: c.run_speed,
+                turn_speed_degrees: c.turn_speed,
+            })
+        }
+        None => None,
+    };
+    if let Some(o) = &desc.orbit_camera {
+        validate_orbit_camera(o, camera.is_some())?;
+    }
     Ok(Node {
         name: desc.name.clone(),
         parent,
@@ -404,7 +534,37 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         }),
         camera,
         light,
+        character,
+        orbit_camera: None,
     })
+}
+
+/// Everything about an `orbit_camera` except its target.
+fn validate_orbit_camera(o: &OrbitCameraDesc, has_camera: bool) -> Result<(), Problem> {
+    if !has_camera {
+        return Err(Problem::OrbitCameraWithoutCamera);
+    }
+    let numbers = [
+        o.pivot_height,
+        o.distance,
+        o.yaw,
+        o.pitch,
+        o.pitch_min,
+        o.pitch_max,
+    ];
+    if !numbers.iter().all(|v| v.is_finite()) {
+        return Err(Problem::NotFinite("orbit_camera"));
+    }
+    if o.distance <= 0.0 {
+        return Err(Problem::OrbitDistance);
+    }
+    if !(-90.0 < o.pitch_min && o.pitch_min < o.pitch_max && o.pitch_max < 90.0) {
+        return Err(Problem::OrbitPitchRange);
+    }
+    if !(o.pitch_min <= o.pitch && o.pitch <= o.pitch_max) {
+        return Err(Problem::OrbitPitchOutOfRange);
+    }
+    Ok(())
 }
 
 fn finite((x, y, z): Triple, field: &'static str) -> Result<Vec3, Problem> {

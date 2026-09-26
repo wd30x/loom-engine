@@ -115,9 +115,12 @@ function Test-GpuModule([string]$name) {
 }
 
 # Starts `loom run <args>` in the background with stdout/stderr in files.
+# Window runs get --no-capture: the desktop mouse stays free, and moving it
+# cannot leak into recordings.
 function Start-Loom([string]$name, [string[]]$loomArgs) {
     $stdout = Join-Path $out "$name.stdout.txt"
     $stderr = Join-Path $out "$name.stderr.txt"
+    if ($loomArgs -notcontains '--headless') { $loomArgs = @($loomArgs) + '--no-capture' }
     $process = Start-Process $exe -ArgumentList (@('run') + $loomArgs) -PassThru -NoNewWindow `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $process.Handle   # keep a handle so ExitCode stays readable after exit
@@ -392,9 +395,9 @@ if (-not $HeadlessOnly) {
     Test-Check 'W8' 'scene hot reload restarts on a good edit and ignores a broken one' {
         $scene = "$out/w8.scene.ron"
         $demo = [IO.File]::ReadAllText((Join-Path $root 'crates/loom_sim/src/demo.scene.ron'))
-        $cubeAt = '(name: "cube", position: (0.0, 0.5, 0.0)'
-        Assert-True ($demo.Contains($cubeAt)) 'the demo scene no longer has the expected cube line'
-        $good = $demo.Replace($cubeAt, '(name: "cube", position: (3.0, 0.5, 0.0)')
+        $playerAt = '(name: "player", position: (0.0, 0.0, 0.0)'
+        Assert-True ($demo.Contains($playerAt)) 'the demo scene no longer has the expected player line'
+        $good = $demo.Replace($playerAt, '(name: "player", position: (3.0, 0.0, 0.0)')
         $broken = $good.TrimEnd().TrimEnd(')')
         $utf8 = [Text.UTF8Encoding]::new($false)
         [IO.File]::WriteAllText($scene, $demo, $utf8)
@@ -427,8 +430,9 @@ if (-not $HeadlessOnly) {
             $r.Json.reloads, $r.Json.reload_errors, $state.tick, $maxTicks, $lifetime
         Assert-True ($r.Json.reloads -eq 1) "reloads is $($r.Json.reloads)"
         Assert-True ($r.Json.reload_errors -eq 1) "reload_errors is $($r.Json.reload_errors)"
-        $pos = @($state.nodes.cube.position)
-        Assert-True (($pos -join ',') -eq '3,0.5,0') "cube position is [$($pos -join ', ')]"
+        foreach ($pos in @(@($state.nodes.player.position), @($state.game.player.position))) {
+            Assert-True (($pos -join ',') -eq '3,0,0') "player position is [$($pos -join ', ')]"
+        }
         Assert-True ($state.tick -le $maxTicks) "tick $($state.tick) is more than the $maxTicks possible since the edit: the reload did not restart from tick 0"
         $replay = Invoke-HeadlessReplayScene "$out/w8_good.scene.ron" $state.tick "$out/w8_replay.json"
         Assert-SameBytes "$out/w8.json" $replay
@@ -473,11 +477,12 @@ if (-not $HeadlessOnly) {
         }
         $look = @(Get-AxisEvents "$out/w10.ron" 'look_x')
         $script:detail = 'look_x: ' + (($look | ForEach-Object { "tick $($_.Tick) = $($_.Value)" }) -join ', ')
-        # Raw mouse motion also drives look_x: do not touch the mouse meanwhile.
         Assert-True ($look.Count -eq 2) "expected 2 look_x events (0.04, then 0.0), found $($look.Count)"
         Assert-True ($look[0].Value -eq 0.04 -and $look[1].Value -eq 0.0) 'look_x is not 0.04 then 0.0'
         Assert-True ($look[1].Tick -gt $look[0].Tick) 'look_x was set and reset in the same tick'
-        $tick = (Get-Content "$out/w10.json" -Raw | ConvertFrom-Json).tick
+        $state = Get-Content "$out/w10.json" -Raw | ConvertFrom-Json
+        Assert-True ($state.game.camera.yaw -lt 0) "camera yaw is $($state.game.camera.yaw), expected < 0 after turning right"
+        $tick = $state.tick
         $replay = Invoke-HeadlessReplay "$out/w10.ron" $tick "$out/w10_replay.json"
         Assert-SameBytes "$out/w10.json" $replay
     }

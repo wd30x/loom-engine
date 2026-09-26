@@ -31,12 +31,14 @@ pub(crate) struct NodeDesc {
     pub color: Option<Triple>,
     pub camera: Option<CameraDesc>,
     pub light: Option<LightDesc>,
+    pub character: Option<CharacterDesc>,
+    pub orbit_camera: Option<OrbitCameraDesc>,
     #[serde(default)]
     pub children: Vec<NodeDesc>,
 }
 
-/// Built-in unit meshes; size them with `scale`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// Mesh shapes. The first three are unit sized; size them with `scale`.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub enum MeshKind {
     /// Edge 1, centered at the origin.
     Cube,
@@ -44,6 +46,10 @@ pub enum MeshKind {
     Plane,
     /// Diameter 1, centered at the origin.
     Sphere,
+    /// A cylinder along Y capped by two half spheres. `height` includes the
+    /// caps; the origin is at the bottom, so it spans y in `[0, height]`.
+    /// Requires `radius > 0` and `height >= 2 * radius`.
+    Capsule { radius: f32, height: f32 },
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,4 +66,27 @@ pub(crate) struct CameraDesc {
 pub(crate) struct LightDesc {
     pub color: Triple,
     pub intensity: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CharacterDesc {
+    /// Meters per second.
+    pub run_speed: f32,
+    /// Degrees per second.
+    pub turn_speed: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OrbitCameraDesc {
+    /// Path (from a root) of the node with the `character` component.
+    pub target: String,
+    pub pivot_height: f32,
+    pub distance: f32,
+    /// Angles in degrees.
+    pub yaw: f32,
+    pub pitch: f32,
+    pub pitch_min: f32,
+    pub pitch_max: f32,
 }

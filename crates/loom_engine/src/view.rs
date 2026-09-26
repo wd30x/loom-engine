@@ -57,5 +57,8 @@ fn mesh_kind(kind: loom_scene::MeshKind) -> loom_render::MeshKind {
         loom_scene::MeshKind::Cube => loom_render::MeshKind::Cube,
         loom_scene::MeshKind::Plane => loom_render::MeshKind::Plane,
         loom_scene::MeshKind::Sphere => loom_render::MeshKind::Sphere,
+        loom_scene::MeshKind::Capsule { radius, height } => {
+            loom_render::MeshKind::Capsule { radius, height }
+        }
     }
 }

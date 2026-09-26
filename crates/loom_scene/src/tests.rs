@@ -31,16 +31,37 @@ fn quat_bits(q: Quat) -> [u32; 4] {
 }
 
 #[test]
-fn demo_scene_parses_into_four_nodes() {
+fn demo_scene_parses_into_the_character_scene_tree() {
     let scene = Scene::parse(DEMO).unwrap();
     let paths: Vec<_> = scene.ids().map(|id| scene.path(id)).collect();
-    assert_eq!(paths, ["ground", "cube", "sun", "main_cam"]);
+    assert_eq!(
+        paths,
+        [
+            "ground",
+            "player",
+            "player/visor",
+            "pillars",
+            "pillars/a",
+            "pillars/b",
+            "pillars/c",
+            "sun",
+            "main_cam"
+        ]
+    );
     assert_eq!(scene.camera(), scene.find("main_cam").unwrap());
     assert_eq!(scene.light(), scene.find("sun"));
+    assert_eq!(scene.character(), scene.find("player"));
+    assert_eq!(scene.orbit_camera(), scene.find("main_cam"));
     assert_eq!(scene.ambient(), Vec3::new(0.2, 0.2, 0.25));
-    let cube = scene.node(scene.find("cube").unwrap());
-    assert_eq!(cube.mesh.map(|m| m.kind), Some(MeshKind::Cube));
-    assert_eq!(cube.transform.position, Vec3::new(0.0, 0.5, 0.0));
+    let player = scene.node(scene.find("player").unwrap());
+    assert_eq!(
+        player.mesh.map(|m| m.kind),
+        Some(MeshKind::Capsule {
+            radius: 0.35,
+            height: 1.8
+        })
+    );
+    assert_eq!(player.transform.position, Vec3::ZERO);
 }
 
 #[test]
@@ -292,8 +313,12 @@ fn euler_angles_combine_yaw_then_pitch() {
 
 #[test]
 fn look_at_rotations_match_the_reference_bits() {
-    let scene = Scene::parse(DEMO).unwrap();
-    let cam = scene.transform(scene.find("main_cam").unwrap()).rotation;
+    // The camera and sun of the E2 demo scene.
+    let scene = Scene::parse(&scene_with(
+        "(name: \"eye\", position: (2.5, 2.0, 3.5), look_at: (0.0, 0.5, 0.0)),          (name: \"sun\", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0))",
+    ))
+    .unwrap();
+    let cam = scene.transform(scene.find("eye").unwrap()).rotation;
     let sun = scene.transform(scene.find("sun").unwrap()).rotation;
     assert_eq!(
         quat_bits(cam),
@@ -309,4 +334,258 @@ fn look_at_rotations_match_the_reference_bits() {
         dir,
         (Vec3::new(0.0, 0.5, 0.0) - Vec3::new(2.5, 2.0, 3.5)).normalize(),
     );
+}
+
+/// A character node `hero` with the given capsule and character fields.
+fn hero(capsule: &str, character: &str) -> String {
+    format!("(name: \"hero\", mesh: Capsule({capsule}), character: ({character}))")
+}
+
+const HERO: &str = "(name: \"hero\", mesh: Capsule(radius: 0.35, height: 1.8), \
+                    character: (run_speed: 4.0, turn_speed: 720.0))";
+
+/// A camera node `orbit` with an `orbit_camera` of the given fields.
+fn orbit(fields: &str) -> String {
+    format!(
+        "(name: \"orbit\", camera: (fov_y: 60.0, near: 0.1, far: 100.0), orbit_camera: ({fields}))"
+    )
+}
+
+const ORBIT_FIELDS: &str = "target: \"hero\", pivot_height: 1.5, distance: 4.0, \
+                            yaw: 10.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 20.0";
+
+/// `ORBIT_FIELDS` with `field: old` replaced by `field: new`.
+fn orbit_with(old: &str, new: &str) -> String {
+    assert!(ORBIT_FIELDS.contains(old), "{old}");
+    orbit(&ORBIT_FIELDS.replace(old, new))
+}
+
+#[test]
+fn character_capsule_and_orbit_camera_parse_with_their_values() {
+    // The camera comes before its target, and the target is nested.
+    let src = scene_with(&format!(
+        "{}, (name: \"arena\", children: [{HERO}])",
+        orbit(&ORBIT_FIELDS.replace("\"hero\"", "\"arena/hero\""))
+    ));
+    let scene = Scene::parse(&src).unwrap();
+    let hero = scene.find("arena/hero").unwrap();
+    let cam = scene.find("orbit").unwrap();
+    assert_eq!(scene.character(), Some(hero));
+    assert_eq!(scene.orbit_camera(), Some(cam));
+    let node = scene.node(hero);
+    assert_eq!(
+        node.mesh.map(|m| m.kind),
+        Some(MeshKind::Capsule {
+            radius: 0.35,
+            height: 1.8
+        })
+    );
+    assert_eq!(
+        node.character,
+        Some(Character {
+            run_speed: 4.0,
+            turn_speed_degrees: 720.0
+        })
+    );
+    assert_eq!(
+        scene.node(cam).orbit_camera,
+        Some(OrbitCamera {
+            target: hero,
+            pivot_height: 1.5,
+            distance: 4.0,
+            yaw_degrees: 10.0,
+            pitch_degrees: -15.0,
+            pitch_min_degrees: -70.0,
+            pitch_max_degrees: 20.0,
+        })
+    );
+    assert!(scene.node(hero).orbit_camera.is_none());
+}
+
+#[test]
+fn scene_without_character_or_orbit_camera_reports_none() {
+    let scene = Scene::parse(&scene_with("")).unwrap();
+    assert_eq!((scene.character(), scene.orbit_camera()), (None, None));
+}
+
+#[test]
+fn capsule_with_height_equal_to_two_radii_is_accepted() {
+    let scene = Scene::parse(&scene_with(
+        "(name: \"ball\", mesh: Capsule(radius: 0.5, height: 1.0))",
+    ))
+    .unwrap();
+    let ball = scene.node(scene.find("ball").unwrap());
+    assert_eq!(
+        ball.mesh.map(|m| m.kind),
+        Some(MeshKind::Capsule {
+            radius: 0.5,
+            height: 1.0
+        })
+    );
+}
+
+#[test]
+fn scene_rejects_an_invalid_capsule_shape() {
+    for shape in [
+        "radius: 0.0, height: 1.0",
+        "radius: -0.5, height: 1.0",
+        "radius: 0.5, height: 0.99",
+    ] {
+        let p = node_problem(
+            &format!("(name: \"arena\", children: [(name: \"pill\", mesh: Capsule({shape}))])"),
+            "arena/pill",
+        );
+        assert_eq!(p, Problem::CapsuleShape, "{shape}");
+        assert!(p.to_string().contains("height >= 2 * radius"), "{p}");
+    }
+}
+
+#[test]
+fn scene_rejects_non_positive_character_speeds() {
+    for character in [
+        "run_speed: 0.0, turn_speed: 720.0",
+        "run_speed: 4.0, turn_speed: -1.0",
+    ] {
+        let p = node_problem(&hero("radius: 0.35, height: 1.8", character), "hero");
+        assert_eq!(p, Problem::CharacterSpeed, "{character}");
+    }
+}
+
+#[test]
+fn scene_rejects_a_second_character() {
+    let second = "(name: \"arena\", children: [(name: \"rival\", \
+                  character: (run_speed: 1.0, turn_speed: 90.0))])";
+    let p = node_problem(&format!("{HERO}, {second}"), "arena/rival");
+    assert_eq!(p, Problem::SecondCharacter("hero".to_owned()));
+    assert!(p.to_string().contains("\"hero\""), "{p}");
+}
+
+#[test]
+fn scene_rejects_a_second_orbit_camera() {
+    let second = orbit(ORBIT_FIELDS).replace("\"orbit\"", "\"orbit2\"");
+    let p = node_problem(
+        &format!("{HERO}, {}, {second}", orbit(ORBIT_FIELDS)),
+        "orbit2",
+    );
+    assert_eq!(p, Problem::SecondOrbitCamera("orbit".to_owned()));
+}
+
+#[test]
+fn orbit_camera_without_a_camera_component_is_rejected() {
+    let p = node_problem(
+        &format!("{HERO}, (name: \"rig\", orbit_camera: ({ORBIT_FIELDS}))"),
+        "rig",
+    );
+    assert_eq!(p, Problem::OrbitCameraWithoutCamera);
+}
+
+#[test]
+fn orbit_camera_target_naming_no_node_is_rejected() {
+    let p = node_problem(
+        &format!("{HERO}, {}", orbit_with("\"hero\"", "\"heroes/hero\"")),
+        "orbit",
+    );
+    assert_eq!(p, Problem::OrbitTargetNotFound("heroes/hero".to_owned()));
+}
+
+#[test]
+fn orbit_camera_target_without_a_character_is_rejected() {
+    let p = node_problem(
+        &format!("(name: \"hero\"), {}", orbit(ORBIT_FIELDS)),
+        "orbit",
+    );
+    assert_eq!(p, Problem::OrbitTargetNotCharacter("hero".to_owned()));
+    assert!(p.to_string().contains("character component"), "{p}");
+}
+
+#[test]
+fn orbit_camera_distance_must_be_greater_than_zero() {
+    for distance in ["distance: 0.0", "distance: -4.0"] {
+        let p = node_problem(
+            &format!("{HERO}, {}", orbit_with("distance: 4.0", distance)),
+            "orbit",
+        );
+        assert_eq!(p, Problem::OrbitDistance, "{distance}");
+    }
+}
+
+#[test]
+fn orbit_camera_pitch_limits_must_be_ordered_within_ninety_degrees() {
+    for (old, new) in [
+        ("pitch_min: -70.0", "pitch_min: 20.0"), // pitch_min == pitch_max
+        ("pitch_min: -70.0", "pitch_min: 30.0"),
+        ("pitch_min: -70.0", "pitch_min: -90.0"),
+        ("pitch_max: 20.0", "pitch_max: 90.0"),
+    ] {
+        let p = node_problem(&format!("{HERO}, {}", orbit_with(old, new)), "orbit");
+        assert_eq!(p, Problem::OrbitPitchRange, "{new}");
+    }
+}
+
+#[test]
+fn orbit_camera_pitch_outside_its_limits_is_rejected() {
+    for pitch in ["pitch: -71.0", "pitch: 21.0"] {
+        let p = node_problem(
+            &format!("{HERO}, {}", orbit_with("pitch: -15.0", pitch)),
+            "orbit",
+        );
+        assert_eq!(p, Problem::OrbitPitchOutOfRange, "{pitch}");
+    }
+}
+
+#[test]
+fn orbit_camera_pitch_on_its_limits_is_accepted() {
+    for pitch in ["pitch: -70.0", "pitch: 20.0"] {
+        let src = scene_with(&format!("{HERO}, {}", orbit_with("pitch: -15.0", pitch)));
+        assert!(Scene::parse(&src).is_ok(), "{pitch}");
+    }
+}
+
+#[test]
+fn character_components_reject_non_finite_numbers() {
+    let p = node_problem(
+        &hero(
+            "radius: inf, height: 1.8",
+            "run_speed: 4.0, turn_speed: 720.0",
+        ),
+        "hero",
+    );
+    assert_eq!(p, Problem::NotFinite("mesh"));
+    let p = node_problem(
+        &hero(
+            "radius: 0.35, height: 1.8",
+            "run_speed: NaN, turn_speed: 720.0",
+        ),
+        "hero",
+    );
+    assert_eq!(p, Problem::NotFinite("character"));
+    for (old, new) in [
+        ("pivot_height: 1.5", "pivot_height: inf"),
+        ("distance: 4.0", "distance: NaN"),
+        ("yaw: 10.0", "yaw: -inf"),
+        ("pitch: -15.0", "pitch: NaN"),
+        ("pitch_min: -70.0", "pitch_min: NaN"),
+        ("pitch_max: 20.0", "pitch_max: inf"),
+    ] {
+        let p = node_problem(&format!("{HERO}, {}", orbit_with(old, new)), "orbit");
+        assert_eq!(p, Problem::NotFinite("orbit_camera"), "{new}");
+    }
+}
+
+#[test]
+fn misspelled_character_or_orbit_camera_field_is_rejected() {
+    for nodes in [
+        hero(
+            "radius: 0.35, height: 1.8",
+            "run_sped: 4.0, turn_speed: 720.0",
+        ),
+        hero(
+            "radius: 0.35, hieght: 1.8",
+            "run_speed: 4.0, turn_speed: 720.0",
+        ),
+        format!("{HERO}, {}", orbit_with("distance: 4.0", "distanse: 4.0")),
+    ] {
+        let err = Scene::parse(&scene_with(&nodes)).unwrap_err();
+        assert!(matches!(err, SceneError::Syntax(_)), "{nodes}: {err}");
+    }
 }

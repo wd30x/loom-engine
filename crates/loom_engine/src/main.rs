@@ -57,6 +57,10 @@ pub(crate) struct RunArgs {
     /// Load a scene file instead of the built-in demo scene.
     #[arg(long, value_name = "PATH")]
     scene: Option<PathBuf>,
+    /// Window mode: do not capture the mouse (no lock, pointer stays visible)
+    /// and ignore mouse motion, so axes come from keys only.
+    #[arg(long, conflicts_with = "headless")]
+    no_capture: bool,
     /// Render resolution.
     #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
     size: Size,

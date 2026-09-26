@@ -7,7 +7,7 @@
 use std::io;
 use std::time::{Duration, Instant, SystemTime};
 
-use loom_sim::CubeGame;
+use loom_sim::Game;
 
 /// How often the file's modification time is checked.
 pub(crate) const CHECK_INTERVAL: Duration = Duration::from_millis(500);
@@ -20,7 +20,7 @@ pub(crate) enum Poll {
     /// file is momentarily missing (editors often delete or rename on save).
     Unchanged,
     /// The file holds a new valid scene. The caller restarts with it.
-    Reloaded(Box<CubeGame>),
+    Reloaded(Box<Game>),
     /// New content that fails to parse or validate. Keep the running scene,
     /// log the error and count it.
     Failed(anyhow::Error),
@@ -78,7 +78,7 @@ impl SceneWatcher {
         if content == self.current {
             return Poll::Unchanged;
         }
-        match CubeGame::from_source(&content) {
+        match Game::from_source(&content) {
             Ok(game) => {
                 self.current = content;
                 self.last_failure = None;
@@ -129,10 +129,10 @@ mod tests {
         SceneWatcher::new(t0, Some(at(1)), GOOD.to_owned())
     }
 
-    fn moved_cube() -> String {
+    fn moved_player() -> String {
         GOOD.replace(
-            r#"(name: "cube", position: (0.0, 0.5, 0.0)"#,
-            r#"(name: "cube", position: (3.0, 0.5, 0.0)"#,
+            r#"(name: "player", position: (0.0, 0.0, 0.0)"#,
+            r#"(name: "player", position: (3.0, 0.0, 0.0)"#,
         )
     }
 
@@ -172,7 +172,7 @@ mod tests {
         let reads = Cell::new(0);
         let read = || {
             reads.set(reads.get() + 1);
-            Ok(moved_cube())
+            Ok(moved_player())
         };
         assert!(matches!(
             w.poll(t0 + CHECK_INTERVAL, || Ok(at(1)), read),
@@ -210,7 +210,7 @@ mod tests {
         ));
         // Back with new content, even under the same new time: reloads.
         assert!(matches!(
-            poll_with(&mut w, t0 + CHECK_INTERVAL * 3, 2, &moved_cube()),
+            poll_with(&mut w, t0 + CHECK_INTERVAL * 3, 2, &moved_player()),
             Poll::Reloaded(_)
         ));
     }
@@ -219,14 +219,15 @@ mod tests {
     fn changed_valid_scene_reloads() {
         let t0 = Instant::now();
         let mut w = watcher(t0);
-        let Poll::Reloaded(game) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &moved_cube()) else {
+        let Poll::Reloaded(game) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &moved_player())
+        else {
             panic!("expected a reload");
         };
-        assert_eq!(game.position(), glam::Vec3::new(3.0, 0.5, 0.0));
+        assert_eq!(game.state().player.position, glam::Vec3::new(3.0, 0.0, 0.0));
         assert_eq!(game.clock().tick(), 0);
         // The new content is now current: touching it again is no reload.
         assert!(matches!(
-            poll_with(&mut w, t0 + CHECK_INTERVAL * 2, 3, &moved_cube()),
+            poll_with(&mut w, t0 + CHECK_INTERVAL * 2, 3, &moved_player()),
             Poll::Unchanged
         ));
     }
@@ -252,7 +253,7 @@ mod tests {
         ));
         // A good reload clears the memory: the first broken content counts again.
         assert!(matches!(
-            poll_with(&mut w, step(4), 5, &moved_cube()),
+            poll_with(&mut w, step(4), 5, &moved_player()),
             Poll::Reloaded(_)
         ));
         assert!(matches!(
@@ -262,14 +263,14 @@ mod tests {
     }
 
     #[test]
-    fn scene_without_cube_fails_to_reload() {
+    fn scene_without_character_fails_to_reload() {
         let t0 = Instant::now();
         let mut w = watcher(t0);
-        let no_cube = GOOD.replace(r#"(name: "cube","#, r#"(name: "box","#);
-        let Poll::Failed(e) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &no_cube) else {
+        let no_character = GOOD.replace("character: (run_speed: 4.0, turn_speed: 720.0),", "");
+        let Poll::Failed(e) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &no_character) else {
             panic!("expected a failure");
         };
-        assert!(e.to_string().contains("cube"), "{e}");
+        assert!(e.to_string().contains("character"), "{e}");
     }
 
     #[test]

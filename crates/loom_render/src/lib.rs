@@ -334,11 +334,30 @@ impl Presenter {
 /// Draw items the per-draw buffer holds before it first has to grow.
 const INITIAL_DRAW_CAPACITY: usize = 64;
 
-/// Vertex and index buffers of one built-in mesh.
+/// Vertex and index buffers of one mesh.
 struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+}
+
+impl GpuMesh {
+    fn new(device: &wgpu::Device, kind: MeshKind) -> Self {
+        let (vertices, indices) = mesh::mesh(kind);
+        Self {
+            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh vertices"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh indices"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            index_count: u32::try_from(indices.len()).expect("meshes have few indices"),
+        }
+    }
 }
 
 /// Per-draw data (model matrix, normal matrix, color) for every draw item of
@@ -359,8 +378,10 @@ pub struct Renderer {
     bind_group_layout: wgpu::BindGroupLayout,
     globals_buffer: wgpu::Buffer,
     draws: DrawBuffer,
-    /// Indexed like `MeshKind::ALL`.
-    meshes: Vec<GpuMesh>,
+    /// Every mesh uploaded so far, found by `==`: the built-in ones, then
+    /// each capsule shape at its first use. Shapes that are no longer drawn
+    /// (e.g. after a hot reload changed a capsule) stay; there are only a few.
+    meshes: Vec<(MeshKind, GpuMesh)>,
     /// Requested size; `(0, 0)` while minimized.
     size: (u32, u32),
     /// `None` while the size is zero.
@@ -493,25 +514,9 @@ impl Renderer {
             cache: None,
         });
 
-        let meshes = MeshKind::ALL
+        let meshes = MeshKind::BUILT_IN
             .iter()
-            .map(|&kind| {
-                let (vertices, indices) = mesh::mesh(kind);
-                GpuMesh {
-                    vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mesh vertices"),
-                        contents: bytemuck::cast_slice(&vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-                    indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mesh indices"),
-                        contents: bytemuck::cast_slice(&indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    }),
-                    index_count: u32::try_from(indices.len())
-                        .expect("built-in meshes have few indices"),
-                }
-            })
+            .map(|&kind| (kind, GpuMesh::new(&device, kind)))
             .collect();
 
         Ok(Self {
@@ -586,6 +591,13 @@ impl Renderer {
                 capacity,
             );
         }
+        for item in frame.draws {
+            if !self.meshes.iter().any(|(kind, _)| *kind == item.mesh) {
+                log::debug!("uploading mesh {:?}", item.mesh);
+                self.meshes
+                    .push((item.mesh, GpuMesh::new(&self.device, item.mesh)));
+            }
+        }
         let Some(offscreen) = &self.offscreen else {
             return Ok(false);
         };
@@ -632,11 +644,12 @@ impl Renderer {
             pass.set_bind_group(0, &self.draws.bind_group, &[]);
             let mut bound = None;
             for (i, item) in frame.draws.iter().enumerate() {
-                let slot = MeshKind::ALL
+                let slot = self
+                    .meshes
                     .iter()
-                    .position(|&k| k == item.mesh)
-                    .expect("MeshKind::ALL lists every mesh kind");
-                let mesh = &self.meshes[slot];
+                    .position(|(kind, _)| *kind == item.mesh)
+                    .expect("every mesh of this frame was uploaded above");
+                let mesh = &self.meshes[slot].1;
                 if bound != Some(slot) {
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);

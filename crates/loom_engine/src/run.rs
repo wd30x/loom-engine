@@ -178,10 +178,11 @@ struct WindowRun<'a> {
 
 impl WindowRun<'_> {
     /// Captures (or releases) the mouse for live input; replaying a script
-    /// leaves the pointer alone.
+    /// or `--no-capture` leaves the pointer alone.
     fn capture_mouse(&self, captured: bool) {
         if let Some(window) = &self.window
             && self.sim.is_live()
+            && !self.args.no_capture
         {
             loom_platform::set_cursor_captured(window, captured);
         }
@@ -357,7 +358,9 @@ impl WindowApp for WindowRun<'_> {
     }
 
     fn mouse_motion(&mut self, dx: f64, dy: f64) -> AppControl {
-        self.sim.mouse_motion(dx, dy);
+        if !self.args.no_capture {
+            self.sim.mouse_motion(dx, dy);
+        }
         AppControl::Continue
     }
 

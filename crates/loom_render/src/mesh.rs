@@ -6,9 +6,9 @@ use std::f32::consts::{PI, TAU};
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
-/// The meshes the renderer can draw. All are unit sized; scale them with
-/// the model matrix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The meshes the renderer can draw. The first three are unit sized; scale
+/// them with the model matrix.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MeshKind {
     /// Edge 1, centered at the origin.
     Cube,
@@ -16,10 +16,17 @@ pub enum MeshKind {
     Plane,
     /// Diameter 1, centered at the origin.
     Sphere,
+    /// A cylinder along Y capped by two half spheres. `height` includes the
+    /// caps; the origin is at the bottom, so it spans y in `[0, height]`.
+    /// The caller guarantees finite values, `radius > 0` and
+    /// `height >= 2 * radius`.
+    Capsule { radius: f32, height: f32 },
 }
 
 impl MeshKind {
-    pub(crate) const ALL: [MeshKind; 3] = [MeshKind::Cube, MeshKind::Plane, MeshKind::Sphere];
+    /// The meshes uploaded when the renderer is created; others (capsules)
+    /// are uploaded the first time a frame uses them.
+    pub(crate) const BUILT_IN: [MeshKind; 3] = [MeshKind::Cube, MeshKind::Plane, MeshKind::Sphere];
 }
 
 #[repr(C)]
@@ -54,6 +61,7 @@ pub(crate) fn mesh(kind: MeshKind) -> (Vec<Vertex>, Vec<u16>) {
         MeshKind::Cube => cube(),
         MeshKind::Plane => plane(),
         MeshKind::Sphere => sphere(32, 16),
+        MeshKind::Capsule { radius, height } => capsule(radius, height, 32, 8),
     }
 }
 
@@ -131,6 +139,54 @@ fn sphere(segments: u16, rings: u16) -> (Vec<Vertex>, Vec<u16>) {
     (vertices, indices)
 }
 
+/// Capsule along Y from y = 0 to y = `height`: two half spheres of `radius`
+/// (`rings` rings each, `segments` around) joined by a cylinder. The top
+/// half sphere is centered at `height - radius`, the bottom one at `radius`;
+/// the cylinder reuses their equator rows, whose normals are horizontal.
+/// With `height == 2 * radius` the cylinder is left out (a sphere).
+fn capsule(radius: f32, height: f32, segments: u16, rings: u16) -> (Vec<Vertex>, Vec<u16>) {
+    debug_assert!(radius.is_finite() && height.is_finite());
+    debug_assert!(radius > 0.0 && height >= 2.0 * radius);
+    let mut vertices = Vec::new();
+    // Rows from the top pole down; theta is the angle from +Y.
+    for i in 0..=2 * rings + 1 {
+        let top = i <= rings;
+        let step = if top { i } else { i - 1 };
+        let theta = PI * f32::from(step) / f32::from(2 * rings);
+        let (sin_theta, cos_theta) = theta.sin_cos();
+        // Written so that the poles land exactly on y = height and y = 0.
+        let y = if top {
+            height - radius * (1.0 - cos_theta)
+        } else {
+            radius * (1.0 + cos_theta)
+        };
+        for j in 0..=segments {
+            let phi = TAU * f32::from(j) / f32::from(segments);
+            let n = Vec3::new(sin_theta * phi.cos(), cos_theta, sin_theta * phi.sin()).normalize();
+            let position = Vec3::new(n.x * radius, y, n.z * radius);
+            vertices.push(Vertex::new(position, n));
+        }
+    }
+    let rows = 2 * rings + 2;
+    let at = |i: u16, j: u16| i * (segments + 1) + j;
+    let mut indices = Vec::new();
+    for i in 0..rows - 1 {
+        if i == rings && height == 2.0 * radius {
+            continue; // no cylinder: the two equator rows coincide
+        }
+        for j in 0..segments {
+            let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+            if i != 0 {
+                indices.extend_from_slice(&[a, d, c]); // degenerate at the top pole
+            }
+            if i != rows - 2 {
+                indices.extend_from_slice(&[a, c, b]); // degenerate at the bottom pole
+            }
+        }
+    }
+    (vertices, indices)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +244,52 @@ mod tests {
             assert_eq!(v.normal, [0.0, 1.0, 0.0]);
             assert!(v.position[0].abs() == 0.5 && v.position[2].abs() == 0.5);
         }
+    }
+
+    /// Outward reference for a capsule: away from the nearest point of its
+    /// axis segment.
+    fn capsule_outward(radius: f32, height: f32) -> impl Fn(Vec3) -> Vec3 {
+        move |c| c - Vec3::new(0.0, c.y.clamp(radius, height - radius), 0.0)
+    }
+
+    fn assert_capsule_shape(radius: f32, height: f32) {
+        let kind = MeshKind::Capsule { radius, height };
+        assert_wound_outward(kind, capsule_outward(radius, height));
+        let (vertices, _) = mesh(kind);
+        let (mut lowest, mut highest) = (f32::INFINITY, f32::NEG_INFINITY);
+        for v in &vertices {
+            let [x, y, z] = v.position;
+            // sin² + cos² may exceed 1 by an ulp or so.
+            assert!(x * x + z * z <= radius * radius * (1.0 + 1e-6), "{x} {z}");
+            assert!((0.0..=height).contains(&y), "{y}");
+            assert!((Vec3::from(v.normal).length() - 1.0).abs() < 1e-6);
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+        }
+        assert_eq!((lowest, highest), (0.0, height));
+    }
+
+    #[test]
+    fn capsule_triangles_face_away_from_its_axis() {
+        assert_capsule_shape(0.35, 1.8);
+        let (vertices, indices) = mesh(MeshKind::Capsule {
+            radius: 0.35,
+            height: 1.8,
+        });
+        assert_eq!(vertices.len(), 18 * 33);
+        // Two pole bands of 32 triangles, 15 full bands of 64 (one is the cylinder).
+        assert_eq!(indices.len(), (2 * 32 + 15 * 64) * 3);
+    }
+
+    #[test]
+    fn capsule_as_tall_as_its_diameter_is_a_sphere() {
+        assert_capsule_shape(0.5, 1.0);
+        let (_, indices) = mesh(MeshKind::Capsule {
+            radius: 0.5,
+            height: 1.0,
+        });
+        // As above, without the cylinder band.
+        assert_eq!(indices.len(), (2 * 32 + 14 * 64) * 3);
     }
 
     #[test]

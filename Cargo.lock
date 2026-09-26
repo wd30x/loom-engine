@@ -1098,6 +1098,7 @@ dependencies = [
  "libm",
  "loom_core",
  "loom_scene",
+ "serde",
  "thiserror 2.0.21",
 ]
 
