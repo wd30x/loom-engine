@@ -239,7 +239,8 @@ OS 按键事件 --(loom_platform 翻译)--> Key --(InputCollector 按 tick 采�
 - 目前的范围：`KeyA`–`KeyZ`、`Digit0`–`Digit9`、四个方向键、`Space`、`Enter`、`Tab`、`Backspace`、左右 `Shift`/`Control`/`Alt`，以及 E4.3 为 `rogue` 加的小键盘 `Numpad1`–`Numpad9` 和 `Period`（句号键）。其他按键平台层直接忽略。
 - 小键盘按的也是物理位置：NumLock 关着时，Windows 把小键盘 8 当成「上」，但它的扫描码和方向键不同，winit 应当仍报 `Numpad8`（E4.3 要实测）。
 - **`Escape` 不是 `Key`**：它保留给引擎用来退出，不能绑定。
-- 鼠标的移动量作为轴的来源，见下文「模拟量（轴）」；鼠标按键和手柄以后再加。
+- 鼠标的移动量作为轴的来源，见下文「模拟量（轴）」。手柄以后再加。
+- **鼠标按键**（G2.3 起）：`MouseLeft`、`MouseRight`、`MouseMiddle` 也是 `Key` 的变体，和键盘键一样写在键位表的 `keys` 里，也按同样的规则采样（按住、上次采样后按下过、失焦释放）。W3C 没有给鼠标按键起 `code` 名，这三个名字是 loom 自己定的。平台层把 winit 的 `WindowEvent::MouseInput` 翻译过来，其他鼠标按键忽略。抓不抓鼠标、`--no-capture` 都不影响按键；没抓鼠标时，点击窗口让它获得焦点的那一下也会算一次按下。
 
 ### 动作映射 `ActionMap`
 
@@ -648,6 +649,96 @@ invulnerable = (action == roll || action == backstep) && invuln_from_of(action) 
 ```
 
 - 无敌帧现在只是状态，还没有东西会打到角色。攻击判定是 G3 的事。
+
+### 攻击（G2.3 起）
+
+用户决定（2026-09-27）：
+- **只做攻击动作**：前摇、出招、后摇三段，加上耐力消耗；打不到任何东西，命中判定留到 G3。
+- **鼠标左键轻攻击、右键重攻击**。
+- **后摇里可以预输入**：接下一刀，或者接翻滚。轻攻击最多连 3 刀。
+- **出招时向前滑一小段**：前摇里还能小幅转向。
+
+**键位**：动作 `attack` 绑 `MouseLeft`，`heavy` 绑 `MouseRight`。按下的那个 tick 触发（`just_pressed`），不像翻滚那样等松开。
+
+**参数**：角色节点的 props，可以省略，规则和上一小节相同。
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `attack_cost` | 15 | 轻攻击消耗的耐力，> 0 |
+| `attack_startup_ticks`、`attack_active_ticks`、`attack_recovery_ticks` | 10、4、16 | 前摇、出招、后摇的 tick 数，整数 ≥ 1 |
+| `attack_distance` | 0.3 | 出招阶段向前滑的总距离，米，> 0 |
+| `heavy_cost` | 25 | > 0 |
+| `heavy_startup_ticks`、`heavy_active_ticks`、`heavy_recovery_ticks` | 22、5、23 | 整数 ≥ 1 |
+| `heavy_distance` | 0.6 | > 0 |
+| `attack_turn_speed` | 180 | 前摇里转向的速度，度/秒，> 0；轻重攻击共用 |
+| `combo_max` | 3 | 轻攻击连段的最多刀数，整数 ≥ 1 |
+
+- 换算：`attack_step = attack_distance / attack_active_ticks`，`heavy_step` 同理，`attack_turn_step = attack_turn_speed.to_radians() / 60`。
+- `attack_step`、`heavy_step` 也必须小于胶囊体半径，报错文案和翻滚的一样，`<action>` 写 `attack` 或 `heavy`。
+- 检查顺序：接在上一小节的检查后面，按上表顺序，最后是每 tick 距离（attack、heavy）。
+
+**状态**：
+- `action` 多了 `attack`、`heavy` 两个值；`action_tick` 从 1 数到 `startup + active + recovery`。
+- 以下三个新字段追加在 `player` 的**最后**：
+  - `attack_phase`：`"startup"`、`"active"`、`"recovery"`，不在攻击中时是 `null`；
+  - `combo`：当前是轻攻击连段的第几刀（1 到 `combo_max`），其他时候是 0；
+  - `buffered`：预输入的下一个动作，`"attack"`、`"heavy"`、`"roll"`，没有时是 `null`。
+- 攻击期间 `invulnerable` 是 false。
+
+**每个 tick 的第 4 步**（在上一小节的基础上改）：
+
+```text
+if action == roll || action == backstep {
+    （同上一小节，不变）
+} else if action == attack || action == heavy {
+    action_tick += 1
+    attack_tick(action)
+} else if let Some(next) = next_action() {                 // 见下
+    start(next)
+} else {
+    （冲刺或普通跑，同上一小节，不变）
+}
+
+next_action():
+    if buffered != null { n = buffered; buffered = null; from_buffer = true }
+    else if input.just_pressed("heavy") { n = heavy }
+    else if input.just_pressed("attack") { n = attack }
+    else if tap { n = roll }                              // roll 再按有没有方向分成翻滚或后撤步
+    else { return None }
+    if stamina > 0.0 { return Some(n) } else { return None }   // 耐力为 0：这次输入（包括预输入）丢掉，本 tick 普通移动
+
+start(roll):   同上一小节的翻滚或后撤步开始
+start(attack 或 heavy):
+    combo = (n == attack) ? (from_buffer && 上一个动作是 attack && combo < combo_max ? combo + 1 : 1) : 0
+    action = n; action_tick = 1
+    stamina = max(stamina - cost_of(n), 0.0); stamina_wait = stamina_delay_ticks
+    attack_tick(n)
+
+attack_tick(a):                                           // S、A、R 是 a 的前摇、出招、后摇 tick 数
+    if action_tick <= S {
+        attack_phase = startup
+        if v.length_squared() > 0.0 { 按第 5 步的公式朝 dir 转身，但每 tick 最多转 attack_turn_step }
+    } else if action_tick <= S + A {
+        attack_phase = active
+        position = resolve(position + Vec3(-sinf(facing), 0.0, -cosf(facing)) * step_of(a))
+    } else {
+        attack_phase = recovery
+    }
+    if attack_phase != startup {                          // 出招和后摇里记下预输入，同一个 tick 取优先的那个
+        if input.just_pressed("heavy") { buffered = heavy }
+        else if input.just_pressed("attack") { buffered = attack }
+        else if tap { buffered = roll }
+    }
+    if action_tick == S + A + R { action = idle; action_tick = 0; attack_phase = null }
+```
+
+- 「上一个动作是 attack」：用一个不进状态导出的内部变量记住最近结束的动作。连段只在**预输入**接上时继续；攻击结束后等一会儿再按，是新的第 1 刀。
+- 预输入会被后来的输入**覆盖**（同一次攻击里先按了轻、后按了重，最后接的是重）。前摇里的按键直接丢掉。
+- 预输入在攻击结束后的**下一个 tick** 执行，所以最后一个后摇 tick 和下一刀的第 1 个 tick 相邻，中间没有空档。
+- 翻滚和后撤步期间的按键仍然丢掉，不预输入（和上一小节相同）。
+- 冲刺中按攻击：冲刺停下，出普通攻击（没有冲刺攻击）。
+- `busy` 规则不变：攻击期间（包括开始和结束的那个 tick）都算 busy，不恢复耐力。
+- 攻击方向：出招阶段沿**当前 facing** 的前方滑动，也就是前摇里转完之后的朝向。
 - **没有画面上的耐力条**：要显示得先有 HUD 或文字渲染，还没有使用者。目前在状态导出里看。
 
 ### 碰撞（G1.3 起）
