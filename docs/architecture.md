@@ -97,7 +97,7 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)
 - 参数错误时（E0-2）：clap 的报错照常写 stderr，同时 stdout 输出 `{"status":"error","error":"<clap 报错文本>"}`，退出码 2。
 - **唯一的例外**是 `--help` 和 `--version`：输出给人看的纯文本，退出码 0，不输出 JSON。
 
-JSON 里的字段名一旦定下来就不要改名。要加新字段可以，旧字段不能删、不能改含义。
+**格式稳定性**（用户决定，2026-09-26）：在出现**第一个外部使用者**之前（预计是 E3 的远程控制 / MCP），stdout、状态导出、输入脚本、场景文件的格式**可以改**，但每次都必须：写进本文档、在同一个切片里同步改测试。出现外部使用者之后，改回严格规则：字段只能加，不能删、不能改名、不能改含义。
 
 ### 命令
 
@@ -110,6 +110,8 @@ loom run [OPTIONS]
     --input <PATH>         回放输入脚本（第 9 节）；这时键盘不再驱动动作，Esc 仍然可以退出
     --record <PATH>        退出前把这次运行每个 tick 的动作变化写成输入脚本（第 9 节），会自动创建父目录
     --scene <PATH>         加载场景文件（第 10 节）；不给时用内置的演示场景。窗口模式下文件变化会热重载
+    --no-capture           窗口模式下不抓鼠标（不锁定、不隐藏指针），也不读鼠标移动（轴只来自按键）。
+                           smoke 测试用它：不占用桌面鼠标，有人动鼠标也不会污染录制。和 --headless 同时给是参数错误
     --size <WxH>           渲染分辨率，默认 1280x720；窗口模式下只决定初始窗口尺寸（第 2 节）
 
 loom info                  输出 GPU adapter 信息，不渲染
@@ -150,8 +152,8 @@ loom info                  输出 GPU adapter 信息，不渲染
 格式：
 - 用 `serde_json::to_string_pretty` 输出（2 空格缩进），**末尾补一个换行**。
 - 顶层字段属于引擎：`tick`、`sim_time`。以后加的引擎级状态（比如当前按下的动作）也放在顶层。
-- 游戏状态整个放在**一个**以游戏命名的字段下。现在是 E0 的旋转立方体，字段名是 `demo`。
-- 字段名的稳定性规则和 stdout 一样：可以加，不能删、不能改名、不能改含义。
+- 游戏状态整个放在**一个**字段下：G1.2 起是 `game`（第 11 节），替换了 E0–G1.1 的旋转立方体 `demo`。
+- 格式稳定性规则和 stdout 一样（见上文「格式稳定性」）。
 
 结构（省略了数组的展开）：
 
@@ -161,16 +163,16 @@ loom info                  输出 GPU adapter 信息，不渲染
   "sim_time": 1.0,
   "actions": [],
   "nodes": {
-    "cube":   { "position": [0.0, 0.5, 0.0], "rotation": [x, y, z, w], "scale": [1.0, 1.0, 1.0] },
+    "player": { "position": [0.0, 0.0, 0.0], "rotation": [x, y, z, w], "scale": [1.0, 1.0, 1.0] },
     "ground": { ... }
   },
-  "demo": { "yaw": 1.0, "position": [0.0, 0.5, 0.0] }
+  "game": { "player": { "position": [x, y, z], "facing": 0.0 }, "camera": { "yaw": 0.0, "pitch": -0.2617994 } }
 }
 ```
 
 - `actions` 是最后一个 tick 生效的动作集合（按名字排序），见第 9 节。
 - `nodes`：场景里**每个节点**的**局部**变换，键是节点路径（第 10 节），按路径排序。旋转是四元数 `[x, y, z, w]`。
-- `demo.position` 是立方体节点的位置。E2 起立方体放在地面上，初始位置是 `(0, 0.5, 0)`，不再是原点。
+- `game` 的字段见第 11 节。角度都是弧度。
 
 ## 7. 错误处理
 
@@ -349,10 +351,12 @@ RON，所有结构体 `deny_unknown_fields`：
 | `rotation` | `(x, y, z)` 度 | `(0, 0, 0)` | YXZ 欧拉角（第 5 节） |
 | `look_at` | `(x, y, z)` | 无 | 让节点的 -Z 指向父节点空间里的这个点，+Y 朝上。**不能和 `rotation` 同时写** |
 | `scale` | `(x, y, z)` | `(1, 1, 1)` | 每个分量必须 > 0 |
-| `mesh` | `Cube` / `Plane` / `Sphere` | 无 | 都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调 |
+| `mesh` | `Cube` / `Plane` / `Sphere` / `Capsule(radius, height)` | 无 | 前三种都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调。`Capsule` 带参数（非均匀缩放会把半球压扁）：`height` 是含两端半球的总高，**原点在底部**（占 y ∈ [0, height]），方便角色站在地面上 |
 | `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)` | 只有带 `mesh` 时才有意义；分量在 0 到 1 之间 |
 | `camera` | `(fov_y, near, far)` | 无 | `fov_y` 是垂直视场角（度）；相机看向自己的 -Z |
 | `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
+| `character` | `(run_speed, turn_speed)` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒 |
+| `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度 |
 | `children` | 节点列表 | `[]` | |
 
 `look_at` 的算法**固定如下**（换一种等价算法，四元数的最后一位可能不同，状态导出就对不上了）：
@@ -368,15 +372,18 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - `version` 必须是 1
 - 名字格式、同级重名
 - `camera` 必须指向一个存在的、带 `camera` 组件的节点
-- 整个场景**最多一个** `light`（以后要多光源时再扩展）
+- 整个场景**最多一个** `light`（以后要多光源时再扩展）；**最多一个** `character`、**最多一个** `orbit_camera`（G1）
+- `Capsule`：`radius > 0`，`height ≥ 2 × radius`
+- `character`：`run_speed > 0`，`turn_speed > 0`
+- `orbit_camera`：节点上必须也有 `camera`；`target` 必须指向带 `character` 的节点；`pivot_height`、`distance` 有限且 `distance > 0`；`-90 < pitch_min < pitch_max < 90`；`pitch` 在 `[pitch_min, pitch_max]` 里
 - `rotation` 和 `look_at` 不能同时出现；`look_at` 的目标不能等于 `position`，方向也不能和 Y 轴平行（`right` 会退化）
 - 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间（节点 `color`、`light.color`、`ambient` 都是）；`light.intensity` ≥ 0；`fov_y` 在 (0, 180) 之间；`0 < near < far`
 
-### 演示游戏和场景的关系
+### 游戏和场景的关系
 
-- 不给 `--scene` 时，用一个内置的演示场景（内容就是上面的例子），用 `include_str!` 嵌进程序。
-- 演示逻辑要求场景里有一个**根节点 `cube`**，并且带 `mesh`；没有就报错。每个 tick：位置按第 9 节的移动公式从场景里的初始位置累加；旋转设为 `Quat::from_rotation_y(yaw as f32) * Quat::from_rotation_x(0.3)`。
-- E0 那个六个面六种颜色的立方体不再保留：有了光照，单色立方体也能看出形状。
+- 不给 `--scene` 时，用 `loom_sim` 里内置的演示场景，用 `include_str!` 嵌进程序。
+- G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。不满足就报错。游戏逻辑见第 11 节。
+- E0–G1.1 的旋转立方体演示（根节点 `cube`）在 G1.2 被角色取代。
 
 ### 渲染
 
@@ -399,3 +406,71 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - **同一份坏内容只算一次** `reload_errors`：记住上次失败内容，没变就不重复计数、不重复打日志。
 - 重载时**键盘状态保留**：仍然按住的键继续算按住，不用松开再按。脚本回放从第 1 个 tick 重新开始。
 - 报告里 `frames` 是整次运行渲染的总帧数；`ticks`、`sim_time`、`input.applied` 只算最后一段（重载之后）。
+
+## 11. 角色与相机（G1.2 起）
+
+决策（2026-09-26，用户确认）：黑魂 3 式自由环绕相机，角色**相对相机方向**移动，并**平滑快速地**转向移动方向。游戏参数写在场景文件的组件里（`character`、`orbit_camera`），所以可以用热重载在运行中调手感。
+
+实现在 `loom_sim`，受第 4 节确定性规则约束：三角函数一律用 `libm`，角度用 `f32` 弧度。
+
+### 每个 tick 的计算（顺序和公式固定）
+
+改了任何一步的顺序或者写法，状态导出就会对不上，测试的期望值也要重算。
+
+```text
+// 1. 相机角度（look_x 向右为正，look_y 向上为正，单位是这个 tick 转的弧度）
+yaw   = wrap(yaw - look_x)                  // wrap 见第 5 步；yaw 始终在 [-π, π)
+pitch = clamp(pitch + look_y, pitch_min, pitch_max)
+
+// 2. 移动输入，长度限制在 1 以内
+v = Vec2(move_x, move_y)
+if v.length_squared() > 1.0 { v = v / v.length() }
+
+// 3. 相对相机的方向（yaw = 0 时相机朝 -Z）
+(s, c)  = (libm::sinf(yaw), libm::cosf(yaw))
+forward = Vec3(-s, 0, -c)
+right   = Vec3( c, 0, -s)
+dir     = right * v.x + forward * v.y
+
+// 4. 移动
+position += dir * (run_speed / 60.0)
+
+// 5. 转身：朝 dir 转，每个 tick 最多转 turn_speed 度的 1/60
+if v.length_squared() > 0.0 {
+    target = libm::atan2f(-dir.x, -dir.z)
+    diff   = wrap(target - facing)
+    max    = turn_speed.to_radians() / 60.0
+    facing = wrap(facing + clamp(diff, -max, max))
+}
+wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精确运算
+
+// 6. 写回节点
+角色节点：position = position，rotation = Quat::from_rotation_y(facing)
+相机节点：rot = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch)
+          position = position + Vec3(0, pivot_height, 0) + rot * Vec3(0, 0, distance)
+          rotation = rot
+```
+
+其中 `run_speed`、`turn_speed`、`pivot_height`、`distance`、`pitch_min`、`pitch_max` 来自场景组件（角度在加载时转成弧度：`deg.to_radians()`）。
+
+### 初始状态（tick 0）
+
+- `position`：角色节点在场景里的位置（胶囊体的底部，也就是脚下）
+- `facing`：由角色节点在场景里的旋转算出：`f = rotation * Vec3::NEG_Z; facing = libm::atan2f(-f.x, -f.z)`，**再把 `-0.0` 规范成 `0.0`**（没有旋转时 `-f.x` 是 `-0.0`，`atan2f(-0.0, 1.0)` 得 `-0.0`）
+- `yaw`、`pitch`：来自 `orbit_camera` 的 `yaw`、`pitch`（度转弧度）
+- 加载时就按第 6 步写一次相机节点，所以 tick 0 的画面已经是正确的环绕视角
+
+### 状态导出
+
+```json
+"game": {
+  "player": { "position": [x, y, z], "facing": f },
+  "camera": { "yaw": f, "pitch": f }
+}
+```
+
+### 已知限制（G1.2）
+
+- **没有碰撞**（G1.3 做）：角色能穿过柱子。
+- **相机没有碰撞**：`pitch_max` 太大时相机会钻到地面以下（本机实测：`pivot_height` 1.5、`distance` 4 时，超过约 22° 就会穿地）。演示场景用 20°。以后做相机碰撞（被墙或地面挡住时拉近）再放开。
+- 没有加速和减速：移动速度在一个 tick 内从 0 到满。
