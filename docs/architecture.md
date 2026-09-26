@@ -19,6 +19,7 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)
 - `loom_platform`：只有它能碰 winit。它把 OS 事件翻译成 `loom_core` 的输入类型，并把窗口句柄交给调用方。
 - `loom_render`：只有它能碰 wgpu。**它不知道 winit 的存在**：创建 surface 时接收的是任何实现了 `Into<wgpu::SurfaceTarget<'static>>` 的东西（比如 `Arc<winit::window::Window>`），由 `loom_engine` 传进来。
 - `loom_engine`：组装层。解析命令行，按窗口模式或无头模式把上面三个 crate 接起来。
+- `loom_mcp`（E3.2 起）：MCP 适配程序 `loom-mcp`，只通过 `loom serve` 的 stdio 协议和引擎说话，**不依赖任何引擎 crate**（第 13 节）。tokio 和 rmcp 只在这里。
 
 以后新增的 crate（场景、远程控制等）也照这个思路来：**各自只依赖自己必须用到的东西**，由 `loom_engine` 统一组装。
 
@@ -674,3 +675,40 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 - **截图和 `loom run` 一致**：同一个状态，`screenshot` 和 `loom run --headless --screenshot` 的 PNG 逐字节相同。
 - **渲染器只建一次**：第一次 `screenshot` 时创建，之后反复使用，尺寸变了就 resize。不截图的会话完全不碰 GPU，和第 2 节的无头模式一样。
 - `render_ms` 是这一次截图的墙钟耗时（包括第一次创建渲染器），只用于诊断。
+
+### MCP 适配程序 `loom-mcp`（E3.2 起）
+
+用户决定（2026-09-27）：
+- 独立的适配程序，引擎不引入 tokio。
+- 在仓库根目录用项目级的 `.mcp.json` 注册，这个文件提交进仓库。
+- 截图**内联返回图片**，同时照常存文件。
+
+- **crate**：`crates/loom_mcp`，二进制名 `loom-mcp`。
+  - 依赖官方 Rust SDK `rmcp`（features：`server`、`macros`、`transport-io`）、`tokio`、`base64`。
+  - 它和引擎 crate 互不依赖。它在同一个 workspace 里，所以 `Cargo.lock` 里会有 tokio，但 `loom` 二进制不链接它们。
+- **做什么**：
+  - 用 MCP 的 stdio 传输对外；
+  - 对内启动一个 `loom serve` 子进程，按第 13 节的协议转发请求；
+  - 子进程的 stderr 直接继承，日志进 Claude Code 的 MCP 日志。
+- **找 `loom`**：默认用 `loom-mcp` 所在目录里的 `loom.exe`，`--loom <PATH>` 可以覆盖。
+- **工具**：每个 serve 方法对应一个 MCP 工具，名字和方法相同。
+  - `describe`、`load_scene`、`reset`、`input`、`step`、`state`、`screenshot`、`record`。
+  - **没有 `quit`**：子进程的生命周期由适配程序管理。
+  - 工具的参数和 serve 方法的 params 一一对应；参数的 JSON Schema 由 rmcp 按参数结构体生成。
+- **结果**：
+  - 文本内容是 serve 回复里 `result` 的**原文**，从回复行里截出来，不经过 `Value` 重新序列化，数值保持逐位。
+  - `screenshot` 另加一个 image 内容：读出刚写的 PNG，base64 编码，`image/png`。它的 `path` 可以省略，省略时存到 `out/mcp/shot-<序号>.png`，序号在每次启动时从 1 开始。
+- **错误**：serve 回复的错误变成 MCP 工具错误（`isError: true`），文本是 `code` 加 `message`。子进程意外退出时，这次调用报错并说明退出码；下一次调用自动启动一个新会话，结果里注明「新会话，tick 从 0 开始」。
+- **并发**：同一时间只转发一个请求。MCP 客户端并发调用时，排队处理。
+
+**`.mcp.json` 和 Windows 的文件锁**：Windows 不允许覆盖正在运行的 exe。如果 MCP 直接运行 `target/debug/` 里的 `loom.exe`，只要有会话开着 MCP，实现者就编译不了。所以：
+
+- `.mcp.json` 运行 `pwsh -NoProfile -File scripts/mcp.ps1`。
+- 脚本做这几件事：
+  1. 切到仓库根目录；
+  2. `cargo build -q -p loom_engine -p loom_mcp`，编译输出进 stderr；
+  3. 把 `loom.exe` 和 `loom-mcp.exe` 复制到 `target/mcp-run/<时间戳>-<pid>/`；
+  4. 从那里运行 `loom-mcp`，stdin 和 stdout 直接交给它；
+  5. 顺手删掉 `target/mcp-run/` 下没在用的旧目录，删不掉的（正在运行）跳过。
+- 所以每次启动都用最新代码，而且不会锁住 `target/debug/`。
+- 工具里的相对路径（截图、场景、录制）都相对**仓库根目录**。
