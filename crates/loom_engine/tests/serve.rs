@@ -496,13 +496,31 @@ fn held_rogue_action_steps_once_and_replays_from_its_recording() {
     // Held for 5 ticks: one step.
     assert_eq!(
         result(&replies[3])["game"],
-        json!({"turn": 1, "player": {"cell": [4, 2]}})
+        json!({
+            "turn": 1,
+            "player": {"cell": [4, 2], "hp": 10},
+            // 67 energy each: not enough to act yet.
+            "zombies": [
+                {"name": "zombie", "cell": [7, 2], "hp": 3, "energy": 67},
+                {"name": "zombie_2", "cell": [12, 7], "hp": 3, "energy": 67}
+            ],
+            "messages": []
+        })
     );
     // Released for a tick, pressed again: a second step.
     assert_eq!(result(&replies[7])["tick"], 7);
     assert_eq!(
         result(&replies[8])["game"],
-        json!({"turn": 2, "player": {"cell": [5, 2]}})
+        json!({
+            "turn": 2,
+            "player": {"cell": [5, 2], "hp": 10},
+            // 134 energy: one step each towards the player, 34 left.
+            "zombies": [
+                {"name": "zombie", "cell": [6, 2], "hp": 3, "energy": 34},
+                {"name": "zombie_2", "cell": [11, 6], "hp": 3, "energy": 34}
+            ],
+            "messages": []
+        })
     );
     assert_eq!(
         *result(&replies[9]),

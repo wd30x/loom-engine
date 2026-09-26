@@ -82,7 +82,8 @@ fn sprite_draws(
         let node = scene.node(id);
         let world = scene.world_matrix(id);
         if let Some(sprite) = &node.sprite {
-            let (texture, rect) = sheets.draw(renderer, &sprite.sheet, &sprite.tag)?;
+            // The current tag: the game may have switched it (e.g. to a corpse).
+            let (texture, rect) = sheets.draw(renderer, &sprite.sheet, sprite.tag())?;
             sprites.push(SpriteDraw {
                 texture,
                 model: world,

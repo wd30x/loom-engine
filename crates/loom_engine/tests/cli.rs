@@ -1304,31 +1304,48 @@ fn headless_run_accepts_a_scene_with_a_valid_sprite() {
     assert_eq!(r["adapter"], Value::Null);
 }
 
-/// The E4.3 replay script: each key is released the tick after it is
-/// pressed. From (3, 2): east to (4, 2), south-east to (5, 3), wait, north
-/// to (5, 2) and (5, 1), then north into the wall at (5, 0).
-const ROGUE_SCRIPT: [&str; 12] = [
-    r#"(tick: 1, action: "move_e", down: true)"#,
-    r#"(tick: 2, action: "move_e", down: false)"#,
-    r#"(tick: 3, action: "move_se", down: true)"#,
-    r#"(tick: 4, action: "move_se", down: false)"#,
+/// The planner's prototype run (E4.4): 13 key presses, the k-th pressed on
+/// tick 2k - 1 and released on tick 2k: wait x5, move_e x4, move_n, wait x3.
+/// `zombie` walks up to the player, bites once and is killed in three hits;
+/// the player steps onto its corpse and north, and `zombie_2` comes round
+/// the L-shaped wall to stand next to the player.
+const ROGUE_SCRIPT: [&str; 26] = [
+    r#"(tick: 1, action: "wait", down: true)"#,
+    r#"(tick: 2, action: "wait", down: false)"#,
+    r#"(tick: 3, action: "wait", down: true)"#,
+    r#"(tick: 4, action: "wait", down: false)"#,
     r#"(tick: 5, action: "wait", down: true)"#,
     r#"(tick: 6, action: "wait", down: false)"#,
-    r#"(tick: 7, action: "move_n", down: true)"#,
-    r#"(tick: 8, action: "move_n", down: false)"#,
-    r#"(tick: 9, action: "move_n", down: true)"#,
-    r#"(tick: 10, action: "move_n", down: false)"#,
-    r#"(tick: 11, action: "move_n", down: true)"#,
-    r#"(tick: 12, action: "move_n", down: false)"#,
+    r#"(tick: 7, action: "wait", down: true)"#,
+    r#"(tick: 8, action: "wait", down: false)"#,
+    r#"(tick: 9, action: "wait", down: true)"#,
+    r#"(tick: 10, action: "wait", down: false)"#,
+    r#"(tick: 11, action: "move_e", down: true)"#,
+    r#"(tick: 12, action: "move_e", down: false)"#,
+    r#"(tick: 13, action: "move_e", down: true)"#,
+    r#"(tick: 14, action: "move_e", down: false)"#,
+    r#"(tick: 15, action: "move_e", down: true)"#,
+    r#"(tick: 16, action: "move_e", down: false)"#,
+    r#"(tick: 17, action: "move_e", down: true)"#,
+    r#"(tick: 18, action: "move_e", down: false)"#,
+    r#"(tick: 19, action: "move_n", down: true)"#,
+    r#"(tick: 20, action: "move_n", down: false)"#,
+    r#"(tick: 21, action: "wait", down: true)"#,
+    r#"(tick: 22, action: "wait", down: false)"#,
+    r#"(tick: 23, action: "wait", down: true)"#,
+    r#"(tick: 24, action: "wait", down: false)"#,
+    r#"(tick: 25, action: "wait", down: true)"#,
+    r#"(tick: 26, action: "wait", down: false)"#,
 ];
 
-/// State after [`ROGUE_SCRIPT`] and 14 ticks of `assets/scenes/rogue.ron`:
-/// five turns (four moves and a wait; the wall bump takes none), the
-/// player on cell (5, 1), so its node at (5, -1, 1).
+/// State after [`ROGUE_SCRIPT`] and 28 ticks of `assets/scenes/rogue.ron`,
+/// as the planner's independent prototype computed it (docs/PLAN.md, E4.4):
+/// 13 turns, the player on (4, 1) with 9 hp, `zombie` a corpse on (4, 2)
+/// drawn at z (0 + 0.5) / 2 = 0.25, `zombie_2` on (5, 1).
 const ROGUE_STATE: &str = concat!(
     "{\n",
-    "  \"tick\": 14,\n",
-    "  \"sim_time\": 0.23333333333333334,\n",
+    "  \"tick\": 28,\n",
+    "  \"sim_time\": 0.4666666666666667,\n",
     "  \"actions\": [],\n",
     "  \"axes\": {},\n",
     "  \"nodes\": {\n",
@@ -1370,9 +1387,45 @@ const ROGUE_STATE: &str = concat!(
     "    },\n",
     "    \"player\": {\n",
     "      \"position\": [\n",
-    "        5.0,\n",
+    "        4.0,\n",
     "        -1.0,\n",
     "        1.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"zombie\": {\n",
+    "      \"position\": [\n",
+    "        4.0,\n",
+    "        -2.0,\n",
+    "        0.25\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"zombie_2\": {\n",
+    "      \"position\": [\n",
+    "        5.0,\n",
+    "        -1.0,\n",
+    "        0.5\n",
     "      ],\n",
     "      \"rotation\": [\n",
     "        0.0,\n",
@@ -1388,20 +1441,59 @@ const ROGUE_STATE: &str = concat!(
     "    }\n",
     "  },\n",
     "  \"game\": {\n",
-    "    \"turn\": 5,\n",
+    "    \"turn\": 13,\n",
     "    \"player\": {\n",
     "      \"cell\": [\n",
-    "        5,\n",
+    "        4,\n",
     "        1\n",
-    "      ]\n",
-    "    }\n",
+    "      ],\n",
+    "      \"hp\": 9\n",
+    "    },\n",
+    "    \"zombies\": [\n",
+    "      {\n",
+    "        \"name\": \"zombie\",\n",
+    "        \"cell\": [\n",
+    "          4,\n",
+    "          2\n",
+    "        ],\n",
+    "        \"hp\": 0,\n",
+    "        \"energy\": 69\n",
+    "      },\n",
+    "      {\n",
+    "        \"name\": \"zombie_2\",\n",
+    "        \"cell\": [\n",
+    "          5,\n",
+    "          1\n",
+    "        ],\n",
+    "        \"hp\": 3,\n",
+    "        \"energy\": 71\n",
+    "      }\n",
+    "    ],\n",
+    "    \"messages\": [\n",
+    "      {\n",
+    "        \"turn\": 6,\n",
+    "        \"text\": \"You hit zombie.\"\n",
+    "      },\n",
+    "      {\n",
+    "        \"turn\": 6,\n",
+    "        \"text\": \"zombie bites you.\"\n",
+    "      },\n",
+    "      {\n",
+    "        \"turn\": 7,\n",
+    "        \"text\": \"You hit zombie.\"\n",
+    "      },\n",
+    "      {\n",
+    "        \"turn\": 8,\n",
+    "        \"text\": \"You kill zombie.\"\n",
+    "      }\n",
+    "    ]\n",
     "  }\n",
     "}\n",
 );
 
 #[test]
-fn rogue_replay_moves_turn_by_turn_to_the_expected_state() {
-    let dir = test_dir("rogue_replay_moves_turn_by_turn_to_the_expected_state");
+fn rogue_replay_fights_a_zombie_to_the_prototype_state() {
+    let dir = test_dir("rogue_replay_fights_a_zombie_to_the_prototype_state");
     let script = write_script(&dir, "rogue.ron", &ROGUE_SCRIPT);
     let state = dir.join("state.json");
     let out = run_loom_in(
@@ -1410,7 +1502,7 @@ fn rogue_replay_moves_turn_by_turn_to_the_expected_state() {
             "run",
             "--headless",
             "--frames",
-            "14",
+            "28",
             "--scene",
             "assets/scenes/rogue.ron",
             "--input",
@@ -1423,9 +1515,39 @@ fn rogue_replay_moves_turn_by_turn_to_the_expected_state() {
     assert_eq!(out.code, 0, "{r}");
     assert_eq!(r["game"], "rogue");
     assert_eq!(r["scene"], "assets/scenes/rogue.ron");
-    assert_eq!(r["input"]["applied"], 12);
+    assert_eq!(r["input"]["applied"], 26);
     let dump = fs::read_to_string(&state).expect("the state dump was written");
     assert_eq!(dump, ROGUE_STATE);
+}
+
+#[test]
+fn headless_run_checks_sprite_alternates_against_the_sheet() {
+    let dir = test_dir("headless_run_checks_sprite_alternates_against_the_sheet");
+    let src = scene_with_sprite("player").replacen(
+        "tag: \"player\")",
+        "tag: \"player\", alternates: [\"corpes\"])",
+        1,
+    );
+    assert!(src.contains("corpes"));
+    let scene = write_file(&dir, "badge.scene.ron", &src);
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "1",
+        "--scene",
+        path_str(&scene),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 1, "{r}");
+    assert_eq!(
+        r["error"],
+        format!(
+            "invalid scene {}: node badge: sprite: sheet {} has no tag \"corpes\"",
+            path_str(&scene),
+            tiles_sheet()
+        )
+    );
 }
 
 #[test]

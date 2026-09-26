@@ -4,8 +4,8 @@
 
 | 文件 | 说明 |
 |---|---|
-| `tiles.aseprite` | 源文件：16×16，indexed，4 帧，每帧一个 tag |
-| `tiles.png` | 导出的 sprite sheet，64×16，横排，索引色 PNG（走 LFS） |
+| `tiles.aseprite` | 源文件：16×16，indexed，5 帧，每帧一个 tag |
+| `tiles.png` | 导出的 sprite sheet，80×16，横排，索引色 PNG（走 LFS） |
 | `tiles.json` | 导出的数据，json-array 格式，带 `frameTags` |
 
 `.ase-mcp/` 是 aseprite 的 MCP（`ase-mcp`）存放 undo 快照和临时文件的私有目录，不属于美术资源。
@@ -20,6 +20,7 @@
 | 2 | `wall` | 1 | 墙顶：浅灰的砖，错缝砌法。每块砖 8×4（含灰缝），第一行是高光，灰缝更暗；另外有几个磨损的暗点。图案周期是 16，所以铺开没有接缝 | 不透明 |
 | 3 | `player` | 2 | 玩家：正面偏俯视的小人。深棕头发、肤色的脸、蓝外套（中间一条浅蓝的拉链）、棕色裤子，外面一圈深色轮廓；左右对称，比较紧凑 | 透明 |
 | 4 | `zombie` | 3 | 僵尸：灰绿的皮肤、红眼睛、张着嘴，头往右偏一格；左臂向左平伸到瓦片边缘，右手下垂；破烂的灰褐衣服上有血迹，两条腿一粗一细。轮廓不对称，和玩家一眼就能分开 | 透明 |
+| 5 | `corpse` | 4 | 尸体（E4.4）：`zombie` 那一帧逆时针转 90 度，也就是横躺着，头在左边、脚在右边，原来平伸的左臂现在垂向下方；补了几处转过来之后断开的轮廓。手臂右边有一小滩深红的血（索引 15）。和站着的僵尸同样的配色，一眼能认出是它，但方向完全不同 | 透明 |
 
 ## 调色板
 
@@ -54,7 +55,8 @@
 像素数据是写死在 Lua 里的字符串，一行一个字符串，一个十六进制字符对应一个调色板索引，`.` 表示索引 0，所以重建的结果完全确定。其中：
 - 地面的数据是用固定种子（4101）的随机数生成的：每个像素 12% 概率是暗点、10% 概率是亮点；然后按从左到右、从上到下的顺序，去掉和左边或上边同色的点（跨边缘也算）；
 - 墙按砖的规则生成；
-- 两个人物是手画的字符图。
+- 两个人物是手画的字符图；
+- 尸体是僵尸的字符图逆时针转 90 度，再手工补轮廓、加血迹。
 
 要改图，直接改下面的字符串，重跑这两步，再导出。
 
@@ -133,11 +135,29 @@ local tiles = {
     ".....11...11....",
     "................",
   } },
+  { name = "corpse", rows = {
+    "................",
+    "........1111....",
+    "........1cc1....",
+    "..1111.1edc111..",
+    ".1ccdd1eee1eec1.",
+    ".1cdfdceeeee111.",
+    ".1cdd1ceeefe1...",
+    ".1cdd1ceeee111..",
+    ".1cdfdcefeecec1.",
+    ".1cddd1eeeeeec1.",
+    "..1111.1ee11111.",
+    ".......1c1.ff...",
+    ".......1d1ffff..",
+    ".......1d1fffff.",
+    ".......1d1.fff..",
+    "........1.......",
+  } },
 }
 
 local spr = app.sprite
 local layer = spr.layers[1]
--- Frames 2..4 start empty; every frame gets a sprite-sized cel at (0, 0).
+-- Frames after the first start empty; every frame gets a sprite-sized cel at (0, 0).
 while #spr.frames < #tiles do spr:newEmptyFrame() end
 for i, tile in ipairs(tiles) do
   local cel = layer:cel(i) or spr:newCel(layer, i)
@@ -168,8 +188,8 @@ sheet_type: "horizontal"
 list_tags: true
 ```
 
-导出结果是确定的：同一个源文件导出两次，PNG 和 JSON 逐字节相同。导出后检查 `tiles.json` 应该满足：
-- `frames` 有 4 项，都是 16×16，`trimmed` 都是 false；
-- `meta.frameTags` 依次是 `floor`、`wall`、`player`、`zombie`，`from == to`，分别是 0 到 3；
+导出结果是确定的：同一个源文件导出两次，PNG 和 JSON 逐字节相同。aseprite 写出的 JSON 用 CRLF 换行，仓库按 `.gitattributes` 规范成 LF，引擎读的时候不依赖换行符。导出后检查 `tiles.json` 应该满足：
+- `frames` 有 5 项，都是 16×16，`trimmed` 都是 false；
+- `meta.frameTags` 依次是 `floor`、`wall`、`player`、`zombie`、`corpse`，`from == to`，分别是 0 到 4；
 - `meta.format` 是 `I8`；
-- `meta.size` 是 64×16。
+- `meta.size` 是 80×16。

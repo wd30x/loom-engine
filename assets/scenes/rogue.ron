@@ -8,6 +8,10 @@
 // of the screen; only the top 16 pixels of the last row show.
 // Cells: the map is at the origin, so cell (c, r) is centered at (c, -r); the player at
 // (3, -2, 1) stands on column 3, row 2, and each step moves it by one whole unit.
+// Layers (z): map 0, corpses 0.25, zombies 0.5, player 1. A zombie that dies moves to
+// (map.z + its z) / 2 = 0.25, so living zombies and the player are drawn over corpses.
+// Numbers are props (whole numbers from 1 to 1000): hp and attack for the player, plus
+// speed for zombies (energy gained per turn; 100 buys one action, so 67 is 2 steps in 3 turns).
 (
     version: 1,
     game: "rogue",
@@ -35,8 +39,17 @@
                 "####################",
             ],
         )),
-        // z = 1: in front of the map
+        // z = 1: in front of everything
         (name: "player", position: (3.0, -2.0, 1.0),
-            sprite: (sheet: "assets/art/tiles.json", tag: "player")),
+            sprite: (sheet: "assets/art/tiles.json", tag: "player", alternates: ["corpse"]),
+            props: [("hp", 10), ("attack", 1)]),
+        // Zombies: root nodes named zombie or zombie_*, acting in this order
+        (name: "zombie", position: (7.0, -2.0, 0.5),
+            sprite: (sheet: "assets/art/tiles.json", tag: "zombie", alternates: ["corpse"]),
+            props: [("hp", 3), ("attack", 1), ("speed", 67)]),
+        // inside the corner of the L-shaped wall
+        (name: "zombie_2", position: (12.0, -7.0, 0.5),
+            sprite: (sheet: "assets/art/tiles.json", tag: "zombie", alternates: ["corpse"]),
+            props: [("hp", 3), ("attack", 1), ("speed", 67)]),
     ],
 )

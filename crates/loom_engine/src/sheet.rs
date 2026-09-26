@@ -153,7 +153,13 @@ impl Sheets {
             let node = scene.node(id);
             let (component, sheet, tags): (&str, &str, Vec<&str>) =
                 match (&node.sprite, &node.tilemap) {
-                    (Some(s), _) => ("sprite", &s.sheet, vec![s.tag.as_str()]),
+                    // Every declared tag, alternates included: the game may
+                    // switch to any of them while it runs.
+                    (Some(s), _) => (
+                        "sprite",
+                        &s.sheet,
+                        s.tags().iter().map(String::as_str).collect(),
+                    ),
                     (None, Some(t)) => (
                         "tilemap",
                         &t.sheet,
@@ -362,10 +368,17 @@ mod tests {
         let names: Vec<(&str, usize)> = sheet.tags.iter().map(|(n, f)| (n.as_str(), *f)).collect();
         assert_eq!(
             names,
-            [("floor", 0), ("wall", 1), ("player", 2), ("zombie", 3)]
+            [
+                ("floor", 0),
+                ("wall", 1),
+                ("player", 2),
+                ("zombie", 3),
+                ("corpse", 4)
+            ]
         );
-        assert_eq!((sheet.width, sheet.height), (64, 16));
-        assert_eq!(sheet.rgba.len(), 64 * 16 * 4);
+        assert_eq!((sheet.width, sheet.height), (80, 16));
+        assert_eq!(sheet.rgba.len(), 80 * 16 * 4);
+        assert_eq!(sheet.rect("corpse"), Some([64, 0, 16, 16]));
         let alpha = |x: u32, y: u32| sheet.rgba[((y * sheet.width + x) * 4 + 3) as usize];
         let [fx, fy, ..] = sheet.rect("floor").expect("floor tag");
         assert_eq!(alpha(fx, fy), 255, "floor's top-left pixel is opaque");

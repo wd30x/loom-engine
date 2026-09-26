@@ -38,6 +38,10 @@ pub(crate) struct NodeDesc {
     pub collider: Option<ColliderKind>,
     pub sprite: Option<SpriteDesc>,
     pub tilemap: Option<TilemapDesc>,
+    /// Numbers for the game to interpret, in file order. A list, not a map:
+    /// ron silently keeps the last of two duplicate map keys.
+    #[serde(default)]
+    pub props: Vec<(String, f64)>,
     #[serde(default)]
     pub children: Vec<NodeDesc>,
 }
@@ -90,6 +94,9 @@ pub(crate) struct SpriteDesc {
     /// Path of an Aseprite json-array sprite sheet.
     pub sheet: String,
     pub tag: String,
+    /// Other tags the game may switch the sprite to while it runs.
+    #[serde(default)]
+    pub alternates: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

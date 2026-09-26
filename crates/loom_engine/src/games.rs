@@ -20,7 +20,7 @@ pub(crate) enum AnyGame {
 
 /// The state dump's `game`: the inner game's state, unwrapped, so a souls
 /// dump is byte for byte what it was before there were two games.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum AnyGameState {
     Souls(souls::GameState),

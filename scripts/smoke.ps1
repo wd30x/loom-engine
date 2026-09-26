@@ -447,27 +447,32 @@ Test-Check 'H8' 'view renders the tile preview pixel-exact' {
     Assert-TileCell "$out/h8_a.png" 192 128 (Get-TileFrame 'player') (Get-TileFrame 'floor') 'player cell (row 2, column 3)'
 }
 
-Test-Check 'H9' 'rogue run moves the player sprite' {
-    # The CLI test's script (rogue_replay_moves_turn_by_turn_to_the_expected_state):
-    # from (3, 2) east, south-east, wait, north twice, north into the wall.
+Test-Check 'H9' 'rogue run moves, fights and leaves a corpse' {
+    # The CLI test's script (rogue_replay_fights_a_zombie_to_the_prototype_state): the k-th of
+    # 13 presses on tick 2k-1, released on 2k: wait x5, move_e x4, move_n, wait x3.
+    $keys = @('wait') * 5 + @('move_e') * 4 + @('move_n') + @('wait') * 3
     $events = @(
-        foreach ($e in @(@(1, 'move_e'), @(3, 'move_se'), @(5, 'wait'), @(7, 'move_n'), @(9, 'move_n'), @(11, 'move_n'))) {
-            "(tick: $($e[0]), action: `"$($e[1])`", down: true)"
-            "(tick: $($e[0] + 1), action: `"$($e[1])`", down: false)"
+        for ($k = 1; $k -le $keys.Count; $k++) {
+            "(tick: $(2 * $k - 1), action: `"$($keys[$k - 1])`", down: true)"
+            "(tick: $(2 * $k), action: `"$($keys[$k - 1])`", down: false)"
         }
     ) -join ', '
     $script = "$out/h9_script.ron"
     [IO.File]::WriteAllText((Join-Path $root $script), "(version: 1, tick_hz: 60, events: [$events])`n")
-    $r = Invoke-Loom @('run', '--headless', '--frames', '14', '--scene', 'assets/scenes/rogue.ron',
+    $r = Invoke-Loom @('run', '--headless', '--frames', '28', '--scene', 'assets/scenes/rogue.ron',
         '--input', $script, '--screenshot', "$out/h9.png", '--dump-state', "$out/h9_state.json")
     Assert-ExitOk $r
     Assert-True ($r.Json.game -eq 'rogue') "game is $($r.Json.game)"
     $state = Get-Content -Raw "$out/h9_state.json" | ConvertFrom-Json
     $cell = $state.game.player.cell -join ','
-    Assert-True ($cell -eq '5,1' -and $state.game.turn -eq 5) "state has cell $cell, turn $($state.game.turn)"
+    Assert-True ($cell -eq '4,1' -and $state.game.turn -eq 13) "state has cell $cell, turn $($state.game.turn)"
     $script:detail = "sha256 $((Get-FileHash "$out/h9.png").Hash)"
-    Assert-TileCell "$out/h9.png" 320 64 (Get-TileFrame 'player') (Get-TileFrame 'floor') 'player cell (column 5, row 1)'
-    Assert-TileCell "$out/h9.png" 192 128 (Get-TileFrame 'floor') $null 'start cell (column 3, row 2)'
+    $floor = Get-TileFrame 'floor'
+    Assert-TileCell "$out/h9.png" 256 64 (Get-TileFrame 'player') $floor 'player cell (column 4, row 1)'
+    # The player stood on the corpse but has left: only the corpse over floor.
+    Assert-TileCell "$out/h9.png" 256 128 (Get-TileFrame 'corpse') $floor 'corpse cell (column 4, row 2)'
+    Assert-TileCell "$out/h9.png" 320 64 (Get-TileFrame 'zombie') $floor 'zombie_2 cell (column 5, row 1)'
+    Assert-TileCell "$out/h9.png" 192 128 $floor $null 'start cell (column 3, row 2)'
 }
 
 # ---------------------------------------------------------------- W: window

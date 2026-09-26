@@ -863,6 +863,7 @@ E4.3 有地图、玩家、八方向移动、墙和原地等待；E4.4 加上僵�
   - `"<名字>": prop <p> must be a whole number from 1 to 1000, got v`
   - `"<名字>": unknown prop "<p>" (known: hp, attack)` 或 `(known: hp, attack, speed)`
   - 检查顺序：先 `map`，再 `player`，再按先序检查每个僵尸；同一个角色依次查 sprite、只平移、格子、墙、重叠、z、corpse、props。
+  - props 内部：先按 `hp`、`attack`、`speed` 的顺序逐个查缺失和范围，最后查不认识的名字。所以把 `hp` 拼成 `hpp` 报的是 `prop hp is missing`，两条都能让人找到拼写错误，不再调整（E4.4 审查决定）。
   - E4.3 的 `the player at …`、`the player starts on a wall …` 两条，在 E4.4 统一改成带名字的写法（`"player" at …`）。
 
 ### 键位（`games/rogue/src/bindings.ron`）
@@ -899,7 +900,7 @@ if action 是移动 (dc, dr):
         return                                      // 撞墙不算一回合，僵尸也不动
     else:
         (c, r) = (c2, r2)；写回 player 节点的位置    // 尸体的格子可以走上去
-turn += 1                                           // 移动、攻击、等待都算一回合
+turn += 1                                           // 移动、攻击、等待都算一回合（实际在分支里先加，见下）
 for z in 活着的僵尸（先序）:                         // 本回合刚被打死的不再行动
     z.energy += z.speed
     while z.energy >= 100 and player.hp > 0:
@@ -924,6 +925,7 @@ for (dc, dr) in 上表八个方向的顺序:
 z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 ```
 
+- **消息的回合数**：伪代码为了好读，把 `turn += 1` 写在分支后面；实际上攻击的消息记的是**加过 1 之后**的回合数，和僵尸在同一回合产生的消息相同。也就是说，一旦确定这次按键算一回合（攻击、移动、等待），先 `turn += 1`，再做其他事（E4.4 实现者指出）。
 - **撞墙不消耗回合**，和 CDDA 一样。
 - **斜着走可以穿过两堵墙的夹角**，玩家和僵尸都可以，和 CDDA 一样。
 - **同一个 tick 刚按下好几个方向**时，只取上表顺序里的第一个，其余的丢掉（不排队）。

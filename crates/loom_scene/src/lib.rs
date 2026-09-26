@@ -85,6 +85,16 @@ pub enum Problem {
     TilemapUnknownChar { row: usize, column: usize, ch: char },
     #[error("tilemap legend lists {0:?} more than once")]
     TilemapDuplicateLegend(char),
+    #[error("sprite alternates list {0:?} more than once")]
+    DuplicateAlternate(String),
+    #[error("sprite alternate {0:?} is already the sprite's tag")]
+    AlternateIsTag(String),
+    #[error("prop name {0:?} is invalid: must match ^[a-z][a-z0-9_]*$")]
+    InvalidPropName(String),
+    #[error("prop {0:?} is given more than once")]
+    DuplicateProp(String),
+    #[error("prop {0:?} must be a finite number")]
+    PropNotFinite(String),
     #[error("light intensity must be at least 0")]
     NegativeIntensity,
     #[error("a second light; the scene already has one at {0:?}")]
@@ -173,13 +183,41 @@ pub enum Projection {
 }
 
 /// A 1x1 quad on the node's XY plane, centered at its origin, showing the
-/// first frame of `tag` (`docs/architecture.md` section 14).
+/// first frame of its current tag (`docs/architecture.md` section 14).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sprite {
     /// Path of an Aseprite json-array sprite sheet, relative to the working
-    /// directory. Whether it exists and has `tag` is checked by the engine.
+    /// directory. Whether it exists and has every tag is checked by the
+    /// engine.
     pub sheet: String,
-    pub tag: String,
+    /// Every tag the scene declares: `tag`, then `alternates` in file
+    /// order. Non-empty and unique.
+    tags: Vec<String>,
+    /// Index into `tags` of the tag shown now; only
+    /// [`Scene::set_sprite_tag`] changes it.
+    current: usize,
+}
+
+impl Sprite {
+    /// The tag shown now: the scene's `tag` until the game switches it.
+    pub fn tag(&self) -> &str {
+        &self.tags[self.current]
+    }
+
+    /// Every tag the sprite may show: the scene's `tag`, then its
+    /// `alternates`.
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+}
+
+/// Why [`Scene::set_sprite_tag`] refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SpriteTagError {
+    #[error("node {0:?} has no sprite")]
+    NoSprite(String),
+    #[error("node {path:?}: the scene declares no sprite tag {tag:?} (neither tag nor alternates)")]
+    Undeclared { path: String, tag: String },
 }
 
 /// A grid of 1x1 cells on the node's XY plane: row `r`, column `c` is
@@ -264,6 +302,20 @@ pub struct Node {
     pub collider: Option<Collider>,
     pub sprite: Option<Sprite>,
     pub tilemap: Option<Tilemap>,
+    /// Game-defined numbers, in file order; names are unique.
+    props: Vec<(String, f64)>,
+}
+
+impl Node {
+    /// The prop called `name`, if the node has it.
+    pub fn prop(&self, name: &str) -> Option<f64> {
+        self.props.iter().find(|(n, _)| n == name).map(|&(_, v)| v)
+    }
+
+    /// Every prop, in file order.
+    pub fn props(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.props.iter().map(|(n, v)| (n.as_str(), *v))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -408,6 +460,26 @@ impl Scene {
 
     pub fn transform_mut(&mut self, id: NodeId) -> &mut Transform {
         &mut self.nodes[id.0].transform
+    }
+
+    /// Switches the sprite of `id` to `tag`, which must be one the scene
+    /// declares for it (its `tag` or one of its `alternates`), so the
+    /// renderer only ever meets tags checked at load time.
+    pub fn set_sprite_tag(&mut self, id: NodeId, tag: &str) -> Result<(), SpriteTagError> {
+        let path = || self.path(id);
+        let Some(sprite) = &self.nodes[id.0].sprite else {
+            return Err(SpriteTagError::NoSprite(path()));
+        };
+        let Some(index) = sprite.tags.iter().position(|t| t == tag) else {
+            return Err(SpriteTagError::Undeclared {
+                path: path(),
+                tag: tag.to_owned(),
+            });
+        };
+        if let Some(sprite) = &mut self.nodes[id.0].sprite {
+            sprite.current = index;
+        }
+        Ok(())
     }
 
     /// `parent world matrix * local matrix`, computed along the parent chain.
@@ -653,6 +725,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     }
     let sprite = desc.sprite.as_ref().map(sprite).transpose()?;
     let tilemap = desc.tilemap.as_ref().map(tilemap).transpose()?;
+    let props = props(&desc.props)?;
     let collider = match desc.collider {
         Some(ColliderKind::Box) => {
             let rotates_off_y = desc.rotation.is_some_and(|(x, _, z)| x != 0.0 || z != 0.0);
@@ -686,6 +759,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         collider,
         sprite,
         tilemap,
+        props,
     })
 }
 
@@ -725,10 +799,38 @@ fn camera(c: &CameraDesc) -> Result<Camera, Problem> {
 fn sprite(s: &SpriteDesc) -> Result<Sprite, Problem> {
     not_empty(&s.sheet, "sprite sheet")?;
     not_empty(&s.tag, "sprite tag")?;
+    let mut tags = vec![s.tag.clone()];
+    for alternate in &s.alternates {
+        not_empty(alternate, "sprite alternate")?;
+        if *alternate == s.tag {
+            return Err(Problem::AlternateIsTag(alternate.clone()));
+        }
+        if tags.contains(alternate) {
+            return Err(Problem::DuplicateAlternate(alternate.clone()));
+        }
+        tags.push(alternate.clone());
+    }
     Ok(Sprite {
         sheet: s.sheet.clone(),
-        tag: s.tag.clone(),
+        tags,
+        current: 0,
     })
+}
+
+fn props(props: &[(String, f64)]) -> Result<Vec<(String, f64)>, Problem> {
+    let mut seen = BTreeSet::new();
+    for (name, value) in props {
+        if !is_valid_name(name) {
+            return Err(Problem::InvalidPropName(name.clone()));
+        }
+        if !seen.insert(name.as_str()) {
+            return Err(Problem::DuplicateProp(name.clone()));
+        }
+        if !value.is_finite() {
+            return Err(Problem::PropNotFinite(name.clone()));
+        }
+    }
+    Ok(props.to_vec())
 }
 
 fn tilemap(t: &TilemapDesc) -> Result<Tilemap, Problem> {

@@ -804,13 +804,10 @@ fn sprites_and_tilemaps_parse_and_are_listed_in_pre_order() {
     let map = scene.find("map").unwrap();
     let hero = scene.find("units/hero").unwrap();
     assert_eq!(scene.sprite_nodes(), [map, hero]);
-    assert_eq!(
-        scene.node(hero).sprite,
-        Some(Sprite {
-            sheet: "art/tiles.json".to_owned(),
-            tag: "player".to_owned()
-        })
-    );
+    let sprite = scene.node(hero).sprite.as_ref().unwrap();
+    assert_eq!(sprite.sheet, "art/tiles.json");
+    assert_eq!(sprite.tag(), "player");
+    assert_eq!(sprite.tags(), ["player"]);
     let tilemap = scene.node(map).tilemap.as_ref().unwrap();
     assert_eq!(
         tilemap.legend,
@@ -915,4 +912,114 @@ fn empty_game_name_is_rejected() {
     let err = Scene::parse(&src).unwrap_err();
     assert_eq!(err.to_string(), "game must not be empty");
     assert!(matches!(err, SceneError::Game(Problem::EmptyField("game"))));
+}
+
+/// A sprite node `z` with `alternates` (RON list items) and `props`.
+fn actor(alternates: &str, props: &str) -> String {
+    format!(
+        r#"(name: "z", sprite: (sheet: "s.json", tag: "zombie", alternates: [{alternates}]), props: [{props}])"#
+    )
+}
+
+#[test]
+fn props_parse_in_file_order_and_default_to_none() {
+    let scene = Scene::parse(&scene_with(&actor("", r#"("hp", 3), ("speed", 67.5)"#))).unwrap();
+    let z = scene.node(scene.find("z").unwrap());
+    assert_eq!(z.prop("hp"), Some(3.0));
+    assert_eq!(z.prop("speed"), Some(67.5));
+    assert_eq!(z.prop("attack"), None);
+    let all: Vec<(&str, f64)> = z.props().collect();
+    assert_eq!(all, [("hp", 3.0), ("speed", 67.5)]);
+    let cam = scene.node(scene.find("cam").unwrap());
+    assert_eq!(cam.props().count(), 0);
+}
+
+#[test]
+fn prop_names_must_be_lowercase_identifiers() {
+    for name in ["HP", "1hp", "", "hit-points", "_hp"] {
+        let p = node_problem(&actor("", &format!(r#"("{name}", 1)"#)), "z");
+        assert_eq!(p, Problem::InvalidPropName(name.to_owned()), "{name:?}");
+    }
+}
+
+#[test]
+fn prop_given_twice_is_rejected() {
+    let p = node_problem(&actor("", r#"("hp", 1), ("hp", 2)"#), "z");
+    assert_eq!(p, Problem::DuplicateProp("hp".to_owned()));
+}
+
+#[test]
+fn prop_values_must_be_finite() {
+    for value in ["inf", "-inf", "NaN"] {
+        let p = node_problem(&actor("", &format!(r#"("hp", {value})"#)), "z");
+        assert_eq!(p, Problem::PropNotFinite("hp".to_owned()), "{value}");
+    }
+}
+
+#[test]
+fn sprite_alternates_parse_after_the_tag_and_default_to_none() {
+    let scene = Scene::parse(&scene_with(&actor(r#""corpse", "ghost""#, ""))).unwrap();
+    let sprite = scene
+        .node(scene.find("z").unwrap())
+        .sprite
+        .as_ref()
+        .unwrap();
+    assert_eq!(sprite.tag(), "zombie");
+    assert_eq!(sprite.tags(), ["zombie", "corpse", "ghost"]);
+    let plain = Scene::parse(&scene_with(SPRITE)).unwrap();
+    let hero = plain.node(plain.find("hero").unwrap());
+    assert_eq!(hero.sprite.as_ref().unwrap().tags(), ["player"]);
+}
+
+#[test]
+fn empty_sprite_alternate_is_rejected() {
+    let p = node_problem(&actor(r#""corpse", """#, ""), "z");
+    assert_eq!(p, Problem::EmptyField("sprite alternate"));
+}
+
+#[test]
+fn sprite_alternate_listed_twice_is_rejected() {
+    let p = node_problem(&actor(r#""corpse", "corpse""#, ""), "z");
+    assert_eq!(p, Problem::DuplicateAlternate("corpse".to_owned()));
+}
+
+#[test]
+fn sprite_alternate_equal_to_the_tag_is_rejected() {
+    let p = node_problem(&actor(r#""zombie""#, ""), "z");
+    assert_eq!(p, Problem::AlternateIsTag("zombie".to_owned()));
+}
+
+#[test]
+fn set_sprite_tag_switches_between_declared_tags() {
+    let mut scene = Scene::parse(&scene_with(&actor(r#""corpse""#, ""))).unwrap();
+    let z = scene.find("z").unwrap();
+    scene.set_sprite_tag(z, "corpse").unwrap();
+    assert_eq!(scene.node(z).sprite.as_ref().unwrap().tag(), "corpse");
+    scene.set_sprite_tag(z, "zombie").unwrap();
+    assert_eq!(scene.node(z).sprite.as_ref().unwrap().tag(), "zombie");
+}
+
+#[test]
+fn set_sprite_tag_rejects_an_undeclared_tag() {
+    let mut scene = Scene::parse(&scene_with(&actor(r#""corpse""#, ""))).unwrap();
+    let z = scene.find("z").unwrap();
+    let err = scene.set_sprite_tag(z, "player").unwrap_err();
+    assert_eq!(
+        err,
+        SpriteTagError::Undeclared {
+            path: "z".to_owned(),
+            tag: "player".to_owned()
+        }
+    );
+    assert_eq!(scene.node(z).sprite.as_ref().unwrap().tag(), "zombie");
+}
+
+#[test]
+fn set_sprite_tag_on_a_node_without_a_sprite_is_an_error() {
+    let mut scene = Scene::parse(&scene_with(r#"(name: "a")"#)).unwrap();
+    let a = scene.find("a").unwrap();
+    assert_eq!(
+        scene.set_sprite_tag(a, "corpse"),
+        Err(SpriteTagError::NoSprite("a".to_owned()))
+    );
 }
