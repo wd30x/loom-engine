@@ -39,4 +39,11 @@ mod tests {
         let game = Game::new(scene).unwrap();
         assert_eq!(game.clock().tick(), 0);
     }
+
+    #[test]
+    fn built_in_scene_colliders_are_the_pillars_then_the_wall() {
+        let scene = demo_scene();
+        let paths: Vec<_> = scene.colliders().iter().map(|&id| scene.path(id)).collect();
+        assert_eq!(paths, ["pillars/a", "pillars/b", "pillars/c", "wall"]);
+    }
 }

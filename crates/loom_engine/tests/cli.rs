@@ -184,6 +184,24 @@ const SCENARIO_A: &str = concat!(
     "        1.0,\n",
     "        1.0\n",
     "      ]\n",
+    "    },\n",
+    "    \"wall\": {\n",
+    "      \"position\": [\n",
+    "        -3.0,\n",
+    "        1.0,\n",
+    "        3.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.25881904,\n",
+    "        0.0,\n",
+    "        0.9659258\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        4.0,\n",
+    "        2.0,\n",
+    "        0.5\n",
+    "      ]\n",
     "    }\n",
     "  },\n",
     "  \"game\": {\n",
@@ -376,6 +394,24 @@ const SCENARIO_B: &str = concat!(
     "        1.0,\n",
     "        1.0,\n",
     "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"wall\": {\n",
+    "      \"position\": [\n",
+    "        -3.0,\n",
+    "        1.0,\n",
+    "        3.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.25881904,\n",
+    "        0.0,\n",
+    "        0.9659258\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        4.0,\n",
+    "        2.0,\n",
+    "        0.5\n",
     "      ]\n",
     "    }\n",
     "  },\n",
@@ -762,6 +798,22 @@ fn running_while_turning_the_camera_replays_to_the_expected_state() {
 }
 
 #[test]
+fn pillar_blocks_a_replayed_forward_run() {
+    let dump = replay_state(
+        "pillar_blocks_a_replayed_forward_run",
+        "150",
+        &[r#"(tick: 1, axis: "move_y", value: 1.0)"#],
+    );
+    assert_eq!(dump["tick"], 150);
+    for position in [
+        &dump["game"]["player"]["position"],
+        &dump["nodes"]["player"]["position"],
+    ] {
+        assert_f32_bits(position, [0.0, 0.0, -8.15]);
+    }
+}
+
+#[test]
 fn state_dump_camera_yaw_wraps_into_minus_pi_to_pi() {
     let dump = replay_state(
         "state_dump_camera_yaw_wraps_into_minus_pi_to_pi",
@@ -917,7 +969,7 @@ const MINIMAL_SCENE: &str = r#"(
     camera: "cam",
     ambient: (0.3, 0.3, 0.3),
     nodes: [
-        (name: "hero", mesh: Cube, character: (run_speed: 2.0, turn_speed: 360.0)),
+        (name: "hero", mesh: Capsule(radius: 0.3, height: 1.6), character: (run_speed: 2.0, turn_speed: 360.0)),
         (name: "cam", camera: (fov_y: 50.0, near: 0.1, far: 50.0),
             orbit_camera: (target: "hero", pivot_height: 1.0, distance: 3.0,
                 yaw: 0.0, pitch: -10.0, pitch_min: -60.0, pitch_max: 30.0)),
@@ -1031,7 +1083,10 @@ fn malformed_scene_reports_line_and_column() {
     let scene = write_file(
         &dir,
         "typo.scene.ron",
-        &MINIMAL_SCENE.replace("mesh: Cube", "mesh: Cube, colour: (1.0, 0.0, 0.0)"),
+        &MINIMAL_SCENE.replace(
+            "mesh: Capsule(radius: 0.3, height: 1.6)",
+            "mesh: Capsule(radius: 0.3, height: 1.6), colour: (1.0, 0.0, 0.0)",
+        ),
     );
     let out = run_loom(&[
         "run",

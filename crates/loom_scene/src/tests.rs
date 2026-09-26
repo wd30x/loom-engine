@@ -44,10 +44,13 @@ fn demo_scene_parses_into_the_character_scene_tree() {
             "pillars/a",
             "pillars/b",
             "pillars/c",
+            "wall",
             "sun",
             "main_cam"
         ]
     );
+    let colliders: Vec<_> = scene.colliders().iter().map(|&id| scene.path(id)).collect();
+    assert_eq!(colliders, ["pillars/a", "pillars/b", "pillars/c", "wall"]);
     assert_eq!(scene.camera(), scene.find("main_cam").unwrap());
     assert_eq!(scene.light(), scene.find("sun"));
     assert_eq!(scene.character(), scene.find("player"));
@@ -588,4 +591,104 @@ fn misspelled_character_or_orbit_camera_field_is_rejected() {
         let err = Scene::parse(&scene_with(&nodes)).unwrap_err();
         assert!(matches!(err, SceneError::Syntax(_)), "{nodes}: {err}");
     }
+}
+
+#[test]
+fn colliders_parse_and_are_listed_in_pre_order() {
+    let scene = Scene::parse(&scene_with(
+        "(name: \"z_box\", collider: Box), \
+         (name: \"arena\", position: (1.0, 0.0, 0.0), children: [\
+             (name: \"wall\", rotation: (0.0, 45.0, 0.0), scale: (4.0, 2.0, 0.5), collider: Box), \
+             (name: \"deco\", mesh: Cube)]), \
+         (name: \"a_box\", mesh: Cube, collider: Box)",
+    ))
+    .unwrap();
+    let paths: Vec<_> = scene.colliders().iter().map(|&id| scene.path(id)).collect();
+    assert_eq!(paths, ["z_box", "arena/wall", "a_box"]);
+    let wall = scene.node(scene.find("arena/wall").unwrap());
+    assert_eq!(wall.collider, Some(Collider::Box));
+    assert!(
+        scene
+            .node(scene.find("arena/deco").unwrap())
+            .collider
+            .is_none()
+    );
+}
+
+#[test]
+fn collider_rotated_off_the_y_axis_is_rejected() {
+    for rotation in ["rotation: (10.0, 0.0, 0.0)", "rotation: (0.0, 30.0, -5.0)"] {
+        let p = node_problem(
+            &format!("(name: \"arena\", children: [(name: \"wall\", {rotation}, collider: Box)])"),
+            "arena/wall",
+        );
+        assert_eq!(p, Problem::ColliderRotation, "{rotation}");
+    }
+}
+
+#[test]
+fn collider_with_look_at_is_rejected() {
+    let p = node_problem(
+        "(name: \"wall\", position: (1.0, 0.0, 0.0), look_at: (0.0, 0.0, 0.0), collider: Box)",
+        "wall",
+    );
+    assert_eq!(p, Problem::ColliderRotation);
+}
+
+#[test]
+fn collider_under_a_rotating_ancestor_is_rejected() {
+    let p = node_problem(
+        "(name: \"arena\", rotation: (0.0, 90.0, 0.0), children: [\
+             (name: \"group\", children: [(name: \"wall\", collider: Box)])])",
+        "arena/group/wall",
+    );
+    assert_eq!(p, Problem::ColliderAncestor("arena".to_owned()));
+    assert!(p.to_string().contains("\"arena\""), "{p}");
+}
+
+#[test]
+fn collider_under_a_scaling_ancestor_is_rejected() {
+    let p = node_problem(
+        "(name: \"arena\", children: [\
+             (name: \"big\", scale: (2.0, 1.0, 1.0), children: [(name: \"wall\", collider: Box)])])",
+        "arena/big/wall",
+    );
+    assert_eq!(p, Problem::ColliderAncestor("arena/big".to_owned()));
+}
+
+#[test]
+fn collider_under_an_ancestor_with_look_at_is_rejected() {
+    let p = node_problem(
+        "(name: \"aim\", position: (1.0, 0.0, 0.0), look_at: (0.0, 0.0, 0.0), \
+             children: [(name: \"wall\", collider: Box)])",
+        "aim/wall",
+    );
+    assert_eq!(p, Problem::ColliderAncestor("aim".to_owned()));
+}
+
+#[test]
+fn collider_and_character_on_one_node_are_rejected() {
+    let p = node_problem(
+        "(name: \"hero\", mesh: Capsule(radius: 0.35, height: 1.8), \
+             character: (run_speed: 4.0, turn_speed: 720.0), collider: Box)",
+        "hero",
+    );
+    assert_eq!(p, Problem::CharacterAndCollider);
+}
+
+#[test]
+fn collider_accepts_identity_ancestors_yaw_and_its_own_scale() {
+    let src = scene_with(
+        "(name: \"arena\", position: (5.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0), \
+             children: [(name: \"wall\", rotation: (0.0, 45.0, 0.0), scale: (3.0, 2.0, 0.25), collider: Box)])",
+    );
+    let scene = Scene::parse(&src).unwrap();
+    assert_eq!(scene.colliders(), [scene.find("arena/wall").unwrap()]);
+}
+
+#[test]
+fn misspelled_collider_kind_is_rejected() {
+    let err = Scene::parse(&scene_with("(name: \"wall\", collider: Boxx)")).unwrap_err();
+    assert!(matches!(err, SceneError::Syntax(_)), "{err}");
+    assert!(err.to_string().contains("Boxx"), "{err}");
 }

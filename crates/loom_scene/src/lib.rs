@@ -3,7 +3,7 @@
 //!
 //! A scene is a tree of named nodes. Each node has a local transform and may
 //! carry optional components (`mesh`, `camera`, `light`, `character`,
-//! `orbit_camera`). Nodes are stored in
+//! `orbit_camera`, `collider`). Nodes are stored in
 //! one array in pre-order (a parent before its children, children in file
 //! order) and addressed by [`NodeId`] (an index) or by path (`arena/pillar`).
 //! The tree is simulation state: its structure is fixed after parsing, only
@@ -17,7 +17,7 @@ use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use serde::Serialize;
 
 pub use file::MeshKind;
-use file::{NodeDesc, OrbitCameraDesc, SceneFile, Triple};
+use file::{ColliderKind, NodeDesc, OrbitCameraDesc, SceneFile, Triple};
 
 /// The only scene file version so far.
 const VERSION: u32 = 1;
@@ -88,6 +88,14 @@ pub enum Problem {
     OrbitPitchRange,
     #[error("orbit_camera pitch must be between pitch_min and pitch_max")]
     OrbitPitchOutOfRange,
+    #[error(
+        "collider may only rotate around Y: rotation x and z must be 0, and look_at is not allowed"
+    )]
+    ColliderRotation,
+    #[error("collider needs ancestors that only translate, but {0:?} rotates or scales")]
+    ColliderAncestor(String),
+    #[error("character and collider cannot be on the same node")]
+    CharacterAndCollider,
 }
 
 /// Index of a node in its [`Scene`].
@@ -162,6 +170,15 @@ pub struct OrbitCamera {
     pub pitch_max_degrees: f32,
 }
 
+/// A static collision shape (`docs/architecture.md` section 11, collision).
+/// Its size, rotation (around Y only) and position come from the node's
+/// transform; its ancestors only translate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Collider {
+    /// A unit cube like `MeshKind::Cube`, scaled by the node.
+    Box,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub name: String,
@@ -173,6 +190,7 @@ pub struct Node {
     pub light: Option<Light>,
     pub character: Option<Character>,
     pub orbit_camera: Option<OrbitCamera>,
+    pub collider: Option<Collider>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,6 +202,8 @@ pub struct Scene {
     light: Option<NodeId>,
     character: Option<NodeId>,
     orbit_camera: Option<NodeId>,
+    /// In pre-order.
+    colliders: Vec<NodeId>,
     ambient: Vec3,
 }
 
@@ -205,8 +225,9 @@ impl Scene {
             light: None,
             character: None,
             orbit_camera: None,
+            colliders: Vec::new(),
         };
-        let roots = builder.add_siblings(&file.nodes, None, "")?;
+        let roots = builder.add_siblings(&file.nodes, None, "", None)?;
         let mut scene = Self {
             nodes: builder.nodes,
             roots,
@@ -214,6 +235,7 @@ impl Scene {
             light: builder.light,
             character: builder.character,
             orbit_camera: None,
+            colliders: builder.colliders,
             ambient,
         };
         // The target is a path from a root, resolved once the whole tree
@@ -334,6 +356,11 @@ impl Scene {
         self.orbit_camera
     }
 
+    /// Every node with a [`Collider`], in pre-order.
+    pub fn colliders(&self) -> &[NodeId] {
+        &self.colliders
+    }
+
     /// Ambient light, linear RGB.
     pub fn ambient(&self) -> Vec3 {
         self.ambient
@@ -358,15 +385,19 @@ struct Builder<'a> {
     character: Option<NodeId>,
     /// Validated except for its target, which is resolved after the build.
     orbit_camera: Option<(NodeId, &'a OrbitCameraDesc)>,
+    colliders: Vec<NodeId>,
 }
 
 impl<'a> Builder<'a> {
     /// Adds `descs` (siblings) and their subtrees in pre-order.
+    /// `moving_ancestor` is the path of the first ancestor that does more
+    /// than translate, if any (colliders may not have one).
     fn add_siblings(
         &mut self,
         descs: &'a [NodeDesc],
         parent: Option<NodeId>,
         parent_path: &str,
+        moving_ancestor: Option<&str>,
     ) -> Result<Vec<NodeId>, SceneError> {
         let mut names = BTreeSet::new();
         let mut ids = Vec::with_capacity(descs.len());
@@ -388,6 +419,12 @@ impl<'a> Builder<'a> {
             }
             let id = NodeId(self.nodes.len());
             let node = node_from_desc(desc, parent).map_err(fail)?;
+            if node.collider.is_some() {
+                if let Some(ancestor) = moving_ancestor {
+                    return Err(fail(Problem::ColliderAncestor(ancestor.to_owned())));
+                }
+                self.colliders.push(id);
+            }
             if node.light.is_some() {
                 if let Some(first) = self.light {
                     return Err(fail(Problem::SecondLight(self.path_of(first))));
@@ -407,7 +444,12 @@ impl<'a> Builder<'a> {
                 self.orbit_camera = Some((id, orbit));
             }
             self.nodes.push(node);
-            let children = self.add_siblings(&desc.children, Some(id), &path)?;
+            let moving = match moving_ancestor {
+                Some(ancestor) => Some(ancestor),
+                None if !only_translates(desc) => Some(path.as_str()),
+                None => None,
+            };
+            let children = self.add_siblings(&desc.children, Some(id), &path, moving)?;
             self.nodes[id.0].children = children;
             ids.push(id);
         }
@@ -519,6 +561,19 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     if let Some(o) = &desc.orbit_camera {
         validate_orbit_camera(o, camera.is_some())?;
     }
+    let collider = match desc.collider {
+        Some(ColliderKind::Box) => {
+            let rotates_off_y = desc.rotation.is_some_and(|(x, _, z)| x != 0.0 || z != 0.0);
+            if rotates_off_y || desc.look_at.is_some() {
+                return Err(Problem::ColliderRotation);
+            }
+            if character.is_some() {
+                return Err(Problem::CharacterAndCollider);
+            }
+            Some(Collider::Box)
+        }
+        None => None,
+    };
     Ok(Node {
         name: desc.name.clone(),
         parent,
@@ -536,7 +591,16 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         light,
         character,
         orbit_camera: None,
+        collider,
     })
+}
+
+/// The node's own transform is at most a translation: no rotation (or all
+/// zero), no `look_at`, no scale (or all one).
+fn only_translates(desc: &NodeDesc) -> bool {
+    desc.rotation.is_none_or(|r| r == (0.0, 0.0, 0.0))
+        && desc.look_at.is_none()
+        && desc.scale.is_none_or(|s| s == (1.0, 1.0, 1.0))
 }
 
 /// Everything about an `orbit_camera` except its target.

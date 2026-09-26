@@ -33,8 +33,16 @@ pub(crate) struct NodeDesc {
     pub light: Option<LightDesc>,
     pub character: Option<CharacterDesc>,
     pub orbit_camera: Option<OrbitCameraDesc>,
+    pub collider: Option<ColliderKind>,
     #[serde(default)]
     pub children: Vec<NodeDesc>,
+}
+
+/// Static collision shapes, sized and placed by the node's transform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub(crate) enum ColliderKind {
+    /// Unit cube like `mesh: Cube`.
+    Box,
 }
 
 /// Mesh shapes. The first three are unit sized; size them with `scale`.
