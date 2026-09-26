@@ -2,7 +2,6 @@
 //!
 //! stdout carries exactly one JSON object per invocation; logs go to stderr.
 
-mod game;
 mod output;
 mod reload;
 mod report;

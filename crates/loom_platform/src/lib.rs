@@ -9,10 +9,10 @@ use std::time::Instant;
 use loom_core::input::Key;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, KeyEvent, StartCause, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, KeyEvent, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::WindowId;
+use winit::window::{CursorGrabMode, WindowId};
 
 /// Re-exported so callers can hold the window (e.g. to create a surface)
 /// without depending on winit themselves.
@@ -60,6 +60,16 @@ pub trait WindowApp {
     fn focus_lost(&mut self) -> AppControl {
         AppControl::Continue
     }
+    /// The window gained keyboard focus.
+    fn focus_gained(&mut self) -> AppControl {
+        AppControl::Continue
+    }
+    /// Raw mouse motion (not affected by pointer acceleration or the screen
+    /// edges); right and down are positive. Only reported while the window
+    /// has focus.
+    fn mouse_motion(&mut self, _dx: f64, _dy: f64) -> AppControl {
+        AppControl::Continue
+    }
     /// When the next frame is due, asked after every redraw. `None` (the
     /// default) redraws again right away, paced by the present's vsync.
     /// `Some(t)` sleeps until `t` first; use it when nothing is presented
@@ -88,6 +98,7 @@ pub fn run_window(config: WindowConfig, app: &mut impl WindowApp) -> Result<(), 
         config,
         app,
         window: None,
+        focused: false,
         error: None,
     };
     event_loop.run_app(&mut handler)?;
@@ -101,6 +112,8 @@ struct Handler<'a, A> {
     config: WindowConfig,
     app: &'a mut A,
     window: Option<Arc<Window>>,
+    /// The window has keyboard focus; mouse motion is only forwarded then.
+    focused: bool,
     error: Option<PlatformError>,
 }
 
@@ -171,7 +184,14 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
                 Some(key) => self.app.key(key, state == ElementState::Pressed),
                 None => AppControl::Continue,
             },
-            WindowEvent::Focused(false) => self.app.focus_lost(),
+            WindowEvent::Focused(false) => {
+                self.focused = false;
+                self.app.focus_lost()
+            }
+            WindowEvent::Focused(true) => {
+                self.focused = true;
+                self.app.focus_gained()
+            }
             WindowEvent::RedrawRequested => {
                 let control = self.app.redraw();
                 match self.app.wait_until() {
@@ -189,6 +209,35 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
         };
         self.apply(event_loop, control);
     }
+
+    fn device_event(&mut self, event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if !self.focused {
+            return;
+        }
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            let control = self.app.mouse_motion(dx, dy);
+            self.apply(event_loop, control);
+        }
+    }
+}
+
+/// Hides the pointer and keeps it in the window (`captured`), or gives it
+/// back. Tries [`CursorGrabMode::Locked`] first and falls back to
+/// [`CursorGrabMode::Confined`]. Failures are logged, not returned: the game
+/// still works with a free pointer.
+pub fn set_cursor_captured(window: &Window, captured: bool) {
+    if captured {
+        if let Err(locked) = window.set_cursor_grab(CursorGrabMode::Locked) {
+            if let Err(confined) = window.set_cursor_grab(CursorGrabMode::Confined) {
+                log::warn!("cannot capture the mouse (locked: {locked}; confined: {confined})");
+            } else {
+                log::debug!("mouse confined (locking is not supported: {locked})");
+            }
+        }
+    } else if let Err(e) = window.set_cursor_grab(CursorGrabMode::None) {
+        log::warn!("cannot release the mouse: {e}");
+    }
+    window.set_cursor_visible(!captured);
 }
 
 /// Translates a winit key code into a bindable [`Key`]. `Escape` (reserved

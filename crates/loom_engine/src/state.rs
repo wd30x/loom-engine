@@ -7,11 +7,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use glam::Vec3;
-use loom_core::input::{ActionSet, ActionState};
+use loom_core::input::{ActionMap, ActionSet, ActionState};
 use loom_scene::Transform;
+use loom_sim::CubeGame;
 use serde::Serialize;
 
-use crate::game::CubeGame;
 use crate::output::ensure_parent_dir;
 
 #[derive(Debug, Serialize)]
@@ -20,6 +20,8 @@ pub(crate) struct StateDump {
     pub sim_time: f64,
     /// Actions active in the last tick, sorted by name.
     pub actions: ActionSet,
+    /// Every mapped axis with its value in the last tick, sorted by name.
+    pub axes: BTreeMap<String, f32>,
     /// Local transform of every scene node, keyed by path (sorted).
     pub nodes: BTreeMap<String, Transform>,
     /// Game state, under one field named after the game.
@@ -36,17 +38,21 @@ pub(crate) struct DemoState {
 }
 
 impl StateDump {
-    pub fn of(game: &CubeGame, actions: &ActionState) -> Self {
+    pub fn of(game: &CubeGame, input: &ActionState, bindings: &ActionMap) -> Self {
         Self {
             tick: game.clock().tick(),
             sim_time: game.clock().sim_time(),
-            actions: actions.current().clone(),
+            actions: input.current().clone(),
+            axes: input.axis_values(bindings),
             nodes: game
                 .scene()
                 .ids()
                 .map(|id| (game.scene().path(id), *game.scene().transform(id)))
                 .collect(),
-            demo: game.state(),
+            demo: DemoState {
+                yaw: game.yaw(),
+                position: game.position(),
+            },
         }
     }
 
@@ -75,16 +81,19 @@ mod tests {
 
     #[test]
     fn dump_is_pretty_json_with_trailing_newline() {
-        let mut game = CubeGame::new(crate::game::demo_scene()).unwrap();
-        let actions = ActionState::new();
+        let mut game = CubeGame::new(loom_sim::demo_scene()).unwrap();
+        let input = ActionState::new();
         for _ in 0..60 {
-            game.tick(&actions);
+            game.tick(&input);
         }
-        let json = StateDump::of(&game, &actions).to_json();
+        let json = StateDump::of(&game, &input, &loom_sim::demo_bindings()).to_json();
         // Field order, and node paths sorted; exact bytes are checked by the CLI tests.
-        assert!(json.starts_with(
-            "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"actions\": [],\n  \"nodes\": {\n    \"cube\": {"
-        ));
+        assert!(json.starts_with(concat!(
+            "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"actions\": [],\n",
+            "  \"axes\": {\n    \"look_x\": 0.0,\n    \"look_y\": 0.0,\n",
+            "    \"move_x\": 0.0,\n    \"move_y\": 0.0\n  },\n",
+            "  \"nodes\": {\n    \"cube\": {"
+        )));
         let order = [
             "\"cube\"",
             "\"ground\"",

@@ -101,6 +101,7 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         .map(|src| SceneWatcher::new(Instant::now(), modified, src.to_owned()));
     let mut app = WindowRun {
         args,
+        window: None,
         renderer: None,
         sim,
         watcher,
@@ -150,6 +151,8 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
 /// Window mode: wall-clock time drives the fixed-step accumulator.
 struct WindowRun<'a> {
     args: &'a RunArgs,
+    /// Kept to capture and release the mouse on focus changes.
+    window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     sim: Sim,
     /// Watches `--scene` for changes; `None` without `--scene`.
@@ -174,6 +177,16 @@ struct WindowRun<'a> {
 }
 
 impl WindowRun<'_> {
+    /// Captures (or releases) the mouse for live input; replaying a script
+    /// leaves the pointer alone.
+    fn capture_mouse(&self, captured: bool) {
+        if let Some(window) = &self.window
+            && self.sim.is_live()
+        {
+            loom_platform::set_cursor_captured(window, captured);
+        }
+    }
+
     fn fail(&mut self, e: anyhow::Error) -> AppControl {
         self.error = Some(e);
         self.done = true;
@@ -280,6 +293,7 @@ impl WindowRun<'_> {
 
 impl WindowApp for WindowRun<'_> {
     fn window_created(&mut self, window: Arc<Window>) -> AppControl {
+        self.window = Some(window.clone());
         let size = window.inner_size();
         match Renderer::new_with_surface(window, size.width, size.height) {
             Ok(renderer) => {
@@ -333,6 +347,17 @@ impl WindowApp for WindowRun<'_> {
 
     fn focus_lost(&mut self) -> AppControl {
         self.sim.focus_lost();
+        self.capture_mouse(false);
+        AppControl::Continue
+    }
+
+    fn focus_gained(&mut self) -> AppControl {
+        self.capture_mouse(true);
+        AppControl::Continue
+    }
+
+    fn mouse_motion(&mut self, dx: f64, dy: f64) -> AppControl {
+        self.sim.mouse_motion(dx, dy);
         AppControl::Continue
     }
 

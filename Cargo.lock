@@ -1053,6 +1053,7 @@ dependencies = [
  "loom_platform",
  "loom_render",
  "loom_scene",
+ "loom_sim",
  "serde",
  "serde_json",
 ]
@@ -1086,6 +1087,17 @@ dependencies = [
  "glam",
  "ron",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "loom_sim"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "libm",
+ "loom_core",
+ "loom_scene",
  "thiserror 2.0.21",
 ]
 

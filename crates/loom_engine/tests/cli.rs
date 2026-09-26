@@ -16,6 +16,12 @@ const SCENARIO_A: &str = concat!(
     "  \"tick\": 60,\n",
     "  \"sim_time\": 1.0,\n",
     "  \"actions\": [],\n",
+    "  \"axes\": {\n",
+    "    \"look_x\": 0.0,\n",
+    "    \"look_y\": 0.0,\n",
+    "    \"move_x\": 0.0,\n",
+    "    \"move_y\": 0.0\n",
+    "  },\n",
     "  \"nodes\": {\n",
     "    \"cube\": {\n",
     "      \"position\": [\n",
@@ -101,12 +107,18 @@ const SCENARIO_A: &str = concat!(
     "}\n",
 );
 
-/// State after 90 ticks, `move_right` held for ticks 1..=60.
+/// State after 90 ticks, `move_x` at 1.0 for ticks 1..=60.
 const SCENARIO_B: &str = concat!(
     "{\n",
     "  \"tick\": 90,\n",
     "  \"sim_time\": 1.5,\n",
     "  \"actions\": [],\n",
+    "  \"axes\": {\n",
+    "    \"look_x\": 0.0,\n",
+    "    \"look_y\": 0.0,\n",
+    "    \"move_x\": 0.0,\n",
+    "    \"move_y\": 0.0\n",
+    "  },\n",
     "  \"nodes\": {\n",
     "    \"cube\": {\n",
     "      \"position\": [\n",
@@ -423,6 +435,18 @@ fn write_script(dir: &std::path::Path, name: &str, events: &[&str]) -> PathBuf {
     path
 }
 
+/// Writes an input script with no action events and the given axis events
+/// (RON tuples), and returns its path.
+fn write_axis_script(dir: &std::path::Path, name: &str, axes: &[&str]) -> PathBuf {
+    let path = dir.join(name);
+    let body = format!(
+        "(version: 1, tick_hz: 60, events: [], axes: [{}])\n",
+        axes.join(", ")
+    );
+    fs::write(&path, body).expect("script file can be written");
+    path
+}
+
 fn run_headless_replay(frames: &str, script: &std::path::Path, state: &std::path::Path) -> Value {
     let out = run_loom(&[
         "run",
@@ -442,12 +466,12 @@ fn run_headless_replay(frames: &str, script: &std::path::Path, state: &std::path
 #[test]
 fn replayed_input_moves_the_cube_to_the_expected_state() {
     let dir = test_dir("replayed_input_moves_the_cube_to_the_expected_state");
-    let script = write_script(
+    let script = write_axis_script(
         &dir,
         "b.ron",
         &[
-            r#"(tick: 1, action: "move_right", down: true)"#,
-            r#"(tick: 61, action: "move_right", down: false)"#,
+            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
+            r#"(tick: 61, axis: "move_x", value: 0.0)"#,
         ],
     );
     let state = dir.join("s.json");
@@ -467,12 +491,12 @@ fn replayed_input_moves_the_cube_to_the_expected_state() {
 #[allow(clippy::approx_constant)]
 fn diagonal_replay_matches_the_expected_state() {
     let dir = test_dir("diagonal_replay_matches_the_expected_state");
-    let script = write_script(
+    let script = write_axis_script(
         &dir,
         "c.ron",
         &[
-            r#"(tick: 1, action: "move_forward", down: true)"#,
-            r#"(tick: 1, action: "move_right", down: true)"#,
+            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
+            r#"(tick: 1, axis: "move_y", value: 1.0)"#,
         ],
     );
     let state = dir.join("s.json");
@@ -481,9 +505,10 @@ fn diagonal_replay_matches_the_expected_state() {
         serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
             .expect("state file is valid JSON");
     assert_eq!(dump["tick"], 30);
+    assert_eq!(dump["actions"], serde_json::json!([]));
     assert_eq!(
-        dump["actions"],
-        serde_json::json!(["move_forward", "move_right"])
+        dump["axes"],
+        serde_json::json!({"look_x": 0.0, "look_y": 0.0, "move_x": 1.0, "move_y": 1.0})
     );
     for position in [
         &dump["demo"]["position"],
@@ -493,17 +518,37 @@ fn diagonal_replay_matches_the_expected_state() {
     }
 }
 
+/// The canonical recording of scenario D plus a one-tick look.
+const AXIS_RECORDING: &str = concat!(
+    "(\n",
+    "    version: 1,\n",
+    "    tick_hz: 60,\n",
+    "    events: [],\n",
+    "    axes: [\n",
+    "        (tick: 1, axis: \"move_x\", value: 1.0),\n",
+    "        (tick: 1, axis: \"move_y\", value: 0.5),\n",
+    "        (tick: 20, axis: \"look_x\", value: 0.0175),\n",
+    "        (tick: 21, axis: \"look_x\", value: 0.0),\n",
+    "        (tick: 46, axis: \"move_x\", value: 0.0),\n",
+    "        (tick: 46, axis: \"move_y\", value: 0.0),\n",
+    "    ],\n",
+    ")\n",
+);
+
 #[test]
-fn recording_while_replaying_reproduces_the_sorted_script() {
-    let dir = test_dir("recording_while_replaying_reproduces_the_sorted_script");
+fn recording_while_replaying_axes_reproduces_the_sorted_script() {
+    let dir = test_dir("recording_while_replaying_axes_reproduces_the_sorted_script");
     // Same-tick events deliberately out of name order.
-    let script = write_script(
+    let script = write_axis_script(
         &dir,
         "unsorted.ron",
         &[
-            r#"(tick: 1, action: "move_right", down: true)"#,
-            r#"(tick: 1, action: "move_forward", down: true)"#,
-            r#"(tick: 31, action: "move_right", down: false)"#,
+            r#"(tick: 1, axis: "move_y", value: 0.5)"#,
+            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
+            r#"(tick: 20, axis: "look_x", value: 0.0175)"#,
+            r#"(tick: 21, axis: "look_x", value: 0.0)"#,
+            r#"(tick: 46, axis: "move_y", value: 0.0)"#,
+            r#"(tick: 46, axis: "move_x", value: 0.0)"#,
         ],
     );
     let record = dir.join("rec/out.ron");
@@ -511,7 +556,7 @@ fn recording_while_replaying_reproduces_the_sorted_script() {
         "run",
         "--headless",
         "--frames",
-        "40",
+        "60",
         "--input",
         path_str(&script),
         "--record",
@@ -522,29 +567,73 @@ fn recording_while_replaying_reproduces_the_sorted_script() {
     assert_eq!(r["record"], path_str(&record));
     assert_eq!(
         fs::read_to_string(&record).expect("recording was written"),
-        concat!(
-            "(\n",
-            "    version: 1,\n",
-            "    tick_hz: 60,\n",
-            "    events: [\n",
-            "        (tick: 1, action: \"move_forward\", down: true),\n",
-            "        (tick: 1, action: \"move_right\", down: true),\n",
-            "        (tick: 31, action: \"move_right\", down: false),\n",
-            "    ],\n",
-            ")\n",
-        )
+        AXIS_RECORDING
     );
+}
+
+#[test]
+fn axis_script_moves_the_cube_with_normalized_diagonal() {
+    let dir = test_dir("axis_script_moves_the_cube_with_normalized_diagonal");
+    let script = write_axis_script(
+        &dir,
+        "d.ron",
+        &[
+            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
+            r#"(tick: 1, axis: "move_y", value: 0.5)"#,
+        ],
+    );
+    let state = dir.join("s.json");
+    run_headless_replay("45", &script, &state);
+    let dump: Value =
+        serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
+            .expect("state file is valid JSON");
+    assert_eq!(dump["tick"], 45);
+    for position in [
+        &dump["demo"]["position"],
+        &dump["nodes"]["cube"]["position"],
+    ] {
+        assert_f32_bits(position, [1.3416408, 0.5, -0.6708204]);
+    }
 }
 
 #[test]
 fn invalid_input_script_is_a_runtime_error_naming_the_event() {
     let dir = test_dir("invalid_input_script_is_a_runtime_error_naming_the_event");
+    // The demo defines no actions, so any action is unknown.
     let script = write_script(
         &dir,
         "bad.ron",
+        &[r#"(tick: 42, action: "move_left", down: true)"#],
+    );
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "60",
+        "--input",
+        path_str(&script),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 1);
+    assert_eq!(r["status"], "error");
+    let error = r["error"].as_str().expect("error is a string");
+    for part in [path_str(&script), "events[0]", "tick 42"] {
+        assert!(
+            error.contains(part),
+            "error should contain {part:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn invalid_axis_event_is_a_runtime_error_naming_it() {
+    let dir = test_dir("invalid_axis_event_is_a_runtime_error_naming_it");
+    let script = write_axis_script(
+        &dir,
+        "bad.ron",
         &[
-            r#"(tick: 1, action: "move_right", down: true)"#,
-            r#"(tick: 42, action: "move_left", down: false)"#,
+            r#"(tick: 1, axis: "move_x", value: 1.0)"#,
+            r#"(tick: 42, axis: "move_x", value: 1.0)"#,
         ],
     );
     let out = run_loom(&[
@@ -559,7 +648,7 @@ fn invalid_input_script_is_a_runtime_error_naming_the_event() {
     assert_eq!(out.code, 1);
     assert_eq!(r["status"], "error");
     let error = r["error"].as_str().expect("error is a string");
-    for part in [path_str(&script), "events[1]", "tick 42"] {
+    for part in [path_str(&script), "axes[1]", "tick 42"] {
         assert!(
             error.contains(part),
             "error should contain {part:?}: {error}"
@@ -570,10 +659,10 @@ fn invalid_input_script_is_a_runtime_error_naming_the_event() {
 #[test]
 fn input_events_after_the_final_tick_are_counted_as_unapplied() {
     let dir = test_dir("input_events_after_the_final_tick_are_counted_as_unapplied");
-    let script = write_script(
+    let script = write_axis_script(
         &dir,
         "late.ron",
-        &[r#"(tick: 100, action: "move_back", down: true)"#],
+        &[r#"(tick: 100, axis: "move_y", value: -1.0)"#],
     );
     let out = run_loom(&[
         "run",

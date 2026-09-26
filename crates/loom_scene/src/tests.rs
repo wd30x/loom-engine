@@ -1,6 +1,6 @@
 use super::*;
 
-const DEMO: &str = include_str!("../../loom_engine/src/demo.scene.ron");
+const DEMO: &str = include_str!("../../loom_sim/src/demo.scene.ron");
 
 /// A scene file with a camera node `cam` followed by `nodes`.
 fn scene_with(nodes: &str) -> String {

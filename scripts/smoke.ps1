@@ -62,7 +62,7 @@ public static class SmokeWin32 {
 $WM_KEYDOWN = 0x0100; $WM_KEYUP = 0x0101; $WM_CLOSE = 0x0010
 $SW_MINIMIZE = 6; $SW_RESTORE = 9
 # Virtual-key code and scan code; winit reads the physical key from the scan code.
-$keyCodes = @{ W = @(0x57, 0x11); A = @(0x41, 0x1E); D = @(0x44, 0x20); Esc = @(0x1B, 0x01) }
+$keyCodes = @{ W = @(0x57, 0x11); A = @(0x41, 0x1E); D = @(0x44, 0x20); L = @(0x4C, 0x26); Esc = @(0x1B, 0x01) }
 # opengl32.dll is not listed: like dxgi.dll it is a static import of loom.exe
 # (wgpu's GL backend links it), so it is always loaded. It is only the GL
 # loader; the actual GL driver DLL is caught by the vendor prefixes below.
@@ -189,6 +189,12 @@ function Invoke-HeadlessReplayScene([string]$scene, [int64]$ticks, [string]$stat
     $r = Invoke-Loom @('run', '--headless', '--frames', "$ticks", '--scene', $scene, '--dump-state', $state)
     Assert-ExitOk $r
     $state
+}
+
+# The events of `axis` in a recording, in file order: Tick and Value.
+function Get-AxisEvents([string]$recording, [string]$axis) {
+    [regex]::Matches((Get-Content $recording -Raw), "tick: (\d+), axis: `"$axis`", value: ([^)]+)\)") |
+        ForEach-Object { [pscustomobject]@{ Tick = [int64]$_.Groups[1].Value; Value = [double]$_.Groups[2].Value } }
 }
 
 function Assert-SameBytes([string]$a, [string]$b) {
@@ -326,14 +332,16 @@ if (-not $HeadlessOnly) {
         $replay = Invoke-HeadlessReplay "$out/w5.ron" $tick "$out/w5_replay.json"
         Assert-SameBytes "$out/w5.json" $replay
 
-        $left = @([regex]::Matches((Get-Content "$out/w5.ron" -Raw),
-                'tick: (\d+), action: "move_left", down: (true|false)') |
-            ForEach-Object { [pscustomobject]@{ Tick = [int64]$_.Groups[1].Value; Down = $_.Groups[2].Value -eq 'true' } })
-        Assert-True ($left.Count -eq 6) "expected 3 move_left press/release pairs, found $($left.Count) events"
-        for ($i = 0; $i -lt 6; $i += 2) {
-            Assert-True ($left[$i].Down -and -not $left[$i + 1].Down) "move_left events are not press/release pairs"
-            Assert-True ($left[$i + 1].Tick -gt $left[$i].Tick) "tap $($i / 2 + 1) pressed and released in tick $($left[$i].Tick)"
+        # Each A tap: move_x set to -1.0, then back to 0.0 in a later tick.
+        $moveX = @(Get-AxisEvents "$out/w5.ron" 'move_x')
+        $taps = 0
+        for ($i = 0; $i -lt $moveX.Count; $i++) {
+            if ($moveX[$i].Value -ne -1.0) { continue }
+            $taps++
+            Assert-True ($i + 1 -lt $moveX.Count -and $moveX[$i + 1].Value -eq 0.0) "move_x -1.0 at tick $($moveX[$i].Tick) is not followed by 0.0"
+            Assert-True ($moveX[$i + 1].Tick -gt $moveX[$i].Tick) "tap $taps set and reset move_x in tick $($moveX[$i].Tick)"
         }
+        Assert-True ($taps -eq 3) "expected 3 taps of A (move_x -1.0 then 0.0), found $taps"
     }
 
     Test-Check 'W6' 'window replay matches headless replay' {
@@ -383,7 +391,7 @@ if (-not $HeadlessOnly) {
 
     Test-Check 'W8' 'scene hot reload restarts on a good edit and ignores a broken one' {
         $scene = "$out/w8.scene.ron"
-        $demo = [IO.File]::ReadAllText((Join-Path $root 'crates/loom_engine/src/demo.scene.ron'))
+        $demo = [IO.File]::ReadAllText((Join-Path $root 'crates/loom_sim/src/demo.scene.ron'))
         $cubeAt = '(name: "cube", position: (0.0, 0.5, 0.0)'
         Assert-True ($demo.Contains($cubeAt)) 'the demo scene no longer has the expected cube line'
         $good = $demo.Replace($cubeAt, '(name: "cube", position: (3.0, 0.5, 0.0)')
@@ -450,6 +458,28 @@ if (-not $HeadlessOnly) {
             }
         }
         $script:detail = $results -join ', '
+    }
+
+    Test-Check 'W10' 'holding a look key records its axis and replays headless to identical state' {
+        $run = Start-LoomWindow 'w10' @('--record', "$out/w10.ron", '--dump-state', "$out/w10.json")
+        try {
+            Start-Sleep -Milliseconds 700
+            Send-Key $run 'L' $true; Start-Sleep -Milliseconds 500
+            Send-Key $run 'L' $false; Start-Sleep -Milliseconds 300
+            Send-Key $run 'Esc' $true
+            Assert-ExitOk (Wait-Loom $run)
+        } finally {
+            Stop-Loom $run
+        }
+        $look = @(Get-AxisEvents "$out/w10.ron" 'look_x')
+        $script:detail = 'look_x: ' + (($look | ForEach-Object { "tick $($_.Tick) = $($_.Value)" }) -join ', ')
+        # Raw mouse motion also drives look_x: do not touch the mouse meanwhile.
+        Assert-True ($look.Count -eq 2) "expected 2 look_x events (0.04, then 0.0), found $($look.Count)"
+        Assert-True ($look[0].Value -eq 0.04 -and $look[1].Value -eq 0.0) 'look_x is not 0.04 then 0.0'
+        Assert-True ($look[1].Tick -gt $look[0].Tick) 'look_x was set and reset in the same tick'
+        $tick = (Get-Content "$out/w10.json" -Raw | ConvertFrom-Json).tick
+        $replay = Invoke-HeadlessReplay "$out/w10.ron" $tick "$out/w10_replay.json"
+        Assert-SameBytes "$out/w10.json" $replay
     }
 }
 

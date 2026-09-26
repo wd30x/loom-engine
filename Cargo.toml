@@ -16,6 +16,7 @@ loom_core = { path = "crates/loom_core" }
 loom_platform = { path = "crates/loom_platform" }
 loom_render = { path = "crates/loom_render" }
 loom_scene = { path = "crates/loom_scene" }
+loom_sim = { path = "crates/loom_sim" }
 
 # windowing / graphics
 winit = "0.30.13"
@@ -25,6 +26,7 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 
 # math
 glam = { version = "0.33.10", features = ["bytemuck", "serde", "libm"] }
+libm = "0.2.16"
 
 # io / data
 image = { version = "0.25.10", default-features = false, features = ["png"] }

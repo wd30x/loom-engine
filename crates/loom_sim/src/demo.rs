@@ -1,17 +1,13 @@
 //! The demo "game": a spinning cube, the scene's root node `cube`, that
-//! moves on the XZ plane when the move actions are held. Shared by headless
-//! and window mode.
+//! moves on the XZ plane following the `move_x`/`move_y` axes. Shared by
+//! headless and window mode.
 
-use std::f32::consts::FRAC_1_SQRT_2;
 use std::f64::consts::TAU;
 
-use anyhow::{Result, bail};
-use glam::Quat;
+use glam::{Quat, Vec2, Vec3};
 use loom_core::input::{ActionMap, ActionState};
 use loom_core::{SimClock, TICK_HZ};
-use loom_scene::{NodeId, Scene};
-
-use crate::state::DemoState;
+use loom_scene::{NodeId, Scene, SceneError};
 
 /// Fixed tilt around X so that three faces are visible.
 const TILT_X: f32 = 0.3;
@@ -19,13 +15,17 @@ const TILT_X: f32 = 0.3;
 const SPIN_RATE: f64 = 1.0;
 /// Movement speed in meters per second.
 const MOVE_SPEED: f64 = 2.0;
-/// Distance moved per tick along one axis: `2.0 / 60.0` rounded to f32.
+/// Distance moved per tick at full axis input: `2.0 / 60.0` rounded to f32.
 const STEP: f32 = (MOVE_SPEED / TICK_HZ as f64) as f32;
 
-pub(crate) const MOVE_FORWARD: &str = "move_forward";
-pub(crate) const MOVE_BACK: &str = "move_back";
-pub(crate) const MOVE_LEFT: &str = "move_left";
-pub(crate) const MOVE_RIGHT: &str = "move_right";
+/// Sideways movement in `[-1, 1]`; positive is +X.
+pub const MOVE_X: &str = "move_x";
+/// Forward movement in `[-1, 1]`; positive is forward (-Z).
+pub const MOVE_Y: &str = "move_y";
+/// Horizontal view turn in radians per tick (unused by the demo so far).
+pub const LOOK_X: &str = "look_x";
+/// Vertical view turn in radians per tick (unused by the demo so far).
+pub const LOOK_Y: &str = "look_y";
 
 /// The root node the demo drives.
 const CUBE: &str = "cube";
@@ -33,19 +33,27 @@ const CUBE: &str = "cube";
 const DEMO_BINDINGS: &str = include_str!("demo_bindings.ron");
 const DEMO_SCENE: &str = include_str!("demo.scene.ron");
 
+#[derive(Debug, thiserror::Error)]
+pub enum GameError {
+    #[error(transparent)]
+    Scene(#[from] SceneError),
+    #[error("the demo scene needs a root node \"cube\" with a mesh")]
+    MissingCube,
+}
+
 /// The demo's key bindings, embedded in the binary.
-pub(crate) fn demo_bindings() -> ActionMap {
+pub fn demo_bindings() -> ActionMap {
     ActionMap::parse(DEMO_BINDINGS)
         .expect("the embedded demo bindings are valid (checked by a unit test)")
 }
 
 /// The scene used without `--scene`, embedded in the binary.
-pub(crate) fn demo_scene() -> Scene {
+pub fn demo_scene() -> Scene {
     Scene::parse(DEMO_SCENE).expect("the embedded demo scene is valid (checked by a unit test)")
 }
 
 #[derive(Debug)]
-pub(crate) struct CubeGame {
+pub struct CubeGame {
     clock: SimClock,
     scene: Scene,
     cube: NodeId,
@@ -53,15 +61,15 @@ pub(crate) struct CubeGame {
 
 impl CubeGame {
     /// Parses scene source text and starts a game on it.
-    pub fn from_source(src: &str) -> Result<Self> {
+    pub fn from_source(src: &str) -> Result<Self, GameError> {
         Self::new(Scene::parse(src)?)
     }
 
     /// Takes over `scene`, which must have a root node `cube` with a mesh.
-    pub fn new(scene: Scene) -> Result<Self> {
+    pub fn new(scene: Scene) -> Result<Self, GameError> {
         let cube = match scene.find(CUBE) {
             Some(id) if scene.node(id).parent.is_none() && scene.node(id).mesh.is_some() => id,
-            _ => bail!("the demo scene needs a root node \"cube\" with a mesh"),
+            _ => return Err(GameError::MissingCube),
         };
         Ok(Self {
             clock: SimClock::new(),
@@ -70,23 +78,20 @@ impl CubeGame {
         })
     }
 
-    /// Runs one tick with this tick's actions: moves the cube from its
+    /// Runs one tick with this tick's input: moves the cube from its
     /// current position, then sets its spin for the new time.
-    pub fn tick(&mut self, actions: &ActionState) {
+    pub fn tick(&mut self, input: &ActionState) {
         self.clock.step();
-        let axis = |action| if actions.pressed(action) { 1.0f32 } else { 0.0 };
-        let mut dx = axis(MOVE_RIGHT) - axis(MOVE_LEFT);
-        let mut dz = axis(MOVE_BACK) - axis(MOVE_FORWARD); // -Z is forward
-        // Exactly this, not normalize(): the state must be bit-identical
-        // everywhere, and the expected values in the tests follow this formula.
-        if dx != 0.0 && dz != 0.0 {
-            dx *= FRAC_1_SQRT_2;
-            dz *= FRAC_1_SQRT_2;
+        // Exactly this order and these types: the state must be
+        // bit-identical everywhere, and the tests' expected values follow it.
+        let mut v = Vec2::new(input.axis(MOVE_X), input.axis(MOVE_Y));
+        if v.length_squared() > 1.0 {
+            v = v / v.length();
         }
         let yaw = self.yaw();
         let transform = self.scene.transform_mut(self.cube);
-        transform.position.x += dx * STEP;
-        transform.position.z += dz * STEP;
+        transform.position.x += v.x * STEP;
+        transform.position.z -= v.y * STEP; // positive move_y is forward, -Z
         transform.rotation = Quat::from_rotation_y(yaw as f32) * Quat::from_rotation_x(TILT_X);
     }
 
@@ -104,35 +109,39 @@ impl CubeGame {
         (self.clock.sim_time() * SPIN_RATE) % TAU
     }
 
-    /// Game state for `--dump-state`.
-    pub fn state(&self) -> DemoState {
-        DemoState {
-            yaw: self.yaw(),
-            position: self.scene.transform(self.cube).position,
-        }
+    /// The cube's position in meters.
+    pub fn position(&self) -> Vec3 {
+        self.scene.transform(self.cube).position
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loom_core::input::ActionSet;
+    use loom_core::input::TickInput;
 
-    fn run(game: &mut CubeGame, ticks: u32, active: &[&str]) {
-        let mut actions = ActionState::new();
+    fn run(game: &mut CubeGame, ticks: u32, axes: &[(&str, f32)]) {
+        let mut input = ActionState::new();
         for _ in 0..ticks {
-            actions.advance(
-                active
-                    .iter()
-                    .map(|a| (*a).to_owned())
-                    .collect::<ActionSet>(),
-            );
-            game.tick(&actions);
+            input.advance(TickInput {
+                actions: Default::default(),
+                axes: axes.iter().map(|(a, v)| ((*a).to_owned(), *v)).collect(),
+            });
+            game.tick(&input);
         }
     }
 
     fn demo_game() -> CubeGame {
         CubeGame::new(demo_scene()).unwrap()
+    }
+
+    fn assert_position_bits(game: &CubeGame, expected: [f32; 3]) {
+        let p = game.position();
+        assert_eq!(
+            [p.x, p.y, p.z].map(f32::to_bits),
+            expected.map(f32::to_bits),
+            "{p:?} != {expected:?}"
+        );
     }
 
     #[test]
@@ -153,21 +162,21 @@ mod tests {
         run(&mut game, 400, &[]);
         // 400 / 60 s = 6.67 rad, one full turn plus ~0.38 rad.
         assert_eq!(game.yaw().to_bits(), 0.38348135948708073f64.to_bits());
-        assert_eq!(game.state().yaw.to_bits(), game.yaw().to_bits());
     }
 
     #[test]
-    fn demo_bindings_define_exactly_the_demo_actions() {
+    fn demo_bindings_define_exactly_the_demo_axes() {
         let map = demo_bindings();
-        let mut actions: Vec<_> = map.actions().collect();
-        actions.sort_unstable();
-        assert_eq!(actions, [MOVE_BACK, MOVE_FORWARD, MOVE_LEFT, MOVE_RIGHT]);
+        assert_eq!(map.actions().count(), 0);
+        let mut axes: Vec<_> = map.axes().collect();
+        axes.sort_unstable();
+        assert_eq!(axes, [LOOK_X, LOOK_Y, MOVE_X, MOVE_Y]);
     }
 
     #[test]
     fn built_in_scene_drives_a_cube_standing_on_the_ground() {
         let game = demo_game();
-        assert_eq!(game.state().position, glam::Vec3::new(0.0, 0.5, 0.0));
+        assert_eq!(game.position(), Vec3::new(0.0, 0.5, 0.0));
     }
 
     #[test]
@@ -187,15 +196,47 @@ mod tests {
     }
 
     #[test]
+    fn game_from_invalid_source_reports_the_scene_error() {
+        let err = CubeGame::from_source("(version: 2)").unwrap_err();
+        assert!(matches!(err, GameError::Scene(_)), "{err}");
+    }
+
+    #[test]
+    fn full_move_x_for_sixty_ticks_moves_two_meters() {
+        let mut game = demo_game();
+        run(&mut game, 60, &[(MOVE_X, 1.0)]);
+        assert_position_bits(&game, [1.9999994, 0.5, 0.0]);
+    }
+
+    #[test]
     // 0.707107 is the expected position after 30 ticks, not an approximation
     // of FRAC_1_SQRT_2 (0.70710677); the two differ in the last bits.
     #[allow(clippy::approx_constant)]
     fn diagonal_movement_is_scaled_by_one_over_root_two() {
         let mut game = demo_game();
-        run(&mut game, 30, &[MOVE_FORWARD, MOVE_RIGHT]);
-        let p = game.state().position;
-        assert_eq!(p.x.to_bits(), 0.707107f32.to_bits());
-        assert_eq!(p.y.to_bits(), 0.5f32.to_bits());
-        assert_eq!(p.z.to_bits(), (-0.707107f32).to_bits());
+        run(&mut game, 30, &[(MOVE_X, 1.0), (MOVE_Y, 1.0)]);
+        assert_position_bits(&game, [0.707107, 0.5, -0.707107]);
+    }
+
+    #[test]
+    fn move_vector_longer_than_one_is_normalized() {
+        let mut game = demo_game();
+        run(&mut game, 45, &[(MOVE_X, 1.0), (MOVE_Y, 0.5)]);
+        assert_position_bits(&game, [1.3416408, 0.5, -0.6708204]);
+    }
+
+    #[test]
+    fn move_vector_shorter_than_one_is_kept() {
+        let mut game = demo_game();
+        run(&mut game, 1, &[(MOVE_X, 0.5), (MOVE_Y, -0.5)]);
+        let p = game.position();
+        assert_eq!((p.x, p.z), (0.5 * STEP, 0.5 * STEP));
+    }
+
+    #[test]
+    fn look_axes_do_not_move_the_cube() {
+        let mut game = demo_game();
+        run(&mut game, 10, &[(LOOK_X, 0.04), (LOOK_Y, -0.04)]);
+        assert_position_bits(&game, [0.0, 0.5, 0.0]);
     }
 }

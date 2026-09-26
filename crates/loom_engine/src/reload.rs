@@ -7,7 +7,7 @@
 use std::io;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::game::CubeGame;
+use loom_sim::CubeGame;
 
 /// How often the file's modification time is checked.
 pub(crate) const CHECK_INTERVAL: Duration = Duration::from_millis(500);
@@ -84,7 +84,7 @@ impl SceneWatcher {
                 self.last_failure = None;
                 Poll::Reloaded(Box::new(game))
             }
-            Err(e) => self.fail(content, e),
+            Err(e) => self.fail(content, e.into()),
         }
     }
 
@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    const GOOD: &str = include_str!("demo.scene.ron");
+    const GOOD: &str = include_str!("../../loom_sim/src/demo.scene.ron");
 
     fn at(secs: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -222,7 +222,7 @@ mod tests {
         let Poll::Reloaded(game) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &moved_cube()) else {
             panic!("expected a reload");
         };
-        assert_eq!(game.state().position, glam::Vec3::new(3.0, 0.5, 0.0));
+        assert_eq!(game.position(), glam::Vec3::new(3.0, 0.5, 0.0));
         assert_eq!(game.clock().tick(), 0);
         // The new content is now current: touching it again is no reload.
         assert!(matches!(

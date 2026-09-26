@@ -6,27 +6,27 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use loom_core::input::{
-    ActionMap, ActionSet, ActionState, InputCollector, InputRecorder, InputScript, Key,
-    ScriptPlayer,
+    ActionMap, ActionState, InputCollector, InputRecorder, InputScript, Key, ScriptPlayer,
+    TickInput,
 };
+use loom_sim::{CubeGame, demo_bindings, demo_scene};
 
 use crate::RunArgs;
-use crate::game::{CubeGame, demo_bindings, demo_scene};
 use crate::output::ensure_parent_dir;
 use crate::report::InputReport;
 use crate::state::StateDump;
 
 enum InputSource {
-    /// Headless without `--input`: every tick has no actions.
+    /// Headless without `--input`: every tick has no input.
     Idle,
-    /// `--input`: replay a script. Keyboard input is ignored. The parsed
+    /// `--input`: replay a script. Keyboard and mouse are ignored. The parsed
     /// script is kept so a scene reload can replay it from tick 1.
     Script {
         script: InputScript,
         player: ScriptPlayer,
         path: String,
     },
-    /// Window mode without `--input`: the keyboard.
+    /// Window mode without `--input`: the keyboard and the mouse.
     Live(InputCollector),
 }
 
@@ -99,17 +99,17 @@ impl Sim {
         self.scene_source.as_deref()
     }
 
-    /// Runs one tick: sample this tick's actions, advance the action state,
+    /// Runs one tick: sample this tick's input, advance the action state,
     /// record, then step the game.
     pub fn tick(&mut self) {
         let next = match &mut self.source {
-            InputSource::Idle => ActionSet::new(),
+            InputSource::Idle => TickInput::default(),
             InputSource::Script { player, .. } => player.next_tick(),
             InputSource::Live(collector) => collector.sample(&self.bindings),
         };
         self.actions.advance(next);
         if let Some(recorder) = &mut self.recorder {
-            recorder.observe(self.actions.current());
+            recorder.observe(self.actions.input());
         }
         self.game.tick(&self.actions);
     }
@@ -125,11 +125,25 @@ impl Sim {
         }
     }
 
-    /// The window lost focus: release held keys so none gets stuck.
+    /// Raw mouse motion from the window. Ignored while replaying a script.
+    pub fn mouse_motion(&mut self, dx: f64, dy: f64) {
+        if let InputSource::Live(collector) = &mut self.source {
+            collector.mouse_motion(dx, dy);
+        }
+    }
+
+    /// The window lost focus: release held keys so none gets stuck, and
+    /// drop pending mouse motion.
     pub fn focus_lost(&mut self) {
         if let InputSource::Live(collector) = &mut self.source {
             collector.release_all();
         }
+    }
+
+    /// Input comes from the keyboard and mouse (not a script), so the window
+    /// should capture the mouse while focused.
+    pub fn is_live(&self) -> bool {
+        matches!(self.source, InputSource::Live(_))
     }
 
     pub fn game(&self) -> &CubeGame {
@@ -137,7 +151,7 @@ impl Sim {
     }
 
     pub fn state_dump(&self) -> StateDump {
-        StateDump::of(&self.game, &self.actions)
+        StateDump::of(&self.game, &self.actions, &self.bindings)
     }
 
     /// The `scene` field of the run report.
