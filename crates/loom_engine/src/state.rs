@@ -2,11 +2,13 @@
 //! cross-machine regression reference (`docs/architecture.md` sections 4
 //! and 6), so field names follow the same stability rules as stdout.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use glam::Vec3;
 use loom_core::input::{ActionSet, ActionState};
+use loom_scene::Transform;
 use serde::Serialize;
 
 use crate::game::CubeGame;
@@ -18,6 +20,8 @@ pub(crate) struct StateDump {
     pub sim_time: f64,
     /// Actions active in the last tick, sorted by name.
     pub actions: ActionSet,
+    /// Local transform of every scene node, keyed by path (sorted).
+    pub nodes: BTreeMap<String, Transform>,
     /// Game state, under one field named after the game.
     pub demo: DemoState,
 }
@@ -37,6 +41,11 @@ impl StateDump {
             tick: game.clock().tick(),
             sim_time: game.clock().sim_time(),
             actions: actions.current().clone(),
+            nodes: game
+                .scene()
+                .ids()
+                .map(|id| (game.scene().path(id), *game.scene().transform(id)))
+                .collect(),
             demo: game.state(),
         }
     }
@@ -66,15 +75,25 @@ mod tests {
 
     #[test]
     fn dump_is_pretty_json_with_trailing_newline() {
-        let mut game = CubeGame::default();
+        let mut game = CubeGame::new(crate::game::demo_scene()).unwrap();
         let actions = ActionState::new();
         for _ in 0..60 {
             game.tick(&actions);
         }
-        assert_eq!(
-            StateDump::of(&game, &actions).to_json(),
-            "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"actions\": [],\n  \"demo\": {\n    \
-             \"yaw\": 1.0,\n    \"position\": [\n      0.0,\n      0.0,\n      0.0\n    ]\n  }\n}\n"
-        );
+        let json = StateDump::of(&game, &actions).to_json();
+        // Field order, and node paths sorted; exact bytes are checked by the CLI tests.
+        assert!(json.starts_with(
+            "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"actions\": [],\n  \"nodes\": {\n    \"cube\": {"
+        ));
+        let order = [
+            "\"cube\"",
+            "\"ground\"",
+            "\"main_cam\"",
+            "\"sun\"",
+            "\"demo\"",
+        ]
+        .map(|k| json.find(k).unwrap());
+        assert!(order.is_sorted(), "{order:?}");
+        assert!(json.ends_with("\n  }\n}\n") && !json.contains('\r'));
     }
 }

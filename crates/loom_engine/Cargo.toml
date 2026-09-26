@@ -15,6 +15,7 @@ path = "src/main.rs"
 loom_core.workspace = true
 loom_platform.workspace = true
 loom_render.workspace = true
+loom_scene.workspace = true
 glam.workspace = true
 image.workspace = true
 serde.workspace = true

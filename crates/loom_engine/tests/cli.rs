@@ -10,6 +10,188 @@ use std::process::Command;
 
 use serde_json::Value;
 
+/// State after 60 ticks of the built-in scene without input.
+const SCENARIO_A: &str = concat!(
+    "{\n",
+    "  \"tick\": 60,\n",
+    "  \"sim_time\": 1.0,\n",
+    "  \"actions\": [],\n",
+    "  \"nodes\": {\n",
+    "    \"cube\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.5,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.1311443,\n",
+    "        0.47404212,\n",
+    "        -0.07164446,\n",
+    "        0.86772823\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"ground\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        20.0,\n",
+    "        1.0,\n",
+    "        20.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"main_cam\": {\n",
+    "      \"position\": [\n",
+    "        2.5,\n",
+    "        2.0,\n",
+    "        3.5\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.15902498,\n",
+    "        0.30089226,\n",
+    "        0.05096195,\n",
+    "        0.9389238\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"sun\": {\n",
+    "      \"position\": [\n",
+    "        4.0,\n",
+    "        8.0,\n",
+    "        3.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.43359014,\n",
+    "        0.39115202,\n",
+    "        0.21679507,\n",
+    "        0.78230405\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    }\n",
+    "  },\n",
+    "  \"demo\": {\n",
+    "    \"yaw\": 1.0,\n",
+    "    \"position\": [\n",
+    "      0.0,\n",
+    "      0.5,\n",
+    "      0.0\n",
+    "    ]\n",
+    "  }\n",
+    "}\n",
+);
+
+/// State after 90 ticks, `move_right` held for ticks 1..=60.
+const SCENARIO_B: &str = concat!(
+    "{\n",
+    "  \"tick\": 90,\n",
+    "  \"sim_time\": 1.5,\n",
+    "  \"actions\": [],\n",
+    "  \"nodes\": {\n",
+    "    \"cube\": {\n",
+    "      \"position\": [\n",
+    "        1.9999994,\n",
+    "        0.5,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.109342225,\n",
+    "        0.6739847,\n",
+    "        -0.10186283,\n",
+    "        0.7234728\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"ground\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        20.0,\n",
+    "        1.0,\n",
+    "        20.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"main_cam\": {\n",
+    "      \"position\": [\n",
+    "        2.5,\n",
+    "        2.0,\n",
+    "        3.5\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.15902498,\n",
+    "        0.30089226,\n",
+    "        0.05096195,\n",
+    "        0.9389238\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"sun\": {\n",
+    "      \"position\": [\n",
+    "        4.0,\n",
+    "        8.0,\n",
+    "        3.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.43359014,\n",
+    "        0.39115202,\n",
+    "        0.21679507,\n",
+    "        0.78230405\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    }\n",
+    "  },\n",
+    "  \"demo\": {\n",
+    "    \"yaw\": 1.5,\n",
+    "    \"position\": [\n",
+    "      1.9999994,\n",
+    "      0.5,\n",
+    "      0.0\n",
+    "    ]\n",
+    "  }\n",
+    "}\n",
+);
+
 struct Output {
     code: i32,
     stdout: String,
@@ -62,6 +244,22 @@ fn path_str(path: &std::path::Path) -> &str {
     path.to_str().expect("test paths are UTF-8")
 }
 
+/// Compares a JSON `[x, y, z]` with f32 values bit by bit (serde_json prints
+/// f32 in its shortest round-trip form, so parsing back as f32 is exact).
+fn assert_f32_bits(value: &Value, expected: [f32; 3]) {
+    let actual: Vec<f32> = value
+        .as_array()
+        .expect("value is an array")
+        .iter()
+        .map(|v| v.as_f64().expect("number") as f32)
+        .collect();
+    assert_eq!(
+        actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        expected.map(f32::to_bits),
+        "{actual:?} != {expected:?}"
+    );
+}
+
 fn assert_f64_bits(value: &Value, expected: f64) {
     let actual = value.as_f64().expect("value is a number");
     assert_eq!(
@@ -102,23 +300,10 @@ fn state_dump_after_sixty_ticks_matches_expected_bytes() {
     assert_eq!(r["state"], path_str(&file));
     assert!(r["record"].is_null());
     assert!(r["input"].is_null());
+    assert!(r["scene"].is_null());
     assert_eq!(
         fs::read_to_string(&file).expect("state file was written"),
-        concat!(
-            "{\n",
-            "  \"tick\": 60,\n",
-            "  \"sim_time\": 1.0,\n",
-            "  \"actions\": [],\n",
-            "  \"demo\": {\n",
-            "    \"yaw\": 1.0,\n",
-            "    \"position\": [\n",
-            "      0.0,\n",
-            "      0.0,\n",
-            "      0.0\n",
-            "    ]\n",
-            "  }\n",
-            "}\n",
-        )
+        SCENARIO_A
     );
 }
 
@@ -273,25 +458,13 @@ fn replayed_input_moves_the_cube_to_the_expected_state() {
     );
     assert_eq!(
         fs::read_to_string(&state).expect("state file was written"),
-        concat!(
-            "{\n",
-            "  \"tick\": 90,\n",
-            "  \"sim_time\": 1.5,\n",
-            "  \"actions\": [],\n",
-            "  \"demo\": {\n",
-            "    \"yaw\": 1.5,\n",
-            "    \"position\": [\n",
-            "      1.9999994,\n",
-            "      0.0,\n",
-            "      0.0\n",
-            "    ]\n",
-            "  }\n",
-            "}\n",
-        )
+        SCENARIO_B
     );
 }
 
 #[test]
+// 0.707107 is the accumulated position, not an approximation of 1/sqrt(2).
+#[allow(clippy::approx_constant)]
 fn diagonal_replay_matches_the_expected_state() {
     let dir = test_dir("diagonal_replay_matches_the_expected_state");
     let script = write_script(
@@ -304,27 +477,20 @@ fn diagonal_replay_matches_the_expected_state() {
     );
     let state = dir.join("s.json");
     run_headless_replay("30", &script, &state);
+    let dump: Value =
+        serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
+            .expect("state file is valid JSON");
+    assert_eq!(dump["tick"], 30);
     assert_eq!(
-        fs::read_to_string(&state).expect("state file was written"),
-        concat!(
-            "{\n",
-            "  \"tick\": 30,\n",
-            "  \"sim_time\": 0.5,\n",
-            "  \"actions\": [\n",
-            "    \"move_forward\",\n",
-            "    \"move_right\"\n",
-            "  ],\n",
-            "  \"demo\": {\n",
-            "    \"yaw\": 0.5,\n",
-            "    \"position\": [\n",
-            "      0.707107,\n",
-            "      0.0,\n",
-            "      -0.707107\n",
-            "    ]\n",
-            "  }\n",
-            "}\n",
-        )
+        dump["actions"],
+        serde_json::json!(["move_forward", "move_right"])
     );
+    for position in [
+        &dump["demo"]["position"],
+        &dump["nodes"]["cube"]["position"],
+    ] {
+        assert_f32_bits(position, [0.707107, 0.5, -0.707107]);
+    }
 }
 
 #[test]
@@ -421,4 +587,153 @@ fn input_events_after_the_final_tick_are_counted_as_unapplied() {
     assert_eq!(out.code, 0, "{r}");
     assert_eq!(r["input"]["events"], 1);
     assert_eq!(r["input"]["applied"], 0);
+}
+
+/// A minimal valid scene: the demo's `cube` plus a camera.
+const MINIMAL_SCENE: &str = r#"(
+    version: 1,
+    camera: "cam",
+    ambient: (0.3, 0.3, 0.3),
+    nodes: [
+        (name: "cube", mesh: Cube),
+        (name: "cam", position: (0.0, 1.0, 4.0), look_at: (0.0, 0.0, 0.0),
+            camera: (fov_y: 50.0, near: 0.1, far: 50.0)),
+    ],
+)
+"#;
+
+fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, contents).expect("file can be written");
+    path
+}
+
+#[test]
+fn custom_scene_is_loaded_and_reported() {
+    let dir = test_dir("custom_scene_is_loaded_and_reported");
+    let scene = write_file(&dir, "min.scene.ron", MINIMAL_SCENE);
+    let state = dir.join("s.json");
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "10",
+        "--scene",
+        path_str(&scene),
+        "--dump-state",
+        path_str(&state),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 0, "{r}");
+    assert_eq!(r["scene"], path_str(&scene));
+    let dump: Value =
+        serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
+            .expect("state file is valid JSON");
+    let nodes: Vec<&String> = dump["nodes"]
+        .as_object()
+        .expect("nodes is an object")
+        .keys()
+        .collect();
+    assert_eq!(nodes, ["cam", "cube"]);
+}
+
+#[test]
+fn scene_without_a_cube_is_a_runtime_error() {
+    let dir = test_dir("scene_without_a_cube_is_a_runtime_error");
+    let scene = write_file(
+        &dir,
+        "nocube.scene.ron",
+        &MINIMAL_SCENE.replace(
+            r#"(name: "cube", mesh: Cube),"#,
+            r#"(name: "box", mesh: Cube),"#,
+        ),
+    );
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "1",
+        "--scene",
+        path_str(&scene),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 1);
+    assert_eq!(r["status"], "error");
+    let error = r["error"].as_str().expect("error is a string");
+    for part in [path_str(&scene), "cube"] {
+        assert!(
+            error.contains(part),
+            "error should contain {part:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn invalid_scene_is_a_runtime_error_naming_the_node() {
+    let dir = test_dir("invalid_scene_is_a_runtime_error_naming_the_node");
+    let scene = write_file(
+        &dir,
+        "bad.scene.ron",
+        &MINIMAL_SCENE.replace(
+            r#"(name: "cube", mesh: Cube),"#,
+            r#"(name: "cube", mesh: Cube),
+        (name: "arena", children: [(name: "pillar_2", mesh: Cube, scale: (1.0, 0.0, 1.0))]),"#,
+        ),
+    );
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "1",
+        "--scene",
+        path_str(&scene),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 1);
+    let error = r["error"].as_str().expect("error is a string");
+    for part in [path_str(&scene), "arena/pillar_2"] {
+        assert!(
+            error.contains(part),
+            "error should contain {part:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn malformed_scene_reports_line_and_column() {
+    let dir = test_dir("malformed_scene_reports_line_and_column");
+    let scene = write_file(
+        &dir,
+        "typo.scene.ron",
+        &MINIMAL_SCENE.replace("mesh: Cube", "mesh: Cube, colour: (1.0, 0.0, 0.0)"),
+    );
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "1",
+        "--scene",
+        path_str(&scene),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 1);
+    let error = r["error"].as_str().expect("error is a string");
+    assert!(error.contains(path_str(&scene)), "{error}");
+    assert!(error.contains("colour"), "{error}");
+    // ron reports the span as line:column-line:column; the typo is on line 6.
+    let span = regex_like_span(error);
+    assert!(
+        span.is_some_and(|(line, _)| line == 6),
+        "no line:column span in {error}"
+    );
+}
+
+/// Finds the first `L:C` (digits, colon, digits) in `text`.
+fn regex_like_span(text: &str) -> Option<(u32, u32)> {
+    text.split(|c: char| !(c.is_ascii_digit() || c == ':'))
+        .filter_map(|word| {
+            let (line, col) = word.split_once(':')?;
+            Some((line.parse().ok()?, col.parse().ok()?))
+        })
+        .next()
 }

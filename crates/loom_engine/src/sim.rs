@@ -9,9 +9,10 @@ use loom_core::input::{
     ActionMap, ActionSet, ActionState, InputCollector, InputRecorder, InputScript, Key,
     ScriptPlayer,
 };
+use loom_scene::Scene;
 
 use crate::RunArgs;
-use crate::game::{CubeGame, demo_bindings};
+use crate::game::{CubeGame, demo_bindings, demo_scene};
 use crate::output::ensure_parent_dir;
 use crate::report::InputReport;
 use crate::state::StateDump;
@@ -31,12 +32,20 @@ pub(crate) struct Sim {
     bindings: ActionMap,
     source: InputSource,
     recorder: Option<InputRecorder>,
+    /// `--scene` as given; `None` for the built-in scene.
+    scene_path: Option<String>,
 }
 
 impl Sim {
-    /// Reads and validates `--input` (if given) before any tick runs.
-    /// Without a script, `live` selects keyboard input over no input.
+    /// Reads and validates `--scene` and `--input` (if given) before any
+    /// tick runs. Without a script, `live` selects keyboard input over none.
     pub fn new(args: &RunArgs, live: bool) -> Result<Self> {
+        let game = match &args.scene {
+            Some(path) => load_scene(path)
+                .and_then(CubeGame::new)
+                .with_context(|| format!("invalid scene {}", path.display()))?,
+            None => CubeGame::new(demo_scene())?,
+        };
         let bindings = demo_bindings();
         let source = match &args.input {
             Some(path) => InputSource::Script {
@@ -47,11 +56,12 @@ impl Sim {
             None => InputSource::Idle,
         };
         Ok(Self {
-            game: CubeGame::default(),
+            game,
             actions: ActionState::new(),
             bindings,
             source,
             recorder: args.record.is_some().then(InputRecorder::new),
+            scene_path: args.scene.as_ref().map(|p| p.display().to_string()),
         })
     }
 
@@ -96,6 +106,11 @@ impl Sim {
         StateDump::of(&self.game, &self.actions)
     }
 
+    /// The `scene` field of the run report.
+    pub fn scene_path(&self) -> Option<String> {
+        self.scene_path.clone()
+    }
+
     /// The `input` field of the run report.
     pub fn input_report(&self) -> Option<InputReport> {
         match &self.source {
@@ -129,4 +144,9 @@ fn load_script(path: &Path, bindings: &ActionMap) -> Result<InputScript> {
         .with_context(|| format!("reading input script {}", path.display()))?;
     InputScript::parse(&src, bindings)
         .with_context(|| format!("invalid input script {}", path.display()))
+}
+
+fn load_scene(path: &Path) -> Result<Scene> {
+    let src = std::fs::read_to_string(path).context("reading the file")?;
+    Ok(Scene::parse(&src)?)
 }

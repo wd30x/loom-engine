@@ -710,6 +710,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "928452f9c953e142b2f0973e4bd5f34445fcaa8069556ea97a3c9d34d15a4cf8"
 dependencies = [
  "bytemuck",
+ "libm",
  "serde_core",
 ]
 
@@ -1051,6 +1052,7 @@ dependencies = [
  "loom_core",
  "loom_platform",
  "loom_render",
+ "loom_scene",
  "serde",
  "serde_json",
 ]
@@ -1075,6 +1077,16 @@ dependencies = [
  "pollster",
  "thiserror 2.0.21",
  "wgpu",
+]
+
+[[package]]
+name = "loom_scene"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "ron",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1,0 +1,14 @@
+// Built-in demo scene, used when `loom run` gets no --scene (docs/architecture.md section 10).
+(
+    version: 1,
+    camera: "main_cam",               // 当前相机节点的路径
+    ambient: (0.2, 0.2, 0.25),        // 环境光，线性 RGB
+    nodes: [
+        (name: "ground", mesh: Plane, scale: (20.0, 1.0, 20.0), color: (0.35, 0.35, 0.38)),
+        (name: "cube", position: (0.0, 0.5, 0.0), mesh: Cube, color: (0.8, 0.25, 0.2)),
+        (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
+            light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
+        (name: "main_cam", position: (2.5, 2.0, 3.5), look_at: (0.0, 0.5, 0.0),
+            camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+    ],
+)

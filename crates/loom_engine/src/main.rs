@@ -8,6 +8,7 @@ mod report;
 mod run;
 mod sim;
 mod state;
+mod view;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -53,6 +54,9 @@ pub(crate) struct RunArgs {
     /// Parent directories are created.
     #[arg(long, value_name = "PATH")]
     record: Option<PathBuf>,
+    /// Load a scene file instead of the built-in demo scene.
+    #[arg(long, value_name = "PATH")]
+    scene: Option<PathBuf>,
     /// Render resolution.
     #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
     size: Size,

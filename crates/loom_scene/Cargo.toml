@@ -1,0 +1,17 @@
+[package]
+name = "loom_scene"
+description = "Scene files: parsing, validation and the runtime node tree. No rendering, no platform."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+glam.workspace = true
+ron.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

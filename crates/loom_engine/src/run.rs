@@ -15,6 +15,7 @@ use crate::output::ensure_parent_dir;
 use crate::report::{InfoReport, RunReport};
 use crate::sim::Sim;
 use crate::state::write_state;
+use crate::view::render_scene;
 
 pub(crate) fn info() -> Result<InfoReport> {
     let adapter = loom_render::probe_adapter()?;
@@ -47,7 +48,7 @@ fn run_headless(args: &RunArgs) -> Result<RunReport> {
     let (screenshot, adapter) = match &args.screenshot {
         Some(path) => {
             let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
-            renderer.render(sim.game().model_matrix())?;
+            render_scene(&mut renderer, sim.game().scene())?;
             let saved = save_screenshot(&renderer, path)?;
             (Some(saved), Some(renderer.adapter_summary().into()))
         }
@@ -64,6 +65,7 @@ fn run_headless(args: &RunArgs) -> Result<RunReport> {
         state,
         record,
         input: sim.input_report(),
+        scene: sim.scene_path(),
         adapter,
     })
 }
@@ -123,6 +125,7 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         state: app.state,
         record: app.record,
         input: app.sim.input_report(),
+        scene: app.sim.scene_path(),
         adapter: Some(renderer.adapter_summary().into()),
     })
 }
@@ -201,7 +204,7 @@ impl WindowRun<'_> {
             self.sim.tick();
         }
 
-        if !renderer.render(self.sim.game().model_matrix())? {
+        if !render_scene(renderer, self.sim.game().scene())? {
             return Ok(AppControl::Continue);
         }
         self.frames += 1;

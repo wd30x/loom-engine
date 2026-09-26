@@ -4,15 +4,16 @@
 //! blits that target to the surface; headless mode reads it back to CPU
 //! memory. The two paths share all drawing code. See `docs/architecture.md`.
 
-mod camera;
-mod cube;
+mod frame;
+mod mesh;
 
 use std::sync::mpsc;
 
-use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-pub use camera::Camera;
+pub use frame::{DirectionalLight, DrawItem, Frame};
+use frame::{GpuDraw, GpuGlobals};
+pub use mesh::MeshKind;
 
 /// Format of the offscreen color target. Readback returns its bytes as-is,
 /// i.e. sRGB-encoded RGBA8.
@@ -93,6 +94,41 @@ fn adapter_options<'a>(
         force_fallback_adapter: false,
         compatible_surface: surface,
         ..Default::default()
+    }
+}
+
+impl DrawBuffer {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        globals: &wgpu::Buffer,
+        capacity: usize,
+    ) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("draws"),
+            size: (capacity * std::mem::size_of::<GpuDraw>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mesh"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer.as_entire_binding(),
+                },
+            ],
+        });
+        Self {
+            buffer,
+            capacity,
+            bind_group,
+        }
     }
 }
 
@@ -282,19 +318,36 @@ impl Presenter {
     }
 }
 
-/// The renderer. Draws a single mesh (the cube) with a caller-supplied model
-/// matrix, into an offscreen target, and optionally presents it to a surface.
+/// Draw items the per-draw buffer holds before it first has to grow.
+const INITIAL_DRAW_CAPACITY: usize = 64;
+
+/// Vertex and index buffers of one built-in mesh.
+struct GpuMesh {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    index_count: u32,
+}
+
+/// Per-draw data (model matrix, normal matrix, color) for every draw item of
+/// a frame, read by the shader by instance index. Grows as needed.
+struct DrawBuffer {
+    buffer: wgpu::Buffer,
+    capacity: usize,
+    bind_group: wgpu::BindGroup,
+}
+
+/// The renderer. Draws a [`Frame`] (lit meshes seen from a camera) into an
+/// offscreen target, and optionally presents it to a surface.
 pub struct Renderer {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    camera: Camera,
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
+    bind_group_layout: wgpu::BindGroupLayout,
+    globals_buffer: wgpu::Buffer,
+    draws: DrawBuffer,
+    /// Indexed like `MeshKind::ALL`.
+    meshes: Vec<GpuMesh>,
     /// Requested size; `(0, 0)` while minimized.
     size: (u32, u32),
     /// `None` while the size is zero.
@@ -353,33 +406,43 @@ impl Renderer {
             }))?;
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl"));
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mesh uniforms"),
-            size: std::mem::size_of::<Mat4>() as wgpu::BufferAddress,
+        let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("globals"),
+            size: std::mem::size_of::<GpuGlobals>() as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("mesh"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mesh"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let draws = DrawBuffer::new(
+            &device,
+            &bind_group_layout,
+            &globals_buffer,
+            INITIAL_DRAW_CAPACITY,
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh"),
             bind_group_layouts: &[Some(&bind_group_layout)],
@@ -392,7 +455,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Some(cube::Vertex::layout())],
+                buffers: &[Some(mesh::Vertex::layout())],
             },
             primitive: wgpu::PrimitiveState {
                 front_face: wgpu::FrontFace::Ccw,
@@ -417,29 +480,36 @@ impl Renderer {
             cache: None,
         });
 
-        let (vertices, indices) = cube::cube_mesh();
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cube vertices"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cube indices"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        let meshes = MeshKind::ALL
+            .iter()
+            .map(|&kind| {
+                let (vertices, indices) = mesh::mesh(kind);
+                GpuMesh {
+                    vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mesh vertices"),
+                        contents: bytemuck::cast_slice(&vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+                    indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mesh indices"),
+                        contents: bytemuck::cast_slice(&indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    }),
+                    index_count: u32::try_from(indices.len())
+                        .expect("built-in meshes have few indices"),
+                }
+            })
+            .collect();
 
         Ok(Self {
             adapter,
             device,
             queue,
-            camera: Camera::default(),
             pipeline,
-            uniform_buffer,
-            uniform_bind_group,
-            vertex_buffer,
-            index_buffer,
-            index_count: u32::try_from(indices.len()).expect("cube has 36 indices"),
+            bind_group_layout,
+            globals_buffer,
+            draws,
+            meshes,
             size: (0, 0),
             offscreen: None,
             presenter: None,
@@ -487,17 +557,34 @@ impl Renderer {
         Ok(())
     }
 
-    /// Draws one frame with the given model matrix, and presents it if a
-    /// surface is attached. Returns `false` if the frame was skipped because
-    /// the size is zero.
-    pub fn render(&mut self, model: Mat4) -> Result<bool, RenderError> {
+    /// Draws one frame, and presents it if a surface is attached. The
+    /// projection's aspect ratio follows the current render size. Returns
+    /// `false` if the frame was skipped because the size is zero.
+    pub fn render(&mut self, frame: &Frame<'_>) -> Result<bool, RenderError> {
+        if self.offscreen.is_none() {
+            return Ok(false);
+        }
+        if frame.draws.len() > self.draws.capacity {
+            let capacity = frame.draws.len().next_power_of_two();
+            self.draws = DrawBuffer::new(
+                &self.device,
+                &self.bind_group_layout,
+                &self.globals_buffer,
+                capacity,
+            );
+        }
         let Some(offscreen) = &self.offscreen else {
             return Ok(false);
         };
         let aspect = offscreen.width as f32 / offscreen.height as f32;
-        let mvp = self.camera.view_projection(aspect) * model;
+        let globals = GpuGlobals::new(frame, aspect);
         self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&mvp));
+            .write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
+        let draws: Vec<GpuDraw> = frame.draws.iter().map(GpuDraw::new).collect();
+        if !draws.is_empty() {
+            self.queue
+                .write_buffer(&self.draws.buffer, 0, bytemuck::cast_slice(&draws));
+        }
 
         let mut encoder = self
             .device
@@ -529,10 +616,23 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(0..self.index_count, 0, 0..1);
+            pass.set_bind_group(0, &self.draws.bind_group, &[]);
+            let mut bound = None;
+            for (i, item) in frame.draws.iter().enumerate() {
+                let slot = MeshKind::ALL
+                    .iter()
+                    .position(|&k| k == item.mesh)
+                    .expect("MeshKind::ALL lists every mesh kind");
+                let mesh = &self.meshes[slot];
+                if bound != Some(slot) {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+                    bound = Some(slot);
+                }
+                // The instance index selects this item's per-draw data.
+                let instance = u32::try_from(i).expect("draw count fits in u32");
+                pass.draw_indexed(0..mesh.index_count, 0, instance..instance + 1);
+            }
         }
 
         let mut frame = None;

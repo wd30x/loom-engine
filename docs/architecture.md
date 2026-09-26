@@ -288,6 +288,8 @@ RON，所有结构体 `deny_unknown_fields`：
 )
 ```
 
+顶层字段 `version`、`camera`、`ambient`、`nodes` **都必填**（E2 审查决定：场景文件多由 AI 手写，宁可显式）。可选字段不用写 `Some(...)`，解析时开了 ron 的 `IMPLICIT_SOME` 扩展。
+
 节点字段（除 `name` 外都可省略）：
 
 | 字段 | 类型 | 默认 | 说明 |
@@ -318,7 +320,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - `camera` 必须指向一个存在的、带 `camera` 组件的节点
 - 整个场景**最多一个** `light`（以后要多光源时再扩展）
 - `rotation` 和 `look_at` 不能同时出现；`look_at` 的目标不能等于 `position`，方向也不能和 Y 轴平行（`right` 会退化）
-- 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间；`fov_y` 在 (0, 180) 之间；`0 < near < far`
+- 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间（节点 `color`、`light.color`、`ambient` 都是）；`light.intensity` ≥ 0；`fov_y` 在 (0, 180) 之间；`0 < near < far`
 
 ### 演示游戏和场景的关系
 
