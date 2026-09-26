@@ -191,6 +191,11 @@ struct Presenter {
     bind_group_layout: wgpu::BindGroupLayout,
     /// Binds the current offscreen color view; rebuilt on resize.
     bind_group: Option<wgpu::BindGroup>,
+    /// `config` changed since the surface was last configured. Configuring
+    /// is deferred to the next acquire: on Vulkan, destroying a swapchain
+    /// that was configured but never presented kills the process (exit code
+    /// 2173) when the window closes before the first frame.
+    needs_configure: bool,
 }
 
 impl Presenter {
@@ -281,13 +286,14 @@ impl Presenter {
             pipeline,
             bind_group_layout,
             bind_group: None,
+            needs_configure: false,
         })
     }
 
     fn resize(&mut self, device: &wgpu::Device, offscreen: &Offscreen) {
         self.config.width = offscreen.width;
         self.config.height = offscreen.height;
-        self.surface.configure(device, &self.config);
+        self.needs_configure = true;
         self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("blit"),
             layout: &self.bind_group_layout,
@@ -298,9 +304,16 @@ impl Presenter {
         }));
     }
 
-    /// Acquires the next surface texture. Returns `None` (after
-    /// reconfiguring when needed) if this frame cannot be presented.
+    /// Configures the surface if needed, then acquires the next surface
+    /// texture. Returns `None` (after reconfiguring when needed) if this
+    /// frame cannot be presented.
     fn acquire(&mut self, device: &wgpu::Device) -> Option<(wgpu::SurfaceTexture, bool)> {
+        // Only reached with a bind group, i.e. after a non-zero resize, so
+        // the surface is never configured with a zero size.
+        if self.needs_configure {
+            self.surface.configure(device, &self.config);
+            self.needs_configure = false;
+        }
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) => Some((t, false)),
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => Some((t, true)),

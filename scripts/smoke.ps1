@@ -38,14 +38,15 @@ public static class SmokeWin32 {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
 
-    // The visible top-level window of `pid` titled `title`. Matching on the
-    // title matters: winit also creates a hidden helper window.
-    public static IntPtr FindWindow(uint pid, string title) {
+    // The top-level window of `pid` titled `title` (visible only, unless
+    // `anyVisibility`). Matching on the title matters: winit also creates a
+    // hidden helper window.
+    public static IntPtr FindWindow(uint pid, string title, bool anyVisibility = false) {
         IntPtr found = IntPtr.Zero;
         EnumWindows((hwnd, _) => {
             uint owner;
             GetWindowThreadProcessId(hwnd, out owner);
-            if (owner != pid || !IsWindowVisible(hwnd)) return true;
+            if (owner != pid || (!anyVisibility && !IsWindowVisible(hwnd))) return true;
             var text = new StringBuilder(256);
             GetWindowText(hwnd, text, text.Capacity);
             if (text.ToString() != title) return true;
@@ -423,6 +424,32 @@ if (-not $HeadlessOnly) {
         Assert-True ($state.tick -le $maxTicks) "tick $($state.tick) is more than the $maxTicks possible since the edit: the reload did not restart from tick 0"
         $replay = Invoke-HeadlessReplayScene "$out/w8_good.scene.ron" $state.tick "$out/w8_replay.json"
         Assert-SameBytes "$out/w8.json" $replay
+    }
+
+    Test-Check 'W9' 'exiting before the first frame still exits 0 with a JSON report' {
+        $results = @()
+        foreach ($i in 1..6) {
+            $viaEsc = $i -le 3
+            $run = Start-Loom "w9_$i" @()
+            try {
+                # Busy-wait, no visibility check: send the moment the window
+                # exists, before the renderer can draw a first frame.
+                $deadline = [Diagnostics.Stopwatch]::StartNew()
+                while ($run.Window -eq [IntPtr]::Zero) {
+                    Assert-True ($deadline.Elapsed.TotalSeconds -lt 10) 'loom window did not appear within 10 s'
+                    Assert-True (-not $run.Process.HasExited) "loom exited early with code $($run.Process.ExitCode)"
+                    $run.Window = [SmokeWin32]::FindWindow([uint32]$run.Process.Id, 'loom', $true)
+                }
+                if ($viaEsc) { Send-Key $run 'Esc' $true } else { Send-Close $run }
+                $r = Wait-Loom $run
+                $how = if ($viaEsc) { 'Esc' } else { 'WM_CLOSE' }
+                $results += "$how=$($r.Code)"
+                Assert-ExitOk $r
+            } finally {
+                Stop-Loom $run
+            }
+        }
+        $script:detail = $results -join ', '
     }
 }
 
