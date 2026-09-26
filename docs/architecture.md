@@ -27,8 +27,11 @@ loom_platform  loom_render   (彼此不知道对方)
 | wgpu surface | 有 | 没有（`compatible_surface: None`） |
 | 帧推进 | 墙钟时间驱动累加器 | 每帧恰好推进 1 个 tick，不读墙钟 |
 | 输出 | 画面显示到窗口 | 画面读回 CPU，可存成 PNG |
+| GPU | 总是创建 | **只在需要输出画面时创建**（目前是指定了 `--screenshot`），且只渲染最后一帧 |
 
 两种模式**共用同一套模拟代码和绘制代码**，只有帧推进方式和最后一步（呈现还是读回）不一样。
+
+**无头模式为什么只渲染需要的帧**：无头模式下中间帧谁也看不到；渲染器又是模拟状态的纯函数（每帧清屏、没有跨帧的渲染状态），所以只渲染最后一帧，得到的图和逐帧渲染逐字节相同。这样做还有一个更重要的好处：不截图的无头运行完全不碰 GPU，没有 GPU 的机器（比如 CI）也能跑模拟和集成测试。
 
 窗口模式下的补充语义（E0-3）：
 - `--size` 只决定窗口创建时的 inner size（物理像素）。之后离屏目标跟着窗口尺寸变，所以画面不会被拉伸，截图也是当前窗口的尺寸。
@@ -56,6 +59,13 @@ loom_platform  loom_render   (彼此不知道对方)
 - 渲染在 E0 阶段直接用最新的 tick 状态，不做插值。以后需要时再加，会另写决策。
 
 模拟代码里的禁止事项：读墙钟时间（`Instant::now()` 等）、依赖 `HashMap`/`HashSet` 的迭代顺序、使用不带种子的随机数。
+
+**模拟用的数学**：
+- 计算模拟状态时，**不许用 std 的超越函数**（`sin`、`cos`、`tan`、`sin_cos`、`atan2`、`exp`、`ln`、`powf` 等）。std 把它们交给平台的数学库，不同操作系统和 C 运行时的结果可能差最后一位。改用 `libm` crate（纯 Rust 实现，在哪儿算结果都一样）。用 glam 的旋转之类的函数时，要打开 glam 的 `libm` 特性。
+- `+ - * /`、`sqrt`、`%`（取余）是 IEEE 754 规定精确舍入的，可以随便用。
+- 不许打开 `fast-math` 之类会改变浮点语义的选项。
+- 渲染端不受这条限制，因为图像本来就只保证本机一致。
+- 执行方式：等出现专门的模拟 crate（G1）时，给它加一个 crate 级别的 `clippy.toml`，用 `disallowed-methods` 禁掉这些函数（见 TODO G1.0）。
 
 **确定性的范围**（E0-4）：
 - **图像**：只保证同一台机器、同一驱动下逐字节相同。实测同一块 GPU 上 Vulkan 和 Dx12 的截图也逐字节相同，但换 GPU 或换驱动不作保证。PNG 只用于本机回归和人（AI）眼检查。
@@ -90,21 +100,24 @@ loom run [OPTIONS]
     --headless             不创建窗口；每帧恰好 1 个 tick
     --frames <N>           跑 N 帧（N ≥ 1）后退出。无头模式必须提供
     --screenshot <PATH>    退出前把最后一帧存成 PNG，会自动创建父目录
+    --dump-state <PATH>    退出前把模拟状态写成 JSON（见下文「状态导出」），会自动创建父目录
     --size <WxH>           渲染分辨率，默认 1280x720；窗口模式下只决定初始窗口尺寸（第 2 节）
 
 loom info                  输出 GPU adapter 信息，不渲染
 ```
 
-无头模式下，第 k 帧（从 1 开始数）渲染前刚跑完第 k 个 tick，所以 `--frames 60` 截图时 `sim_time = 1.0`。
+无头模式下，第 k 帧（从 1 开始数）跑第 k 个 tick；截图和状态导出取的都是第 N 个 tick 跑完之后的状态，所以 `--frames 60` 时 `sim_time = 1.0`。
 
 ### 输出格式
 
 `loom run` 成功：
 ```json
-{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":"out/e0.png","adapter":{"name":"...","backend":"Vulkan","driver":"..."}}
+{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":"out/e0.png","state":null,"adapter":{"name":"...","backend":"Vulkan","driver":"..."}}
 ```
 - `mode`：`"headless"` 或 `"window"`
 - `screenshot`：没有截图时为 `null`
+- `state`：没有导出状态时为 `null`，否则是 `--dump-state` 给的路径
+- `adapter`：没有创建 GPU 设备时为 `null`（无头模式且没有 `--screenshot`）
 - 窗口模式提前退出（Esc、关窗）时，`frames` 和 `ticks` 是实际跑到的数
 
 `loom info` 成功：
@@ -115,6 +128,26 @@ loom info                  输出 GPU adapter 信息，不渲染
 失败：
 ```json
 {"status":"error","error":"人能读懂的错误描述"}
+```
+
+### 状态导出
+
+`--dump-state <PATH>` 在退出前把模拟状态写成 JSON 文件。它是**跨机器回归的依据**（第 4 节）：只要输入相同，这个文件在任何机器上都必须逐字节相同。
+
+格式：
+- 用 `serde_json::to_string_pretty` 输出（2 空格缩进），**末尾补一个换行**。
+- 顶层字段属于引擎：`tick`、`sim_time`。以后加的引擎级状态（比如当前按下的动作）也放在顶层。
+- 游戏状态整个放在**一个**以游戏命名的字段下。现在是 E0 的旋转立方体，字段名是 `demo`。
+- 字段名的稳定性规则和 stdout 一样：可以加，不能删、不能改名、不能改含义。
+
+```json
+{
+  "tick": 60,
+  "sim_time": 1.0,
+  "demo": {
+    "yaw": 1.0
+  }
+}
 ```
 
 ## 7. 错误处理
