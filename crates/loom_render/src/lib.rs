@@ -81,23 +81,50 @@ pub fn probe_adapter() -> Result<AdapterSummary, RenderError> {
     Ok(AdapterSummary::from_info(&adapter.get_info()))
 }
 
-fn new_instance() -> wgpu::Instance {
-    // `_from_env` lets WGPU_BACKEND etc. override the defaults for debugging.
-    wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
+/// The backends used unless `WGPU_BACKEND` overrides them. On Windows only
+/// Dx12: with Vulkan, exiting after a window run sometimes hung for about
+/// 2 minutes or died with exit code 2173 on this project's machine, while
+/// Dx12 never did in the same measurements (`docs/architecture.md` section
+/// 3). Elsewhere, wgpu's default.
+fn default_backends() -> wgpu::Backends {
+    if cfg!(windows) {
+        wgpu::Backends::DX12
+    } else {
+        wgpu::Backends::default()
+    }
 }
 
-/// Runs one step of renderer creation, logging (at debug level) before it
-/// starts and how long it took. If a step hangs, the last line of the log
-/// names it.
-fn init_step<T>(name: &str, f: impl FnOnce() -> T) -> T {
-    log::debug!("renderer init: {name} ...");
+fn new_instance() -> wgpu::Instance {
+    // `with_env` lets WGPU_BACKEND (and the flag and backend-option
+    // variables) override the defaults, e.g. `WGPU_BACKEND=vulkan` to debug.
+    wgpu::Instance::new(
+        wgpu::InstanceDescriptor {
+            backends: default_backends(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        }
+        .with_env(),
+    )
+}
+
+/// Log prefix of the renderer creation steps.
+const INIT: &str = "renderer init";
+/// Log prefix of the renderer shutdown steps.
+const EXIT: &str = "renderer exit";
+
+/// Runs one step of renderer creation or shutdown (`phase`), logging (at
+/// debug level) before it starts and how long it took. If a step hangs, the
+/// last line of the log names it.
+fn step<T>(phase: &str, name: &str, f: impl FnOnce() -> T) -> T {
+    log::debug!("{phase}: {name} ...");
     let start = std::time::Instant::now();
     let out = f();
-    log::debug!(
-        "renderer init: {name} took {} ms",
-        start.elapsed().as_millis()
-    );
+    log::debug!("{phase}: {name} took {} ms", start.elapsed().as_millis());
     out
+}
+
+/// [`step`] of renderer creation.
+fn init_step<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    step(INIT, name, f)
 }
 
 fn adapter_options<'a>(
@@ -456,7 +483,7 @@ impl Renderer {
                 ..Default::default()
             }))
         })?;
-        log::debug!("renderer init: pipeline and resources ...");
+        log::debug!("{INIT}: pipeline and resources ...");
         let resources_start = std::time::Instant::now();
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl"));
@@ -540,7 +567,7 @@ impl Renderer {
             .collect();
 
         log::debug!(
-            "renderer init: pipeline and resources took {} ms",
+            "{INIT}: pipeline and resources took {} ms",
             resources_start.elapsed().as_millis()
         );
         Ok(Self {
@@ -560,6 +587,40 @@ impl Renderer {
 
     pub fn adapter_summary(&self) -> AdapterSummary {
         AdapterSummary::from_info(&self.adapter.get_info())
+    }
+
+    /// Destroys the renderer one part at a time, logging each step (debug)
+    /// like renderer creation does: the surface, then every resource, then
+    /// the queue, the device and the adapter. Resources hold the device, so
+    /// the device step is where it is really destroyed.
+    pub fn shutdown(self) {
+        let Self {
+            adapter,
+            device,
+            queue,
+            pipeline,
+            bind_group_layout,
+            globals_buffer,
+            draws,
+            meshes,
+            size: _,
+            offscreen,
+            presenter,
+        } = self;
+        step(EXIT, "presenter", || drop(presenter));
+        step(EXIT, "resources", || {
+            drop((
+                offscreen,
+                draws,
+                meshes,
+                pipeline,
+                bind_group_layout,
+                globals_buffer,
+            ));
+        });
+        step(EXIT, "queue", || drop(queue));
+        step(EXIT, "device", || drop(device));
+        step(EXIT, "adapter", || drop(adapter));
     }
 
     /// Current render size in pixels; `(0, 0)` while minimized.
@@ -784,5 +845,14 @@ impl Renderer {
         }
         buffer.unmap();
         Ok(pixels)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn default_backend_on_windows_is_dx12_only() {
+        assert_eq!(super::default_backends(), wgpu::Backends::DX12);
     }
 }

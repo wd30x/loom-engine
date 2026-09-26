@@ -139,10 +139,11 @@ function Get-LastLogLine($run) {
 }
 
 # Starts a windowed run and waits (up to 10 s) for its window, then (up to
-# 30 s) for the renderer: the fixed sleeps of the checks count from there.
-# Renderer creation sometimes stalls for minutes (G1.4); that is reported as
-# such instead of surfacing as some later assertion.
+# $rendererTimeoutS) for the renderer: the fixed sleeps of the checks count
+# from there. Renderer creation sometimes stalls for minutes (G1.4); that is
+# reported as such instead of surfacing as some later assertion.
 function Start-LoomWindow([string]$name, [string[]]$loomArgs) {
+    $rendererTimeoutS = 30
     $run = Start-Loom $name $loomArgs
     $deadline = (Get-Date).AddSeconds(10)
     while ($run.Window -eq [IntPtr]::Zero) {
@@ -154,13 +155,13 @@ function Start-LoomWindow([string]$name, [string[]]$loomArgs) {
         Start-Sleep -Milliseconds 100
         $run.Window = [SmokeWin32]::FindWindow([uint32]$run.Process.Id, 'loom')
     }
-    $deadline = (Get-Date).AddSeconds(30)
+    $deadline = (Get-Date).AddSeconds($rendererTimeoutS)
     while (-not (Select-String -Path $run.Stderr -Pattern 'surface format' -Quiet -ErrorAction SilentlyContinue)) {
         if ($run.Process.HasExited) { throw "loom exited early with code $($run.Process.ExitCode); last log line: $(Get-LastLogLine $run)" }
         if ((Get-Date) -ge $deadline) {
             $last = Get-LastLogLine $run
             Stop-Loom $run
-            throw "renderer init stalled: no `"surface format`" after 30 s; last log line: $last"
+            throw "renderer init stalled: no `"surface format`" after $rendererTimeoutS s; last log line: $last"
         }
         Start-Sleep -Milliseconds 50
     }
@@ -244,6 +245,7 @@ Test-Check 'H1' 'headless screenshots are byte-identical and 1280x720' {
     foreach ($n in 'a', 'b') {
         $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--screenshot', "$out/h1_$n.png")
         Assert-ExitOk $r
+        Assert-True ($r.Json.adapter.backend -eq 'Dx12') "backend is $($r.Json.adapter.backend), expected the default Dx12"
     }
     Assert-SameBytes "$out/h1_a.png" "$out/h1_b.png"
     $size = Get-PngSize "$out/h1_a.png"
@@ -269,6 +271,19 @@ Test-Check 'H3' 'headless run without screenshot loads no GPU driver' {
     }
 }
 
+Test-Check 'H4' 'WGPU_BACKEND=vulkan overrides the default backend and renders the same image' {
+    Assert-True (Test-Path "$out/h1_a.png") 'no screenshot from H1'
+    $env:WGPU_BACKEND = 'vulkan'
+    try {
+        $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--screenshot', "$out/h4.png")
+    } finally {
+        Remove-Item Env:WGPU_BACKEND -ErrorAction SilentlyContinue
+    }
+    Assert-ExitOk $r
+    Assert-True ($r.Json.adapter.backend -eq 'Vulkan') "backend is $($r.Json.adapter.backend), expected Vulkan"
+    Assert-SameBytes "$out/h1_a.png" "$out/h4.png"
+}
+
 # ---------------------------------------------------------------- W: window
 
 if (-not $HeadlessOnly) {
@@ -277,7 +292,7 @@ if (-not $HeadlessOnly) {
         try {
             Start-Sleep -Milliseconds 1500
             $modules = Get-ModuleNames $run.Process
-            Assert-True (($modules -contains 'vulkan-1.dll') -or ($modules -contains 'd3d12.dll')) 'neither vulkan-1.dll nor d3d12.dll is loaded'
+            Assert-True ($modules -contains 'd3d12.dll') 'd3d12.dll is not loaded'
             Send-Close $run
             Assert-ExitOk (Wait-Loom $run)
         } finally {
@@ -292,6 +307,7 @@ if (-not $HeadlessOnly) {
             Send-Key $run 'Esc' $true
             $r = Wait-Loom $run
             Assert-ExitOk $r
+            Assert-True ($r.Json.adapter.backend -eq 'Dx12') "backend is $($r.Json.adapter.backend), expected the default Dx12"
             Assert-True ($null -ne $r.Json.screenshot) 'screenshot is null'
             Assert-True (Test-Path "$out/w1.png") 'PNG missing'
         } finally {
@@ -422,7 +438,7 @@ if (-not $HeadlessOnly) {
             $script:detail = 'minimized CPU {0:P1} of one core; {1} ticks in {2:N2} s wall = {3:N3} x 60 Hz; renderer_init_ms {5}; {4:N2} s not covered by ticks' -f `
                 $cpu, $r.Json.ticks, $lifetime, $ratio, $untracked, $r.Json.renderer_init_ms
             Assert-True ($cpu -lt 0.05) ('minimized CPU is {0:P1} of one core' -f $cpu)
-            Assert-True ($untracked -ge 0 -and $untracked -lt 1.5) ('{0:N2} s of wall time not covered by ticks' -f $untracked)
+            Assert-True ($untracked -ge 0 -and $untracked -lt 1.0) ('{0:N2} s of wall time not covered by ticks' -f $untracked)
         } finally {
             Stop-Loom $run
         }

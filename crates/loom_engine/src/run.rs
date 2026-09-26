@@ -58,11 +58,9 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
             let init_ms = millis_since(started);
             render_scene(&mut renderer, sim.game().scene())?;
             let saved = save_screenshot(&renderer, path)?;
-            (
-                Some(saved),
-                Some(renderer.adapter_summary().into()),
-                Some(init_ms),
-            )
+            let adapter = renderer.adapter_summary();
+            renderer.shutdown();
+            (Some(saved), Some(adapter.into()), Some(init_ms))
         }
         None => (None, None, None),
     };
@@ -143,7 +141,15 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
     }
     let renderer = app
         .renderer
+        .take()
         .context("the window closed before the renderer was created")?;
+    let adapter = renderer.adapter_summary();
+    renderer.shutdown();
+    // Like the renderer steps: if dropping the window hangs, the log says so.
+    log::debug!("exit: window ...");
+    let window_drop = Instant::now();
+    drop(app.window.take());
+    log::debug!("exit: window took {} ms", window_drop.elapsed().as_millis());
     Ok(RunReport {
         status: "ok",
         mode: "window",
@@ -158,7 +164,7 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
         scene: app.sim.scene_path(),
         reloads: app.reloads,
         reload_errors: app.reload_errors,
-        adapter: Some(renderer.adapter_summary().into()),
+        adapter: Some(adapter.into()),
         renderer_init_ms: app.renderer_init_ms,
     })
 }
