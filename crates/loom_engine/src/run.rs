@@ -63,6 +63,7 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         last_frame: None,
         frames: 0,
         last_size: [args.size.width, args.size.height],
+        has_frame: false,
         screenshot: None,
         error: None,
         done: false,
@@ -102,6 +103,9 @@ struct WindowRun<'a> {
     frames: u64,
     /// Size of the most recently rendered frame.
     last_size: [u32; 2],
+    /// The offscreen target holds a rendered frame. Cleared when a resize
+    /// replaces (or, when minimized, drops) the target.
+    has_frame: bool,
     screenshot: Option<String>,
     error: Option<anyhow::Error>,
     /// Set once we decided to exit; later events are ignored.
@@ -112,6 +116,32 @@ impl WindowRun<'_> {
     fn fail(&mut self, e: anyhow::Error) -> AppControl {
         self.error = Some(e);
         self.done = true;
+        AppControl::Exit
+    }
+
+    /// The single exit path for every way a window run ends (`--frames`
+    /// reached, Esc, window closed). Saves the last rendered frame when
+    /// `--screenshot` was given.
+    fn finish(&mut self) -> AppControl {
+        if self.done {
+            return AppControl::Exit;
+        }
+        self.done = true;
+        let args = self.args;
+        let Some(path) = &args.screenshot else {
+            return AppControl::Exit;
+        };
+        match &self.renderer {
+            Some(renderer) if self.has_frame => match save_screenshot(renderer, path) {
+                Ok(saved) => self.screenshot = Some(saved),
+                Err(e) => return self.fail(e),
+            },
+            _ => log::warn!(
+                "not saving screenshot {}: no rendered frame is available \
+                 (nothing drawn yet, or the window is minimized)",
+                path.display()
+            ),
+        }
         AppControl::Exit
     }
 
@@ -133,15 +163,12 @@ impl WindowRun<'_> {
             return Ok(AppControl::Continue);
         }
         self.frames += 1;
+        self.has_frame = true;
         let (w, h) = renderer.size();
         self.last_size = [w, h];
 
         if self.args.frames == Some(self.frames) {
-            if let Some(path) = &self.args.screenshot {
-                self.screenshot = Some(save_screenshot(renderer, path)?);
-            }
-            self.done = true;
-            return Ok(AppControl::Exit);
+            return Ok(self.finish());
         }
         Ok(AppControl::Continue)
     }
@@ -164,10 +191,17 @@ impl WindowApp for WindowRun<'_> {
             return AppControl::Exit;
         }
         log::debug!("resized to {width}x{height}");
-        match self.renderer.as_mut().map(|r| r.resize(width, height)) {
-            Some(Err(e)) => self.fail(e.into()),
-            _ => AppControl::Continue,
+        let Some(renderer) = &mut self.renderer else {
+            return AppControl::Continue;
+        };
+        let before = renderer.size();
+        if let Err(e) = renderer.resize(width, height) {
+            return self.fail(e.into());
         }
+        if renderer.size() != before {
+            self.has_frame = false;
+        }
+        AppControl::Continue
     }
 
     fn redraw(&mut self) -> AppControl {
@@ -181,13 +215,11 @@ impl WindowApp for WindowRun<'_> {
     }
 
     fn close_requested(&mut self) -> AppControl {
-        self.done = true;
-        AppControl::Exit
+        self.finish()
     }
 
     fn escape_pressed(&mut self) -> AppControl {
-        self.done = true;
-        AppControl::Exit
+        self.finish()
     }
 }
 
