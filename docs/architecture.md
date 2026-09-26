@@ -13,6 +13,7 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)
 ```
 
 - `loom_scene`：场景文件的解析和校验，以及运行时的节点树（第 10 节）。只依赖 glam、serde、ron、thiserror，不知道渲染和平台。
+- `loom_sim`（G1 起）：游戏的模拟逻辑（现在是演示，以后是角色、相机、碰撞）。依赖 `loom_core`、`loom_scene`、glam、libm。它有**自己的 `clippy.toml`**，用 `disallowed-methods` 禁掉 std 的超越函数（第 4 节）。注意 crate 级的 `clippy.toml` 会整个替换 workspace 的那份，所以要把 workspace 里的设置也抄过来。
 
 - `loom_core`：纯逻辑。固定步长时钟、tick 计数、输入（按键、动作映射、采样、脚本、录制，见第 9 节）。不依赖 winit 和 wgpu，所以可以在任何环境下做单元测试。
 - `loom_platform`：只有它能碰 winit。它把 OS 事件翻译成 `loom_core` 的输入类型，并把窗口句柄交给调用方。
@@ -200,17 +201,22 @@ OS 按键事件 --(loom_platform 翻译)--> Key --(InputCollector 按 tick 采�
 - `loom_core` 自己定义的枚举，变体名用 W3C `KeyboardEvent.code` 的名字（`KeyW`、`Digit1`、`ArrowUp`、`ShiftLeft`……），和 winit 的 `KeyCode` 同名。按的是**物理位置**，不受键盘布局影响。
 - 目前的范围：`KeyA`–`KeyZ`、`Digit0`–`Digit9`、四个方向键、`Space`、`Enter`、`Tab`、`Backspace`、左右 `Shift`/`Control`/`Alt`。其他按键平台层直接忽略。
 - **`Escape` 不是 `Key`**：它保留给引擎用来退出，不能绑定。
-- 鼠标和手柄不在 E1 范围，等 G1.3。
+- 鼠标的移动量作为轴的来源，见下文「模拟量（轴）」；鼠标按键和手柄以后再加。
 
 ### 动作映射 `ActionMap`
 
-RON 文件，是一个列表（**不用 map**：实测 ron 遇到重复的 map 键会静默保留最后一个）：
+RON 文件，里面是两个列表（**不用 map**：实测 ron 遇到重复的 map 键会静默保留最后一个）。`axes` 见下文「模拟量（轴）」（G1 起）：
 
 ```ron
-[
-    (action: "move_forward", keys: [KeyW, ArrowUp]),
-    (action: "move_left",    keys: [KeyA, ArrowLeft]),
-]
+(
+    actions: [
+        (action: "roll", keys: [Space]),
+    ],
+    axes: [
+        (axis: "move_x", keys: [(KeyD, 1.0), (KeyA, -1.0)]),
+        (axis: "look_x", keys: [(KeyL, 0.04), (KeyJ, -0.04)], mouse: X, mouse_scale: 0.0025),
+    ],
+)
 ```
 
 - 动作名必须匹配 `^[a-z][a-z0-9_]*$`
@@ -255,6 +261,50 @@ RON 文件，是一个列表（**不用 map**：实测 ron 遇到重复的 map �
   - 不能按下已经按住的动作，也不能松开没按住的动作
 - **录制输出是规范形式**：事件按 `(tick, 动作名)` 排序；用 ron 的 `PrettyConfig`，`depth_limit(2)`（每个事件占一行）、`new_line("\n")`，末尾补一个换行。所以对任何合法脚本 S，「回放 S 并录制」得到的就是 S 排序后的规范形式。
 - 退出时还按住的动作，录制里不补松开事件。
+
+### 模拟量（轴）（G1 起）
+
+决策（2026-09-26，用户确认）：黑魂 3 式自由环绕相机；G1 只做键鼠，手柄以后作为轴的另一个输入来源加进来。
+
+动作是开关量（按了/没按），**轴**是每个 tick 一个 `f32`。移动（`move_x`、`move_y`）和视角（`look_x`、`look_y`）都是轴，这样以后接手柄摇杆时，游戏代码不用改。
+
+**单位由游戏定义**，键位文件负责把输入换算成这个单位。比如游戏规定 `look_x` 的单位是「这个 tick 转多少弧度」，键位就写 `(KeyL, 0.04)`（按住每 tick 转 0.04 弧度）和 `mouse_scale: 0.0025`（鼠标每移动一个计数转 0.0025 弧度）。`move_x`、`move_y` 按键给 ±1，游戏负责把移动向量的长度限制在 1 以内。
+
+轴的绑定：
+- `axis`：名字规则同动作；**轴和动作不能同名**
+- `keys`：`(按键, 值)` 的列表，同一个轴里按键不能重复，值必须有限
+- `mouse`：可选，`X` 或 `Y`，取鼠标的**原始移动量**（winit 的 `DeviceEvent::MouseMotion`，不受指针加速和屏幕边缘影响）；有 `mouse` 时必须有 `mouse_scale`，反之亦然。符号约定：鼠标向右 X 为正、向下 Y 为正，要反转就给负的 `mouse_scale`
+
+**采样**（和动作一样，每个 tick 开始时确定一次）：
+- 轴的值 = 所有「正按住或上次采样后按下过」的键的值之和 + 上次采样以来累计的鼠标移动量 × `mouse_scale`。**引擎不做截断**，由游戏按需处理。
+- 鼠标累计量采样后清零。所以一帧跑多个 tick 时，这一帧的鼠标移动全部归到第一个 tick，后面的 tick 是 0。
+- 失焦时鼠标累计量也清零。
+- `ActionState::axis(name) -> f32`：本 tick 的值；没有输入时是 0.0。
+
+**窗口模式抓鼠标**：窗口获得焦点时隐藏指针并锁定（`CursorGrabMode::Locked`，不支持时退回 `Confined`），失焦时释放。Esc 照常退出。`--input` 回放时鼠标和键盘一样被忽略。
+
+**输入脚本**加一个可选的 `axes` 列表（缺省为空，`version` 仍是 1）：
+
+```ron
+(
+    version: 1,
+    tick_hz: 60,
+    events: [],
+    axes: [
+        (tick: 1, axis: "move_y", value: 1.0),
+        (tick: 20, axis: "look_x", value: 0.0175),
+        (tick: 21, axis: "look_x", value: 0.0),
+        (tick: 90, axis: "move_y", value: 0.0),
+    ],
+)
+```
+
+- **电平语义**：`tick: t` 把这个轴的值设为 `value`，一直保持到这个轴的下一个事件。鼠标这种一次性的移动，录下来就是「设为 v」加上下一个 tick「设回 0」。
+- 校验：轴必须在映射里；`value` 必须有限；`tick` ≥ 1 并且在 `axes` 列表里整体不递减；同一个 tick 同一个轴只能出现一次；**不能把轴设成它当前的值**（和「不能按下已按住的动作」同理）。错误信息写 `axes[i]` 和 tick。
+- 录制的规范形式：`axes` 按 `(tick, 轴名)` 排序，**总是写出**（没有就写 `axes: []`），放在 `events` 后面。
+- 实测：ron 写出 f32 用最短的往返表示，读回按位相同（抽查约 3 万个值，0 个不同），所以录制的轴值可以逐位复现。
+
+**状态导出**在顶层 `actions` 后面加 `axes`：映射里的每个轴 → 最后一个 tick 的值，按名字排序。
 
 ## 10. 场景
 
