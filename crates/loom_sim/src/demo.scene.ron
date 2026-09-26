@@ -27,6 +27,7 @@
             light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
         (name: "main_cam", camera: (fov_y: 60.0, near: 0.1, far: 200.0),
             orbit_camera: (target: "player", pivot_height: 1.5, distance: 4.0,
-                yaw: 0.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 20.0)),
+                yaw: 0.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 60.0,
+                collision_radius: 0.2, return_speed: 4.0)),
     ],
 )

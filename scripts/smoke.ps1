@@ -71,7 +71,8 @@ $gpuDriverPrefixes = @('nv', 'amd', 'ig')
 
 # Start-LoomWindow waits for loom_render's "surface format" info line; pin the
 # default filter so an outer RUST_LOG cannot hide it.
-$env:RUST_LOG = 'warn,loom=info,loom_render=info,loom_platform=info'
+$defaultLog = 'warn,loom=info,loom_render=info,loom_platform=info'
+$env:RUST_LOG = $defaultLog
 
 $script:passed = 0
 $script:failed = 0
@@ -412,9 +413,18 @@ if (-not $HeadlessOnly) {
         Assert-SameBytes "$out/w6.json" $replay
     }
 
+    # W7 runs with debug logs (renderer and exit steps, with timestamps); if
+    # it fails, its stderr is kept outside $out, which the next smoke clears.
     Test-Check 'W7' 'minimized window stays idle while ticks follow the wall clock' {
-        $run = Start-LoomWindow 'w7' @('--dump-state', "$out/w7.json")
+        $run = $null
         try {
+            # The filter only applies to this process: restore it once started.
+            $env:RUST_LOG = 'warn,loom=debug,loom_render=debug,loom_platform=info'
+            try {
+                $run = Start-LoomWindow 'w7' @('--dump-state', "$out/w7.json")
+            } finally {
+                $env:RUST_LOG = $defaultLog
+            }
             Start-Sleep -Milliseconds 1000
             Set-WindowState $run $SW_MINIMIZE
             Start-Sleep -Milliseconds 200   # let the minimize take effect
@@ -424,6 +434,7 @@ if (-not $HeadlessOnly) {
             Start-Sleep -Milliseconds 3000
             $run.Process.Refresh()
             $cpu = ($run.Process.TotalProcessorTime - $cpu0).TotalSeconds / $wall.Elapsed.TotalSeconds
+            $closedAt = Get-Date
             Send-Close $run
             $r = Wait-Loom $run
             Assert-ExitOk $r
@@ -432,13 +443,19 @@ if (-not $HeadlessOnly) {
             # Wall time not covered by ticks, not counting startup up to the
             # ready renderer (renderer_init_ms), which varies and sometimes
             # stalls. Had ticks stopped while minimized, the 3 s minimized
-            # span would add to it.
+            # span would add to it. Of the rest, "after close" is the exit.
             $initS = $r.Json.renderer_init_ms / 1000
             $untracked = $lifetime - $initS - $r.Json.ticks / 60
-            $script:detail = 'minimized CPU {0:P1} of one core; {1} ticks in {2:N2} s wall = {3:N3} x 60 Hz; renderer_init_ms {5}; {4:N2} s not covered by ticks' -f `
-                $cpu, $r.Json.ticks, $lifetime, $ratio, $untracked, $r.Json.renderer_init_ms
+            $exitS = ($run.Process.ExitTime - $closedAt).TotalSeconds
+            $script:detail = 'minimized CPU {0:P1} of one core; {1} ticks in {2:N2} s wall = {3:N3} x 60 Hz; renderer_init_ms {5}; exit {6:N2} s after close; {4:N2} s not covered by ticks' -f `
+                $cpu, $r.Json.ticks, $lifetime, $ratio, $untracked, $r.Json.renderer_init_ms, $exitS
             Assert-True ($cpu -lt 0.05) ('minimized CPU is {0:P1} of one core' -f $cpu)
             Assert-True ($untracked -ge 0 -and $untracked -lt 1.0) ('{0:N2} s of wall time not covered by ticks' -f $untracked)
+        } catch {
+            Stop-Loom $run
+            $kept = 'out/smoke-w7-{0:yyyyMMdd-HHmmss}.log' -f (Get-Date)
+            Copy-Item (Join-Path $out 'w7.stderr.txt') $kept -ErrorAction SilentlyContinue
+            throw "$($_.Exception.Message); stderr kept in $kept"
         } finally {
             Stop-Loom $run
         }

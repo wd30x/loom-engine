@@ -88,6 +88,10 @@ pub enum Problem {
     OrbitPitchRange,
     #[error("orbit_camera pitch must be between pitch_min and pitch_max")]
     OrbitPitchOutOfRange,
+    #[error("orbit_camera collision_radius must satisfy 0 < collision_radius < pivot_height")]
+    OrbitCollisionRadius,
+    #[error("orbit_camera return_speed must be greater than 0")]
+    OrbitReturnSpeed,
     #[error(
         "collider may only rotate around Y: rotation x and z must be 0, and look_at is not allowed"
     )]
@@ -168,6 +172,10 @@ pub struct OrbitCamera {
     pub pitch_degrees: f32,
     pub pitch_min_degrees: f32,
     pub pitch_max_degrees: f32,
+    /// Radius of the camera's collision sphere, in meters.
+    pub collision_radius: f32,
+    /// Meters per second the camera moves back out once unblocked.
+    pub return_speed: f32,
 }
 
 /// A static collision shape (`docs/architecture.md` section 11, collision).
@@ -260,6 +268,8 @@ impl Scene {
                 pitch_degrees: desc.pitch,
                 pitch_min_degrees: desc.pitch_min,
                 pitch_max_degrees: desc.pitch_max,
+                collision_radius: desc.collision_radius,
+                return_speed: desc.return_speed,
             });
             scene.orbit_camera = Some(id);
         }
@@ -615,6 +625,8 @@ fn validate_orbit_camera(o: &OrbitCameraDesc, has_camera: bool) -> Result<(), Pr
         o.pitch,
         o.pitch_min,
         o.pitch_max,
+        o.collision_radius,
+        o.return_speed,
     ];
     if !numbers.iter().all(|v| v.is_finite()) {
         return Err(Problem::NotFinite("orbit_camera"));
@@ -627,6 +639,12 @@ fn validate_orbit_camera(o: &OrbitCameraDesc, has_camera: bool) -> Result<(), Pr
     }
     if !(o.pitch_min <= o.pitch && o.pitch <= o.pitch_max) {
         return Err(Problem::OrbitPitchOutOfRange);
+    }
+    if !(0.0 < o.collision_radius && o.collision_radius < o.pivot_height) {
+        return Err(Problem::OrbitCollisionRadius);
+    }
+    if o.return_speed <= 0.0 {
+        return Err(Problem::OrbitReturnSpeed);
     }
     Ok(())
 }

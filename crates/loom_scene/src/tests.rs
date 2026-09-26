@@ -355,7 +355,8 @@ fn orbit(fields: &str) -> String {
 }
 
 const ORBIT_FIELDS: &str = "target: \"hero\", pivot_height: 1.5, distance: 4.0, \
-                            yaw: 10.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 20.0";
+                            yaw: 10.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 20.0, \
+                            collision_radius: 0.2, return_speed: 4.0";
 
 /// `ORBIT_FIELDS` with `field: old` replaced by `field: new`.
 fn orbit_with(old: &str, new: &str) -> String {
@@ -400,6 +401,8 @@ fn character_capsule_and_orbit_camera_parse_with_their_values() {
             pitch_degrees: -15.0,
             pitch_min_degrees: -70.0,
             pitch_max_degrees: 20.0,
+            collision_radius: 0.2,
+            return_speed: 4.0,
         })
     );
     assert!(scene.node(hero).orbit_camera.is_none());
@@ -537,6 +540,43 @@ fn orbit_camera_pitch_outside_its_limits_is_rejected() {
 }
 
 #[test]
+fn orbit_camera_collision_radius_must_be_between_zero_and_the_pivot_height() {
+    // 1.5 equals pivot_height.
+    for radius in ["0.0", "-0.1", "1.5", "2.0"] {
+        let p = node_problem(
+            &format!(
+                "{HERO}, {}",
+                orbit_with(
+                    "collision_radius: 0.2",
+                    &format!("collision_radius: {radius}")
+                )
+            ),
+            "orbit",
+        );
+        assert_eq!(p, Problem::OrbitCollisionRadius, "{radius}");
+        assert!(
+            p.to_string()
+                .contains("0 < collision_radius < pivot_height"),
+            "{p}"
+        );
+    }
+}
+
+#[test]
+fn orbit_camera_return_speed_must_be_greater_than_zero() {
+    for speed in ["0.0", "-1.0"] {
+        let p = node_problem(
+            &format!(
+                "{HERO}, {}",
+                orbit_with("return_speed: 4.0", &format!("return_speed: {speed}"))
+            ),
+            "orbit",
+        );
+        assert_eq!(p, Problem::OrbitReturnSpeed, "{speed}");
+    }
+}
+
+#[test]
 fn orbit_camera_pitch_on_its_limits_is_accepted() {
     for pitch in ["pitch: -70.0", "pitch: 20.0"] {
         let src = scene_with(&format!("{HERO}, {}", orbit_with("pitch: -15.0", pitch)));
@@ -569,6 +609,10 @@ fn character_components_reject_non_finite_numbers() {
         ("pitch: -15.0", "pitch: NaN"),
         ("pitch_min: -70.0", "pitch_min: NaN"),
         ("pitch_max: 20.0", "pitch_max: inf"),
+        ("collision_radius: 0.2", "collision_radius: inf"),
+        ("collision_radius: 0.2", "collision_radius: NaN"),
+        ("return_speed: 4.0", "return_speed: inf"),
+        ("return_speed: 4.0", "return_speed: NaN"),
     ] {
         let p = node_problem(&format!("{HERO}, {}", orbit_with(old, new)), "orbit");
         assert_eq!(p, Problem::NotFinite("orbit_camera"), "{new}");

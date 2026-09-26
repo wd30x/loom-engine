@@ -215,7 +215,8 @@ const SCENARIO_A: &str = concat!(
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
-    "      \"pitch\": -0.2617994\n",
+    "      \"pitch\": -0.2617994,\n",
+    "      \"distance\": 4.0\n",
     "    }\n",
     "  }\n",
     "}\n",
@@ -426,7 +427,8 @@ const SCENARIO_B: &str = concat!(
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
-    "      \"pitch\": -0.2617994\n",
+    "      \"pitch\": -0.2617994,\n",
+    "      \"distance\": 4.0\n",
     "    }\n",
     "  }\n",
     "}\n",
@@ -788,6 +790,7 @@ fn running_while_turning_the_camera_replays_to_the_expected_state() {
         [0.0, -0.5646424, 0.0, 0.8253356],
     );
     assert_f32_value_bits(&dump["game"]["camera"]["yaw"], -1.1999999);
+    assert_f32_value_bits(&dump["game"]["camera"]["distance"], 4.0);
     assert_f32_bits(
         &dump["nodes"]["main_cam"]["position"],
         [-0.6433809, 2.5352762, -0.8566092],
@@ -823,6 +826,7 @@ fn state_dump_camera_yaw_wraps_into_minus_pi_to_pi() {
     );
     // 40 * 0.1 = 4.0 without wrapping.
     assert_f32_value_bits(&dump["game"]["camera"]["yaw"], -2.2831872);
+    assert_f32_value_bits(&dump["game"]["camera"]["distance"], 4.0);
     assert_f32_bits(
         &dump["nodes"]["main_cam"]["position"],
         [-2.924056, 2.5352764, -2.5254908],
@@ -973,7 +977,8 @@ const MINIMAL_SCENE: &str = r#"(
         (name: "hero", mesh: Capsule(radius: 0.3, height: 1.6), character: (run_speed: 2.0, turn_speed: 360.0)),
         (name: "cam", camera: (fov_y: 50.0, near: 0.1, far: 50.0),
             orbit_camera: (target: "hero", pivot_height: 1.0, distance: 3.0,
-                yaw: 0.0, pitch: -10.0, pitch_min: -60.0, pitch_max: 30.0)),
+                yaw: 0.0, pitch: -10.0, pitch_min: -60.0, pitch_max: 30.0,
+                collision_radius: 0.2, return_speed: 4.0)),
     ],
 )
 "#;
@@ -1021,9 +1026,9 @@ fn scene_without_a_character_is_a_runtime_error() {
         .find(",\n            orbit_camera")
         .expect("scene has an orbit camera");
     let end = MINIMAL_SCENE
-        .find("pitch_max: 30.0)")
-        .expect("scene has pitch_max")
-        + "pitch_max: 30.0)".len();
+        .find("return_speed: 4.0)")
+        .expect("scene has return_speed")
+        + "return_speed: 4.0)".len();
     let src = format!("{}{}", &MINIMAL_SCENE[..start], &MINIMAL_SCENE[end..])
         .replace(", character: (run_speed: 2.0, turn_speed: 360.0)", "");
     let scene = write_file(&dir, "nocharacter.scene.ron", &src);

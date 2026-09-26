@@ -33,6 +33,10 @@ pub enum GameError {
     #[error("the character {0:?} needs a Capsule mesh: it is also the collision shape")]
     NotACapsule(String),
     #[error(
+        "the character {0:?} must not be scaled: the capsule is drawn scaled but collides unscaled"
+    )]
+    ScaledCharacter(String),
+    #[error(
         "run_speed {run_speed} is too fast for the capsule radius {radius}: \
          run_speed / 60 must be less than the radius"
     )]
@@ -62,6 +66,9 @@ pub struct CameraState {
     pub yaw: f32,
     /// Radians; positive looks up.
     pub pitch: f32,
+    /// Meters from the pivot to the camera: the orbit distance, or less
+    /// while something is in the way.
+    pub distance: f32,
 }
 
 /// A `collider: Box` as seen from above: an oriented rectangle on the XZ
@@ -119,7 +126,12 @@ pub struct Game {
     pitch_min: f32,
     pitch_max: f32,
     pivot_height: f32,
+    /// The orbit distance: the farthest the camera gets from the pivot.
     distance: f32,
+    /// Radius of the camera's collision sphere.
+    collision_radius: f32,
+    /// Meters per tick the camera moves back out: `return_speed / 60.0`.
+    return_step: f32,
 }
 
 impl Game {
@@ -131,9 +143,10 @@ impl Game {
     /// Takes over `scene`, which needs a root node with a character and a
     /// capsule mesh, and an active camera that is a root node with an orbit
     /// camera (its target is necessarily that character: a scene has at
-    /// most one). Colliders must not move with either. Places the camera
-    /// for tick 0; the character is not pushed out of colliders until the
-    /// first tick.
+    /// most one). The character must not be scaled, and colliders must not
+    /// move with either. Places the camera for tick 0, already pulled in
+    /// front of anything in the way; the character is not pushed out of
+    /// colliders until the first tick.
     pub fn new(scene: Scene) -> Result<Self, GameError> {
         let player = scene.character().ok_or(GameError::NoCharacter)?;
         let camera = scene.camera();
@@ -153,6 +166,9 @@ impl Game {
         else {
             return Err(GameError::NotACapsule(scene.path(player)));
         };
+        if scene.transform(player).scale != Vec3::ONE {
+            return Err(GameError::ScaledCharacter(scene.path(player)));
+        }
         if character.run_speed / 60.0 >= radius {
             return Err(GameError::TooFast {
                 run_speed: character.run_speed,
@@ -184,6 +200,8 @@ impl Game {
             camera: CameraState {
                 yaw: wrap(orbit.yaw_degrees.to_radians()),
                 pitch: orbit.pitch_degrees.to_radians(),
+                // Replaced by the first `place_camera` below.
+                distance: orbit.distance,
             },
         };
         let mut game = Self {
@@ -201,8 +219,10 @@ impl Game {
             pitch_max: orbit.pitch_max_degrees.to_radians(),
             pivot_height: orbit.pivot_height,
             distance: orbit.distance,
+            collision_radius: orbit.collision_radius,
+            return_step: orbit.return_speed / 60.0,
         };
-        game.place_camera();
+        game.place_camera(true);
         Ok(game)
     }
 
@@ -246,18 +266,67 @@ impl Game {
         let transform = self.scene.transform_mut(self.player);
         transform.position = player.position;
         transform.rotation = Quat::from_rotation_y(player.facing);
-        self.place_camera();
+        self.place_camera(false);
     }
 
-    /// Step 6 for the camera node: orbit the pivot above the player.
-    fn place_camera(&mut self) {
+    /// Step 6 for the camera node: orbit the pivot above the player, pulled
+    /// in at once in front of anything in the way, moving back out at
+    /// `return_step` per tick once it is gone. When `loading`, the camera
+    /// takes the unobstructed distance directly.
+    fn place_camera(&mut self, loading: bool) {
         let GameState { player, camera } = self.state;
         let rot = Quat::from_rotation_y(camera.yaw) * Quat::from_rotation_x(camera.pitch);
+        let pivot = player.position + Vec3::new(0.0, self.pivot_height, 0.0);
+        let target = self.obstruct(pivot, rot * Vec3::Z);
+        let distance = if loading || target < camera.distance {
+            target
+        } else {
+            f32::min(camera.distance + self.return_step, target)
+        };
+        self.state.camera.distance = distance;
         let transform = self.scene.transform_mut(self.camera);
-        transform.position = player.position
-            + Vec3::new(0.0, self.pivot_height, 0.0)
-            + rot * Vec3::new(0.0, 0.0, self.distance);
+        transform.position = pivot + rot * Vec3::new(0.0, 0.0, distance);
         transform.rotation = rot;
+    }
+
+    /// How far a sphere of `collision_radius` gets from `pivot` along the
+    /// unit vector `u` before touching the ground or a collider, at most
+    /// `distance`. Exactly the steps of `docs/architecture.md` section 11
+    /// (camera collision): each box grown by the radius, slabs in the order
+    /// a, y, b, only exactly rounded operations.
+    fn obstruct(&self, pivot: Vec3, u: Vec3) -> f32 {
+        let cr = self.collision_radius;
+        let mut t = self.distance;
+        if u.y < 0.0 {
+            // The ground; pivot_height > cr, so this is positive.
+            t = f32::min(t, (cr - self.pivot_height) / u.y);
+        }
+        let uxz = Vec2::new(u.x, u.z);
+        'boxes: for bx in &self.boxes {
+            let o = Vec2::new(pivot.x, pivot.z) - bx.center;
+            let mut t0 = 0.0;
+            let mut t1 = self.distance;
+            for (s, w, lo, hi) in [
+                (o.dot(bx.a), uxz.dot(bx.a), -(bx.ha + cr), bx.ha + cr),
+                (pivot.y, u.y, bx.y_min - cr, bx.y_max + cr),
+                (o.dot(bx.b), uxz.dot(bx.b), -(bx.hb + cr), bx.hb + cr),
+            ] {
+                if w == 0.0 {
+                    if s < lo || s > hi {
+                        continue 'boxes; // parallel to this pair of faces, and outside
+                    }
+                } else {
+                    let ta = (lo - s) / w;
+                    let tb = (hi - s) / w;
+                    t0 = f32::max(t0, f32::min(ta, tb));
+                    t1 = f32::min(t1, f32::max(ta, tb));
+                }
+            }
+            if t0 <= t1 {
+                t = f32::min(t, t0); // t0 is 0 when the pivot is inside the grown box
+            }
+        }
+        t
     }
 
     pub fn clock(&self) -> SimClock {
@@ -334,7 +403,7 @@ mod tests {
     use super::*;
     use crate::demo_scene;
     use loom_core::input::TickInput;
-    use std::f32::consts::FRAC_PI_4;
+    use std::f32::consts::{FRAC_PI_3, FRAC_PI_4};
 
     type Axes = Vec<(&'static str, f32)>;
 
@@ -497,13 +566,15 @@ mod tests {
     }
 
     #[test]
-    fn looking_up_stops_at_pitch_max() {
+    fn looking_up_to_pitch_max_pulls_the_camera_in_above_the_ground() {
         let game = run(60, |_| vec![(LOOK_Y, 0.04)]);
-        assert_f32(game.state().camera.pitch, 0.34906584);
+        assert_f32(game.state().camera.pitch, FRAC_PI_3); // 1.0471976, pitch_max 60°
+        assert_f32(game.state().camera.distance, 1.5011107);
+        // y is the collision radius above the ground.
         assert_camera_node(
             &game,
-            [0.0, 0.1319195, 3.7587702],
-            [0.17364818, 0.0, 0.0, 0.9848077],
+            [0.0, 0.20000005, 0.75055534],
+            [0.5, 0.0, 0.0, 0.8660254],
         );
     }
 
@@ -576,7 +647,7 @@ mod tests {
         // Without a character the orbit camera cannot exist either: drop both.
         let src = demo_with("character: (run_speed: 4.0, turn_speed: 720.0),", "");
         let start = src.find(",\n            orbit_camera: (").unwrap();
-        let end = src.find("pitch_max: 20.0)").unwrap() + "pitch_max: 20.0)".len();
+        let end = src.find("return_speed: 4.0)").unwrap() + "return_speed: 4.0)".len();
         let src = format!("{}{}", &src[..start], &src[end..]);
         let err = Game::from_source(&src).unwrap_err();
         assert!(matches!(err, GameError::NoCharacter), "{err}");
@@ -626,10 +697,7 @@ mod tests {
             "        (name: \"rig\", children: [(name: \"main_cam\",",
         );
         // Close the extra `children: [(` after the camera node.
-        let src = src.replace(
-            "pitch_min: -70.0, pitch_max: 20.0)),",
-            "pitch_min: -70.0, pitch_max: 20.0))]),",
-        );
+        let src = src.replace("return_speed: 4.0)),", "return_speed: 4.0))]),");
         let err = Game::from_source(&src).unwrap_err();
         assert!(
             matches!(err, GameError::NotRoot(ref p) if p == "rig/main_cam"),
@@ -722,7 +790,8 @@ mod tests {
                 (name: "step", position: (0.0, -0.5, -2.0), scale: (2.0, 1.0, 2.0), collider: Box),
                 (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 200.0),
                     orbit_camera: (target: "player", pivot_height: 1.5, distance: 4.0,
-                        yaw: 0.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 20.0)),
+                        yaw: 0.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 20.0,
+                        collision_radius: 0.2, return_speed: 4.0)),
             ],
         )"#;
         let mut game = Game::from_source(src).unwrap();
@@ -761,6 +830,20 @@ mod tests {
     }
 
     #[test]
+    fn game_rejects_a_scaled_character() {
+        let src = demo_with(
+            "(name: \"player\", position: (0.0, 0.0, 0.0),",
+            "(name: \"player\", position: (0.0, 0.0, 0.0), scale: (1.0, 2.0, 1.0),",
+        );
+        let err = Game::from_source(&src).unwrap_err();
+        assert!(
+            matches!(err, GameError::ScaledCharacter(ref p) if p == "player"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("scaled"), "{err}");
+    }
+
+    #[test]
     fn game_rejects_a_run_speed_too_fast_for_the_radius() {
         let src = demo_with("run_speed: 4.0,", "run_speed: 30.0,");
         let err = Game::from_source(&src).unwrap_err();
@@ -794,5 +877,97 @@ mod tests {
             err.to_string().contains("colliders must be static"),
             "{err}"
         );
+    }
+
+    // ---- camera collision (G1.7)
+
+    /// Pillar c is between the camera and a player starting here.
+    const BEHIND_PILLAR_C: Vec3 = Vec3::new(0.0, 0.0, -11.0);
+
+    #[test]
+    fn camera_returns_to_its_distance_at_return_speed() {
+        let axes = |t| match t {
+            1..=30 => vec![(LOOK_Y, 0.04)],
+            31..=45 => vec![(LOOK_Y, -0.08)],
+            _ => vec![],
+        };
+        let mut game = run(45, axes);
+        assert_f32(game.state().camera.distance, 2.6119118);
+        advance(&mut game, 5, axes);
+        assert_f32(game.state().camera.distance, 2.9452448);
+        assert_vec3(
+            node(&game, "main_cam").position,
+            [0.0, 2.2622848, 2.8448882],
+        );
+        advance(&mut game, 20, axes);
+        assert_f32(game.state().camera.distance, 4.0);
+        assert_f32(game.state().camera.pitch, -0.26179916);
+        assert_vec3(
+            node(&game, "main_cam").position,
+            [0.0, 2.5352755, 3.8637037],
+        );
+    }
+
+    #[test]
+    fn pillar_between_camera_and_player_pulls_the_camera_in_before_the_first_tick() {
+        let game = run_from(BEHIND_PILLAR_C, 0, |_| vec![]);
+        assert_eq!(game.clock().tick(), 0);
+        assert_f32(game.state().camera.distance, 1.3458589);
+        // Pillar c's face is at z = -9.5; plus the collision radius 0.2.
+        assert_vec3(node(&game, "main_cam").position, [0.0, 1.848334, -9.7]);
+    }
+
+    #[test]
+    fn camera_stays_in_while_blocked_and_returns_after() {
+        let axes = |_| vec![(MOVE_X, 1.0)];
+        let mut game = run_from(BEHIND_PILLAR_C, 1, axes);
+        assert_f32(game.state().camera.distance, 1.3458589);
+        advance(&mut game, 9, axes);
+        assert_f32(game.state().camera.distance, 1.3458589);
+        assert_f32(game.state().player.position.x, 0.6666667);
+        advance(&mut game, 10, axes);
+        assert_f32(game.state().camera.distance, 2.012526);
+        advance(&mut game, 20, axes);
+        assert_f32(game.state().camera.distance, 3.345858);
+        assert_vec3(
+            node(&game, "main_cam").position,
+            [2.6666667, 2.3659718, -7.7681494],
+        );
+    }
+
+    #[test]
+    // 1.414214 is a position 4 ulps away from SQRT_2 (0x3FB504F7 vs
+    // 0x3FB504F3), not √2.
+    #[allow(clippy::approx_constant)]
+    fn backing_into_the_slanted_wall_keeps_the_camera_in_front_of_it() {
+        let axes = |_| vec![(MOVE_X, -1.0), (MOVE_Y, -1.0)];
+        let mut game = run(30, axes);
+        assert_vec3(game.state().player.position, [-1.414214, 0.0, 1.414214]);
+        assert_f32(game.state().camera.distance, 0.15592998);
+        assert_vec3(
+            node(&game, "main_cam").position,
+            [-1.414214, 1.5403577, 1.5648308],
+        );
+        advance(&mut game, 30, axes);
+        assert_vec3(game.state().player.position, [-3.0877507, 0.0, 2.3578424]);
+        assert_f32(game.state().camera.distance, 0.17931521);
+        assert_vec3(
+            node(&game, "main_cam").position,
+            [-3.0877507, 1.5464102, 2.5310476],
+        );
+    }
+
+    #[test]
+    fn funnel_needs_more_than_one_push_round() {
+        let src = demo_with(
+            "        (name: \"sun\",",
+            "        (name: \"funnel_l\", position: (-0.7, 1.0, -3.0), rotation: (0.0, 20.0, 0.0), \
+             scale: (0.6, 2.0, 4.0), mesh: Cube, collider: Box),\n\
+             (name: \"funnel_r\", position: (0.7, 1.0, -3.0), rotation: (0.0, -20.0, 0.0), \
+             scale: (0.6, 2.0, 4.0), mesh: Cube, collider: Box),\n        (name: \"sun\",",
+        );
+        let mut game = Game::from_source(&src).unwrap();
+        advance(&mut game, 30, |_| vec![(MOVE_Y, 1.0)]);
+        assert_player(&game, [0.03972316, 0.0, -0.7395032], 0.0);
     }
 }

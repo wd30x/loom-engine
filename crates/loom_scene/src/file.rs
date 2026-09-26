@@ -97,4 +97,8 @@ pub(crate) struct OrbitCameraDesc {
     pub pitch: f32,
     pub pitch_min: f32,
     pub pitch_max: f32,
+    /// Radius of the camera's collision sphere, in meters.
+    pub collision_radius: f32,
+    /// Meters per second the camera moves back out once unblocked.
+    pub return_speed: f32,
 }

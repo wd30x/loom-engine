@@ -583,11 +583,11 @@ obstruct(pivot, u):
 
 ## 12. 外部工具对接（2026-09-27 起的原则）
 
-用户希望 loom 能和 Aseprite、Blender、Houdini、Substance、Cascadeur、FL Studio、FMOD 这类工具通过 AI 协作。原则：
+用户希望 loom 能和 Aseprite、Blender、Houdini、Substance、Cascadeur、REAPER、SuperCollider、FL Studio、FMOD 这类工具通过 AI 协作。原则：
 
 1. **松耦合，AI 在中间串联**。AI 用工具自己的命令行或脚本接口操作它（例如 `blender -b --python`、`hython`、`sbsrender`、`aseprite -b --script`），用 loom 的远程控制（E3）加载资源、截图、导出状态。loom 不链接这些工具的代码，也不调用它们。
 2. **交换用开放格式**：3D 模型、骨骼和动画用 glTF 2.0；贴图、高度图用 PNG；精灵用 Aseprite 的 sprite sheet 导出（PNG 加 `--data` JSON）；音频用 WAV/OGG；元数据用 JSON。loom **只读导出结果**，不读工具的工程文件（`.aseprite`、`.blend`、`.hip`、`.sbs`、`.flp`、`.fspro`）。
-3. **能用文本当源头就用文本**：生成资源的脚本（Python、VEX、Lua）进仓库，资源可以重新生成。导出的二进制资源按 CLAUDE.md 走 Git LFS；很小的测试资源可以直接提交。
+3. **能用文本当源头就用文本**：生成资源的脚本（Python、VEX、Lua、SuperCollider 的 sclang）和文本格式的工程（REAPER 的 `.rpp`）进仓库，资源可以重新生成。导出的二进制资源按 CLAUDE.md 走 Git LFS；很小的测试资源可以直接提交。
 4. **loom 的测试不依赖外部工具**：测试用的是提交进仓库的导出结果。重新生成资源的脚本单独放，不进 `verify.ps1`，和 GPU 不进 `cargo test` 是同一个思路。
 5. **按需求引进**：每种格式的导入都要等有真实的使用者需要时才做（第 1 节）。各工具的可行性和启用条件见 TODO 的延后项 X.2。
 
