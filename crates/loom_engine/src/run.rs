@@ -12,6 +12,7 @@ use loom_render::Renderer;
 use crate::RunArgs;
 use crate::game::CubeGame;
 use crate::report::{InfoReport, RunReport};
+use crate::state::{StateDump, write_state};
 
 pub(crate) fn info() -> Result<InfoReport> {
     let adapter = loom_render::probe_adapter()?;
@@ -29,18 +30,29 @@ pub(crate) fn run(args: &RunArgs) -> Result<RunReport> {
     }
 }
 
-/// Headless: frame k runs exactly tick k, then renders. No wall clock.
+/// Headless: frame k runs exactly tick k. No wall clock.
+///
+/// Intermediate frames are never seen and rendering is a pure function of
+/// the state, so only the final state is rendered, and only when a
+/// screenshot is requested. Without one, the GPU is never touched.
 fn run_headless(args: &RunArgs) -> Result<RunReport> {
     let frames = args.frames.expect("clap requires --frames with --headless");
-    let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
     let mut game = CubeGame::default();
     for _ in 0..frames {
         game.tick();
-        renderer.render(game.model_matrix())?;
     }
-    let screenshot = match &args.screenshot {
-        Some(path) => Some(save_screenshot(&renderer, path)?),
+    let state = match &args.dump_state {
+        Some(path) => Some(write_state(path, &StateDump::of(&game))?),
         None => None,
+    };
+    let (screenshot, adapter) = match &args.screenshot {
+        Some(path) => {
+            let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
+            renderer.render(game.model_matrix())?;
+            let saved = save_screenshot(&renderer, path)?;
+            (Some(saved), Some(renderer.adapter_summary().into()))
+        }
+        None => (None, None),
     };
     Ok(RunReport {
         status: "ok",
@@ -50,7 +62,8 @@ fn run_headless(args: &RunArgs) -> Result<RunReport> {
         sim_time: game.clock().sim_time(),
         size: [args.size.width, args.size.height],
         screenshot,
-        adapter: renderer.adapter_summary().into(),
+        state,
+        adapter,
     })
 }
 
@@ -65,6 +78,7 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         last_size: [args.size.width, args.size.height],
         has_frame: false,
         screenshot: None,
+        state: None,
         error: None,
         done: false,
     };
@@ -88,7 +102,8 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         sim_time: app.game.clock().sim_time(),
         size: app.last_size,
         screenshot: app.screenshot,
-        adapter: renderer.adapter_summary().into(),
+        state: app.state,
+        adapter: Some(renderer.adapter_summary().into()),
     })
 }
 
@@ -107,6 +122,7 @@ struct WindowRun<'a> {
     /// replaces (or, when minimized, drops) the target.
     has_frame: bool,
     screenshot: Option<String>,
+    state: Option<String>,
     error: Option<anyhow::Error>,
     /// Set once we decided to exit; later events are ignored.
     done: bool,
@@ -120,14 +136,21 @@ impl WindowRun<'_> {
     }
 
     /// The single exit path for every way a window run ends (`--frames`
-    /// reached, Esc, window closed). Saves the last rendered frame when
-    /// `--screenshot` was given.
+    /// reached, Esc, window closed). Dumps the state when `--dump-state` was
+    /// given, then saves the last rendered frame when `--screenshot` was.
     fn finish(&mut self) -> AppControl {
         if self.done {
             return AppControl::Exit;
         }
         self.done = true;
         let args = self.args;
+        // The state exists even if nothing was ever rendered (minimized).
+        if let Some(path) = &args.dump_state {
+            match write_state(path, &StateDump::of(&self.game)) {
+                Ok(saved) => self.state = Some(saved),
+                Err(e) => return self.fail(e),
+            }
+        }
         let Some(path) = &args.screenshot else {
             return AppControl::Exit;
         };
@@ -227,10 +250,7 @@ impl WindowApp for WindowRun<'_> {
 fn save_screenshot(renderer: &Renderer, path: &Path) -> Result<String> {
     let (width, height) = renderer.size();
     let pixels = renderer.read_pixels().context("reading back the frame")?;
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating directory {}", parent.display()))?;
-    }
+    ensure_parent_dir(path)?;
     let image = image::RgbaImage::from_raw(width, height, pixels)
         .context("readback size does not match the render size")?;
     image
@@ -238,4 +258,13 @@ fn save_screenshot(renderer: &Renderer, path: &Path) -> Result<String> {
         .with_context(|| format!("writing screenshot {}", path.display()))?;
     log::info!("screenshot saved to {}", path.display());
     Ok(path.display().to_string())
+}
+
+/// Creates the parent directories of an output file, if it has any.
+pub(crate) fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {}", parent.display()))?;
+    }
+    Ok(())
 }

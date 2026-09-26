@@ -5,6 +5,7 @@
 mod game;
 mod report;
 mod run;
+mod state;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -40,6 +41,9 @@ pub(crate) struct RunArgs {
     /// Save the last frame as a PNG before exiting. Parent directories are created.
     #[arg(long, value_name = "PATH")]
     screenshot: Option<PathBuf>,
+    /// Write the simulation state as JSON before exiting. Parent directories are created.
+    #[arg(long, value_name = "PATH")]
+    dump_state: Option<PathBuf>,
     /// Render resolution.
     #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
     size: Size,
