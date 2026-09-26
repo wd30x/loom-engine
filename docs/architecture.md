@@ -574,7 +574,8 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
   - `the character "<名字>": prop "<p>" must be a whole number of at least N, got v`（N 是 1，`stamina_delay_ticks` 是 0）
   - `the character "<名字>": needs 1 <= roll_invuln_from <= roll_invuln_to <= roll_ticks`（后撤步同理，把 `roll` 换成 `backstep`）
   - `the character "<名字>": <sprint|roll|backstep> moves d m per tick, which must be less than the capsule radius r`
-  - 检查顺序：不认识的名字（按文件顺序）→ 每个 prop 的取值（按上表顺序）→ 无敌帧区间（先 roll 后 backstep）→ 每 tick 距离（sprint、roll、backstep）。
+  - 检查顺序：不认识的名字（按文件顺序）→ 每个 prop 的取值（按上表顺序）→ 无敌帧区间（先 roll 后 backstep）→ 每 tick 距离（sprint、roll、backstep）。这些都在原有的检查（角色、相机、`TooFast`、`MovingCollider` 等）之后（G2.1 审查决定）。
+  - 整数类参数没有上限：写成 `roll_ticks: 1e12` 也能通过，转成 u32 时截到最大值，结果只是动作「永远不结束」，不会出错，所以不加上限（G2.1 审查决定）。
 
 **状态**（除了原有的 `position`、`facing`）：
 - `stamina`（f32，开局 = `stamina_max`）、`stamina_wait`（还要等多少 tick 才恢复，开局 0）；

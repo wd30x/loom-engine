@@ -1,8 +1,9 @@
 // Key bindings of the souls game. Key names are W3C KeyboardEvent.code values
 // (docs/architecture.md section 9). Axis units are defined by the game:
-// move_x/move_y in [-1, 1], look_x/look_y in radians per tick.
+// move_x/move_y in [-1, 1], look_x/look_y in radians per tick. roll: a tap
+// rolls (a backstep without a direction), holding it sprints (section 11).
 (
-    actions: [],
+    actions: [(action: "roll", keys: [Space])],
     axes: [
         (axis: "move_x", keys: [(KeyD, 1.0), (ArrowRight, 1.0), (KeyA, -1.0), (ArrowLeft, -1.0)]),
         (axis: "move_y", keys: [(KeyW, 1.0), (ArrowUp, 1.0), (KeyS, -1.0), (ArrowDown, -1.0)]),

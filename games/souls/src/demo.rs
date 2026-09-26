@@ -20,13 +20,20 @@ pub fn demo_scene() -> Scene {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use loom_core::input::Key;
+
     use super::*;
-    use crate::{Game, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y};
+    use crate::{Game, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL};
 
     #[test]
-    fn demo_bindings_define_exactly_the_game_axes() {
+    fn demo_bindings_define_the_game_axes_and_roll_on_space() {
         let map = bindings();
-        assert_eq!(map.actions().count(), 0);
+        let actions: Vec<_> = map.actions().collect();
+        assert_eq!(actions, [ROLL]);
+        let pressed = map.actions_for(&BTreeSet::from([Key::Space]));
+        assert_eq!(pressed, BTreeSet::from([ROLL.to_owned()]));
         let mut axes: Vec<_> = map.axes().collect();
         axes.sort_unstable();
         assert_eq!(axes, [LOOK_X, LOOK_Y, MOVE_X, MOVE_Y]);

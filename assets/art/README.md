@@ -60,6 +60,8 @@
 
 要改图，直接改下面的字符串，重跑这两步，再导出。
 
+注意：在已有的源文件末尾用 `spr:newEmptyFrame()` 加帧时，Aseprite 会把最后一个 tag 自动延长到新帧上（E4.4 加尸体帧时遇到过：`zombie` 从 4–4 变成了 4–5），要手动把它改回来。下面的 Lua 是先建好全部帧再加 tag，从零重建不受影响。
+
 ```lua
 -- One string per row, one hex digit per palette index; '.' is index 0.
 local tiles = {

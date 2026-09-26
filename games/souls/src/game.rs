@@ -11,6 +11,8 @@ use loom_core::input::ActionState;
 use loom_scene::{MeshKind, NodeId, Scene, SceneError};
 use serde::Serialize;
 
+use crate::moves::{Action, Params};
+
 /// Sideways movement in `[-1, 1]`; positive is to the camera's right.
 pub const MOVE_X: &str = "move_x";
 /// Forward movement in `[-1, 1]`; positive is away from the camera.
@@ -19,6 +21,9 @@ pub const MOVE_Y: &str = "move_y";
 pub const LOOK_X: &str = "look_x";
 /// Vertical camera turn in radians per tick; positive looks up.
 pub const LOOK_Y: &str = "look_y";
+/// The roll key: a tap rolls (or backsteps without a direction), holding
+/// it sprints.
+pub const ROLL: &str = "roll";
 
 #[derive(Debug, thiserror::Error)]
 pub enum GameError {
@@ -43,6 +48,42 @@ pub enum GameError {
     TooFast { run_speed: f32, radius: f32 },
     #[error("collider {0:?} moves with the player or the camera; colliders must be static")]
     MovingCollider(String),
+    #[error("the character {character:?}: unknown prop {prop:?}")]
+    UnknownProp { character: String, prop: String },
+    #[error("the character {character:?}: prop {prop:?} must be greater than 0, got {value}")]
+    NotPositive {
+        character: String,
+        prop: &'static str,
+        value: f64,
+    },
+    #[error(
+        "the character {character:?}: prop {prop:?} must be a whole number of at least {min}, \
+         got {value}"
+    )]
+    NotWhole {
+        character: String,
+        prop: &'static str,
+        min: u32,
+        value: f64,
+    },
+    #[error(
+        "the character {character:?}: needs 1 <= {action}_invuln_from <= {action}_invuln_to \
+         <= {action}_ticks"
+    )]
+    InvulnWindow {
+        character: String,
+        action: &'static str,
+    },
+    #[error(
+        "the character {character:?}: {action} moves {step} m per tick, which must be less than \
+         the capsule radius {radius}"
+    )]
+    StepTooLong {
+        character: String,
+        action: &'static str,
+        step: f32,
+        radius: f32,
+    },
 }
 
 /// The game state in the state dump (`game`).
@@ -58,6 +99,13 @@ pub struct PlayerState {
     pub position: Vec3,
     /// Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.
     pub facing: f32,
+    pub stamina: f32,
+    /// Ticks left before stamina starts coming back.
+    pub stamina_wait: u32,
+    pub action: Action,
+    /// Which tick of a roll or backstep this is, from 1; 0 otherwise.
+    pub action_tick: u32,
+    pub invulnerable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -132,6 +180,14 @@ pub struct Game {
     collision_radius: f32,
     /// Meters per tick the camera moves back out: `return_speed / 60.0`.
     return_step: f32,
+    /// Stamina, roll, sprint and backstep, in per-tick units.
+    params: Params,
+    /// Ticks the roll key has been held, capped at `tap_ticks + 1`.
+    hold: u32,
+    /// This hold's sprint has used up the stamina.
+    spent: bool,
+    /// Unit direction of the current roll or backstep.
+    action_dir: Vec3,
 }
 
 impl Game {
@@ -184,6 +240,7 @@ impl Game {
                 node = scene.node(n).parent;
             }
         }
+        let params = Params::new(&scene, player, radius)?;
         let boxes = scene
             .colliders()
             .iter()
@@ -196,6 +253,11 @@ impl Game {
             player: PlayerState {
                 position: transform.position,
                 facing: positive_zero(wrap(libm::atan2f(-f.x, -f.z))),
+                stamina: params.stamina_max,
+                stamina_wait: 0,
+                action: Action::Idle,
+                action_tick: 0,
+                invulnerable: false,
             },
             camera: CameraState {
                 yaw: wrap(orbit.yaw_degrees.to_radians()),
@@ -221,6 +283,10 @@ impl Game {
             distance: orbit.distance,
             collision_radius: orbit.collision_radius,
             return_step: orbit.return_speed / 60.0,
+            params,
+            hold: 0,
+            spent: false,
+            action_dir: Vec3::ZERO,
         };
         game.place_camera(true);
         Ok(game)
@@ -229,6 +295,23 @@ impl Game {
     /// Runs one tick with this tick's input.
     pub fn tick(&mut self, input: &ActionState) {
         self.clock.step();
+        let params = self.params;
+
+        // 0. The roll key: a tap fires on release.
+        let tap = if input.pressed(ROLL) {
+            self.hold = u32::min(
+                self.hold.saturating_add(1),
+                params.tap_ticks.saturating_add(1),
+            );
+            false
+        } else {
+            // `hold` is how long it was held before this release.
+            let tap = input.just_released(ROLL) && self.hold <= params.tap_ticks;
+            self.hold = 0;
+            self.spent = false;
+            tap
+        };
+
         let GameState { player, camera } = &mut self.state;
 
         // 1. Camera angles.
@@ -247,20 +330,103 @@ impl Game {
         let right = Vec3::new(c, 0.0, -s);
         let dir = right * v.x + forward * v.y;
 
-        // 4. Move, then push the capsule out of the colliders.
-        player.position = resolve(
-            &self.boxes,
-            self.radius,
-            self.height,
-            player.position + dir * self.step,
-        );
+        // 4. Actions and movement; each move ends by pushing the capsule
+        // out of the colliders. `busy`: stamina used or an action running.
+        let mut busy = true;
+        if matches!(player.action, Action::Roll | Action::Backstep) {
+            let m = params.movement(player.action);
+            player.action_tick += 1;
+            player.position = resolve(
+                &self.boxes,
+                self.radius,
+                self.height,
+                player.position + self.action_dir * m.step,
+            );
+            // The last tick still moves.
+            if player.action_tick == m.ticks {
+                player.action = Action::Idle;
+                player.action_tick = 0;
+            }
+        } else if tap && player.stamina > 0.0 {
+            if v.length_squared() > 0.0 {
+                // Roll the way the input points, turning there at once.
+                player.action = Action::Roll;
+                self.action_dir = dir / dir.length();
+                player.facing =
+                    positive_zero(wrap(libm::atan2f(-self.action_dir.x, -self.action_dir.z)));
+            } else {
+                // Backstep: away from where the character faces, no turn.
+                player.action = Action::Backstep;
+                self.action_dir =
+                    Vec3::new(libm::sinf(player.facing), 0.0, libm::cosf(player.facing));
+            }
+            let m = params.movement(player.action);
+            player.stamina = f32::max(player.stamina - m.cost, 0.0);
+            player.stamina_wait = params.delay_ticks;
+            player.action_tick = 1;
+            player.position = resolve(
+                &self.boxes,
+                self.radius,
+                self.height,
+                player.position + self.action_dir * m.step,
+            );
+            if m.ticks == 1 {
+                player.action = Action::Idle;
+                player.action_tick = 0;
+            }
+        } else {
+            let sprinting = input.pressed(ROLL)
+                && self.hold > params.tap_ticks
+                && !self.spent
+                && player.stamina > 0.0
+                && v.length_squared() > 0.0;
+            // Without the roll key this is exactly G1's step 4.
+            let step = if sprinting {
+                params.sprint_step
+            } else {
+                self.step
+            };
+            player.position = resolve(
+                &self.boxes,
+                self.radius,
+                self.height,
+                player.position + dir * step,
+            );
+            if sprinting {
+                player.action = Action::Sprint;
+                player.stamina = f32::max(player.stamina - params.sprint_drain, 0.0);
+                player.stamina_wait = params.delay_ticks;
+                if player.stamina == 0.0 {
+                    self.spent = true;
+                }
+            } else {
+                player.action = Action::Idle;
+                busy = false;
+            }
 
-        // 5. Turn towards `dir`, at most `max_turn` per tick.
-        if v.length_squared() > 0.0 {
-            let target = libm::atan2f(-dir.x, -dir.z);
-            let diff = wrap(target - player.facing);
-            player.facing = wrap(player.facing + diff.clamp(-self.max_turn, self.max_turn));
+            // 5. Turn towards `dir`, at most `max_turn` per tick.
+            if v.length_squared() > 0.0 {
+                let target = libm::atan2f(-dir.x, -dir.z);
+                let diff = wrap(target - player.facing);
+                player.facing = wrap(player.facing + diff.clamp(-self.max_turn, self.max_turn));
+            }
         }
+
+        // 5b. Stamina comes back once `stamina_wait` has run out.
+        if !busy {
+            if player.stamina_wait > 0 {
+                player.stamina_wait -= 1;
+            } else {
+                player.stamina = f32::min(player.stamina + params.regen_step, params.stamina_max);
+            }
+        }
+        player.invulnerable = match player.action {
+            Action::Roll | Action::Backstep => {
+                let m = params.movement(player.action);
+                (m.invuln_from..=m.invuln_to).contains(&player.action_tick)
+            }
+            Action::Idle | Action::Sprint => false,
+        };
 
         // 6. Write the nodes.
         let transform = self.scene.transform_mut(self.player);
@@ -619,6 +785,79 @@ mod tests {
     }
 
     /// The demo scene with `player`'s line replaced.
+    /// Steps 1-5 as they were in G1, before G2.1 added the roll key,
+    /// copied here as the reference: `(position, facing, yaw, pitch)`.
+    fn g1_reference_tick(game: &Game, s: &mut (Vec3, f32, f32, f32), input: &ActionState) {
+        let (position, facing, yaw, pitch) = s;
+        *yaw = wrap(*yaw - input.axis(LOOK_X));
+        *pitch = (*pitch + input.axis(LOOK_Y)).clamp(game.pitch_min, game.pitch_max);
+        let mut v = Vec2::new(input.axis(MOVE_X), input.axis(MOVE_Y));
+        if v.length_squared() > 1.0 {
+            v = v / v.length();
+        }
+        let (sn, cs) = (libm::sinf(*yaw), libm::cosf(*yaw));
+        let forward = Vec3::new(-sn, 0.0, -cs);
+        let right = Vec3::new(cs, 0.0, -sn);
+        let dir = right * v.x + forward * v.y;
+        *position = resolve(
+            &game.boxes,
+            game.radius,
+            game.height,
+            *position + dir * game.step,
+        );
+        if v.length_squared() > 0.0 {
+            let target = libm::atan2f(-dir.x, -dir.z);
+            let diff = wrap(target - *facing);
+            *facing = wrap(*facing + diff.clamp(-game.max_turn, game.max_turn));
+        }
+    }
+
+    #[test]
+    fn without_the_roll_key_every_tick_matches_g1_bit_for_bit() {
+        // A copy of the old code rather than stored values: it checks every
+        // tick, not just the end, with pillars and the slanted wall in the
+        // way, and needs no numbers from before the change.
+        let mut game = Game::new(demo_scene()).unwrap();
+        let start = game.state();
+        let mut reference = (
+            start.player.position,
+            start.player.facing,
+            start.camera.yaw,
+            start.camera.pitch,
+        );
+        let mut input = ActionState::new();
+        for t in 1..=120_u32 {
+            let axes: Axes = match t {
+                1..=40 => vec![(MOVE_Y, 1.0), (LOOK_X, 0.01)],
+                41..=80 => vec![(MOVE_X, -0.6), (MOVE_Y, 0.8), (LOOK_Y, -0.02)],
+                _ => vec![(MOVE_X, 1.0), (MOVE_Y, -1.0), (LOOK_X, -0.03)],
+            };
+            input.advance(TickInput {
+                actions: Default::default(),
+                axes: axes.into_iter().map(|(a, v)| (a.to_owned(), v)).collect(),
+            });
+            game.tick(&input);
+            g1_reference_tick(&game, &mut reference, &input);
+            let s = game.state();
+            let actual = (
+                s.player.position,
+                s.player.facing,
+                s.camera.yaw,
+                s.camera.pitch,
+            );
+            assert_eq!(bits3(actual.0), bits3(reference.0), "position at tick {t}");
+            for (a, r) in [
+                (actual.1, reference.1),
+                (actual.2, reference.2),
+                (actual.3, reference.3),
+            ] {
+                assert_eq!(a.to_bits(), r.to_bits(), "tick {t}");
+            }
+            assert_eq!(s.player.action, Action::Idle);
+        }
+        assert_ne!(reference.0, start.player.position);
+    }
+
     fn demo_with(old: &str, new: &str) -> String {
         let src = include_str!("demo.scene.ron");
         assert!(src.contains(old), "{old}");

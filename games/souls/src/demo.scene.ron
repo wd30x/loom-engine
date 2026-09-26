@@ -9,6 +9,26 @@
         (name: "player", position: (0.0, 0.0, 0.0),
             mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2),
             character: (run_speed: 4.0, turn_speed: 720.0),
+            // Stamina, roll, sprint and backstep (docs/architecture.md section 11). Every value
+            // here is the default: leaving a prop out gives the same game.
+            props: [
+                ("stamina_max", 100),            // stamina points
+                ("stamina_regen", 45),           // stamina points per second
+                ("stamina_delay_ticks", 30),     // ticks after using stamina before it comes back
+                ("tap_ticks", 15),               // releasing roll within this many ticks is a tap
+                ("sprint_speed", 6),             // meters per second
+                ("sprint_cost", 15),             // stamina points per second
+                ("roll_cost", 20),               // stamina points
+                ("roll_ticks", 32),              // how long a roll lasts
+                ("roll_distance", 3.2),          // meters
+                ("roll_invuln_from", 1),         // invulnerable from this tick of the roll (1-based)
+                ("roll_invuln_to", 20),          // ... to this one, inclusive
+                ("backstep_cost", 12),           // stamina points
+                ("backstep_ticks", 20),          // how long a backstep lasts
+                ("backstep_distance", 1.5),      // meters
+                ("backstep_invuln_from", 1),     // as for the roll
+                ("backstep_invuln_to", 8),
+            ],
             children: [
                 // 面朝方向的标记：胶囊体本身是旋转对称的，看不出朝向
                 (name: "visor", position: (0.0, 1.5, -0.3), scale: (0.4, 0.15, 0.3),
