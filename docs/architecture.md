@@ -398,11 +398,12 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | `mesh` | `Cube` / `Plane` / `Sphere` / `Capsule(radius, height)` | 无 | 前三种都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调。`Capsule` 带参数（非均匀缩放会把半球压扁）：`height` 是含两端半球的总高，**原点在底部**（占 y ∈ [0, height]），方便角色站在地面上 |
 | `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)` | 只有带 `mesh` 时才有意义；分量在 0 到 1 之间 |
 | `camera` | `(fov_y, near, far)` 或 `(ortho: (height), near, far)` | 无 | 相机看向自己的 -Z。`fov_y` 是透视相机的垂直视场角（度）。`ortho` 是正交相机（E4.2 起），`height` 是画面竖直方向覆盖的世界长度，宽度按画面比例算。`fov_y` 和 `ortho` 必须**恰好写一个** |
-| `sprite` | `(sheet, tag)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名 |
+| `sprite` | `(sheet, tag)` 或 `(sheet, tag, alternates)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名。`alternates`（E4.4 起，可省略）是游戏运行中可以换成的其他 tag，例如 `["corpse"]` |
 | `tilemap` | `(sheet, legend, rows)` | 无 | 瓦片地图（E4.2 起，第 14 节）：`legend` 是 `[(字符, tag)]` 列表，`rows` 是字符串列表，一个字符一个格子 |
 | `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
 | `character` | `(run_speed, turn_speed)` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒 |
 | `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max, collision_radius, return_speed)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度。`collision_radius`（米）、`return_speed`（米/秒）是 G1.7 起的相机碰撞参数，必填 |
+| `props` | `[(名字, 数值)]` | 空 | 游戏自定义的数值参数（E4.4 起），例如 `[("hp", 10), ("attack", 1)]`。引擎不解释它们，由游戏读取和校验（`rogue` 见第 15 节）。写在场景里，所以热重载就能调 |
 | `collider` | `Box` | 无 | 静态碰撞体（第 11 节「碰撞」，G1.3 起）：和 `Cube` 一样是单位立方体，用节点的 `scale`、`rotation`、`position` 定大小、朝向和位置。只挡角色，不参与渲染（要看得见就另外写 `mesh: Cube`） |
 | `children` | 节点列表 | `[]` | |
 
@@ -426,6 +427,8 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - `collider`（G1.3）：自己的旋转只能绕 Y 轴（`rotation` 的 x、z 分量必须是 0，不能用 `look_at`）；**所有祖先节点**只能平移（`rotation` 不写或写 `(0, 0, 0)`，没有 `look_at`，`scale` 不写或写 `(1, 1, 1)`）；不能和 `character` 在同一个节点上
 - `rotation` 和 `look_at` 不能同时出现；`look_at` 的目标不能等于 `position`，方向也不能和 Y 轴平行（`right` 会退化）
 - 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间（节点 `color`、`light.color`、`ambient` 都是）；`light.intensity` ≥ 0；`fov_y` 在 (0, 180) 之间；`ortho.height` > 0；`0 < near < far`
+- `props`（E4.4）：名字匹配 `^[a-z][a-z0-9_]*$`，同一个节点里不能重复；数值必须有限。用列表而不是 map，原因和键位表一样（ron 遇到重复的 map 键会静默保留最后一个）。数值存成 `f64`，整数在 2^53 以内都是精确的。`Node::prop(名字) -> Option<f64>`。
+- `sprite` 的 `alternates`（E4.4）：每个都不能是空串，不能重复，也不能等于 `tag`。
 - `sprite`、`tilemap`（E4.2）：
   - 不能和 `mesh` 挂在同一个节点上，两者也不能同时挂；
   - `tilemap` 的 `rows` 至少一行，每行字符数相同且至少 1；每个字符都要在 `legend` 里；`legend` 里的字符不能重复；
@@ -783,12 +786,13 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 - JSON 是 Aseprite 的 `json-array` 导出。只读用得到的字段：`frames[].frame`、`meta.image`、`meta.size`、`meta.frameTags[].name/from/to`，其他字段忽略。这是外部格式，所以**不**加 `deny_unknown_fields`，也不依赖换行符。
 - PNG 路径是 JSON 所在目录加上 `meta.image`。用 workspace 已有的 `image` crate 解码成 RGBA8，索引色、灰度都会被展开。
 - 精灵和瓦片取 tag 的**第一帧**（`from`）。动画还没做（延后项 X.3）。
+- **运行中换 tag**（E4.4 起）：游戏用 `Scene::set_sprite_tag(id, tag)` 把精灵换成它在场景里声明过的 tag（`tag` 或 `alternates` 里的一个），没声明过的返回错误。这是模拟状态，所以只能换成加载时检查过的 tag，渲染时不会遇到不存在的 tag。
 - 加载场景时就读所有用到的 sheet，同一个路径只读一次，**不论之后会不会渲染**。这样 tag 写错、文件缺失，在无头不截图的运行里也会报错。报错要写出节点路径、sheet 路径和原因，例如 `node map: tilemap: sheet assets/art/tiles.json has no tag "flor"`。检查这几项：
   - JSON 能解析；
   - PNG 存在，并且尺寸等于 `meta.size`；
   - 每一帧都非空（宽高大于 0），并且在图片范围内（非空是 E4.2 实现者加的：着色器里的 `frame.wh - 1` 在 0 时会下溢）；
   - tag 名不重复，`from ≤ to <` 帧数；
-  - 场景用到的 tag 都存在。
+  - 场景用到的 tag 都存在，包括精灵的 `alternates`（E4.4 起）。
 
 ### 渲染
 
@@ -810,27 +814,56 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 
 ## 15. `rogue`：2D roguelike 示例（E4.3 起）
 
-用户决定（2026-09-27）：简化版的 Cataclysm: Dark Days Ahead，只借鉴玩法（TODO 的 E4 决策）；移动键用小键盘和 vi 键，和 CDDA 默认一样；**按一下走一步**，按住不连走。
+用户决定（2026-09-27）：
+- 简化版的 Cataclysm: Dark Days Ahead，只借鉴玩法（TODO 的 E4 决策）。
+- 移动键用小键盘和 vi 键，和 CDDA 默认一样；**按一下走一步**，按住不连走。
+- E4.4 起：
+  - 僵尸**直线硬追**，被墙挡住就卡住；
+  - **比玩家慢**，每 3 回合走 2 步；
+  - **固定伤害，不随机**，数值写在场景里；
+  - 僵尸死后**留下尸体**，可以踩上去。
 
-E4.3 只有地图、玩家、八方向移动、墙和原地等待。僵尸、攻击、血量、消息记录是 E4.4。
+E4.3 有地图、玩家、八方向移动、墙和原地等待；E4.4 加上僵尸、撞击攻击、血量、死亡、消息记录。视野、随机地图、物品等以后按兴趣再加。
 
 ### 场景要求
 
 - 场景顶层 `game: "rogue"`。
 - 根节点 `map`，带 `tilemap`。**`#` 是墙**，挡路；legend 里的其他字符都是能走的地面。
 - 根节点 `player`，带 `sprite`。
-- `map` 和 `player` 都**只能平移**：`rotation` 不写或全 0，`scale` 不写或 `(1, 1, 1)`，不能用 `look_at`。
+- **僵尸**（E4.4 起）：名字是 `zombie` 或以 `zombie_` 开头的**根节点**，可以没有，也可以有多个。僵尸的先后顺序就是场景里的先序顺序，每回合按这个顺序行动。
+- **只能平移**：`map`、`player` 和每个僵尸都一样，`rotation` 不写或全 0，`scale` 不写或 `(1, 1, 1)`，不能用 `look_at`。
   - 实际检查的是运行时的变换：旋转等于单位四元数、缩放等于 `(1, 1, 1)`。运行时的节点不记录是否用过 `look_at`，所以恰好算出单位旋转的 `look_at`（看向正 -Z）也能通过，效果和不写一样，不算问题（E4.3 审查决定）。
-- 玩家所在的格子：`c = player.x - map.x`，`r = map.y - player.y`（第 14 节：格子 `(c, r)` 的中心在地图局部的 `(c, -r)`）。两者都必须是整数，并且在地图范围内（`0 ≤ c < 宽`，`0 ≤ r < 高`），格子不能是墙。
-- `player.z > map.z`，玩家画在地图前面。
-- 相机是场景里写的，游戏不动它。E4.3 的地图一屏放得下，跟随相机以后需要时再加。
-- 报错（`rogue::GameError`，按「场景无效」报出）：
+- **所在的格子**（玩家和僵尸都这样算）：`c = x - map.x`，`r = map.y - y`（第 14 节：格子 `(c, r)` 的中心在地图局部的 `(c, -r)`）。
+  - 两者都必须是整数，并且在地图范围内（`0 ≤ c < 宽`，`0 ≤ r < 高`）。
+  - 格子不能是墙。
+  - 两个角色不能站在同一格。
+- **前后顺序**：
+  - `map.z < 僵尸的 z < player.z`；
+  - 所有僵尸的 z 相同。
+  - 僵尸死后，尸体的 z 改成 `(map.z + 僵尸的 z) / 2`，所以活着的僵尸、玩家都画在尸体前面。
+- **尸体的图**：玩家和每个僵尸的 `sprite` 都要在 `alternates` 里声明 `"corpse"`，死的时候换成它（第 14 节「运行中换 tag」）。
+- **数值**写在节点的 `props` 里（第 10 节），都必须是 1 到 1000 之间的整数：
+  - 玩家：`hp`、`attack`；
+  - 僵尸：`hp`、`attack`、`speed`。
+  - 缺了、不是整数、超出范围，或者写了不认识的名字（防拼写错误），都报错。
+- 相机是场景里写的，游戏不动它。地图一屏放得下，跟随相机以后需要时再加。
+- **报错**（`rogue::GameError`，按「场景无效」报出）：
   - `the scene needs a root node named "map" with a tilemap`
   - `the scene needs a root node named "player" with a sprite`
-  - `"<路径>" must only be translated: no rotation or look_at, scale (1, 1, 1)`
-  - `the player at (x, y) is not on a map cell: x - map.x and map.y - y must be whole numbers inside the WxH map`
-  - `the player starts on a wall at column c, row r`
-  - `the player must be in front of the map: its z (pz) must be greater than the map's (mz)`
+  - `"<名字>" needs a sprite`（僵尸没有 `sprite`）
+  - `"<名字>" must only be translated: no rotation or look_at, scale (1, 1, 1)`
+  - `"<名字>" at (x, y) is not on a map cell: x - map.x and map.y - y must be whole numbers inside the WxH map`
+  - `"<名字>" starts on a wall at column c, row r`
+  - `"<名字>" starts on the same cell as "<名字>"`（后出现的那个在前面，先出现的在后面）
+  - `the player must be in front of the map: its z (pz) must be greater than the map's (mz)`（没有僵尸时）
+  - `"<名字>" must be between the map and the player: its z (z) must be greater than the map's (mz) and less than the player's (pz)`
+  - `"<名字>" must have the same z as "zombie…" (z0), not z`（和第一个僵尸比）
+  - `"<名字>": its sprite needs "corpse" in alternates, shown when it dies`
+  - `"<名字>": prop <p> is missing`
+  - `"<名字>": prop <p> must be a whole number from 1 to 1000, got v`
+  - `"<名字>": unknown prop "<p>" (known: hp, attack)` 或 `(known: hp, attack, speed)`
+  - 检查顺序：先 `map`，再 `player`，再按先序检查每个僵尸；同一个角色依次查 sprite、只平移、格子、墙、重叠、z、corpse、props。
+  - E4.3 的 `the player at …`、`the player starts on a wall …` 两条，在 E4.4 统一改成带名字的写法（`"player" at …`）。
 
 ### 键位（`games/rogue/src/bindings.ron`）
 
@@ -850,31 +883,73 @@ E4.3 只有地图、玩家、八方向移动、墙和原地等待。僵尸、攻
 
 ### 每个 tick
 
-回合只由按键推进，和 tick 数无关（tick 照常以 60 Hz 计数，状态导出的 `tick` 照常增加）：
+回合只由按键推进，和 tick 数无关（tick 照常以 60 Hz 计数，状态导出的 `tick` 照常增加）。所有运算都是整数，没有随机数。
 
 ```text
+if player.hp == 0: return                          // 死了：之后的输入全部忽略
 action = 上表顺序里第一个 just_pressed 的动作（move_n, move_ne, …, move_nw, wait）
-if 没有: return                                   // 按住不连走：只看这个 tick 刚按下的
-if action == wait: turn += 1; return
-(c2, r2) = (c + dc, r + dr)
-if (c2, r2) 在地图外，或者是墙: return            // 撞墙不算一回合
-(c, r) = (c2, r2); turn += 1
-player 节点的位置 = (map.x + c, map.y - r, player.z)   // 整数运算后转 f32，结果精确
+if 没有: return                                    // 按住不连走：只看这个 tick 刚按下的
+if action 是移动 (dc, dr):
+    (c2, r2) = (c + dc, r + dr)
+    if (c2, r2) 上有活着的僵尸 z:                   // 撞击攻击
+        z.hp = max(z.hp - player.attack, 0)
+        消息 z.hp == 0 ? "You kill <z>." : "You hit <z>."
+        if z.hp == 0: z 的精灵换成 "corpse"，z 节点的 z 改成 (map.z + z.z) / 2
+    else if (c2, r2) 在地图外，或者是墙:
+        return                                      // 撞墙不算一回合，僵尸也不动
+    else:
+        (c, r) = (c2, r2)；写回 player 节点的位置    // 尸体的格子可以走上去
+turn += 1                                           // 移动、攻击、等待都算一回合
+for z in 活着的僵尸（先序）:                         // 本回合刚被打死的不再行动
+    z.energy += z.speed
+    while z.energy >= 100 and player.hp > 0:
+        z.energy -= 100
+        zombie_act(z)
 ```
 
-- **同一个 tick 刚按下好几个方向**时，只取上表顺序里的第一个，其余的丢掉（不排队）。
+`zombie_act(z)`：
+
+```text
+if max(|z.c - c|, |z.r - r|) == 1:                  // 和玩家相邻（含斜向）：咬
+    player.hp = max(player.hp - z.attack, 0)
+    消息 "<z> bites you."
+    if player.hp == 0: 消息 "You die."；玩家的精灵换成 "corpse"
+    return
+key(c', r') = (max(|c' - c|, |r' - r|), (c' - c)² + (r' - r)²)   // 先比切比雪夫距离，再比欧氏距离的平方
+best = 当前格子，best_key = key(当前格子)
+for (dc, dr) in 上表八个方向的顺序:
+    n = (z.c + dc, z.r + dr)
+    if n 在地图外、是墙、是玩家的格子、有活着的僵尸: continue    // 尸体的格子可以走
+    if key(n) < best_key（字典序严格小于）: best = n, best_key = key(n)
+z 移到 best（没有更近的格子就不动），写回 z 节点的位置
+```
+
 - **撞墙不消耗回合**，和 CDDA 一样。
-- **斜着走可以穿过两堵墙的夹角**（比如往东北走，北边和东边都是墙，东北那格是地面），和 CDDA 一样。
-- 没有浮点运算上的不确定性：格子是整数，写回节点位置时只做整数到 f32 的转换和加减，地图不大时都是精确的。
+- **斜着走可以穿过两堵墙的夹角**，玩家和僵尸都可以，和 CDDA 一样。
+- **同一个 tick 刚按下好几个方向**时，只取上表顺序里的第一个，其余的丢掉（不排队）。
+- **速度**：用 CDDA 的能量制。玩家速度固定是 100，每回合行动一次；僵尸每回合攒 `speed` 点能量，攒够 100 行动一次。`speed: 67` 时，僵尸在第 2、3、5、6、8、9… 回合行动，正好是「每 3 回合走 2 步」。能量从 0 开始，死了就不再增加。
+- **僵尸的行动**：和玩家相邻就咬，否则走一步。「走」只看八个邻格里哪个离玩家更近，**不寻路**，所以会被墙卡住（直线硬追）。
+- 写回节点位置时，只做整数到 f32 的转换和加减，地图不大时都是精确的。尸体的 z 是一次 f32 加法和一次乘 0.5，也是精确的。
 
 ### 状态导出
 
 ```json
 "game": {
-  "turn": 0,
-  "player": { "cell": [3, 2] }
+  "turn": 13,
+  "player": { "cell": [4, 1], "hp": 9 },
+  "zombies": [
+    { "name": "zombie", "cell": [4, 2], "hp": 0, "energy": 69 },
+    { "name": "zombie_2", "cell": [5, 1], "hp": 3, "energy": 71 }
+  ],
+  "messages": [
+    { "turn": 6, "text": "You hit zombie." },
+    { "turn": 6, "text": "zombie bites you." }
+  ]
 }
 ```
 
-- `turn`：已经过去的回合数（成功的移动加原地等待）。
-- `player.cell`：`[c, r]`，列在前。
+- `turn`：已经过去的回合数（移动、攻击、原地等待）。
+- `player.cell`、`zombies[].cell`：`[c, r]`，列在前。`hp` 为 0 就是死了。
+- `zombies`：按先序排列，死了的也留着（`hp` 为 0，格子就是尸体所在的格子）。`name` 是节点名。
+- `messages`：开局以来的全部消息，按产生的顺序；`turn` 是产生这条消息的那个回合（已经加过 1 之后的值）。E4.4 不限条数，以后游戏变长了再截断。
+- 消息文案固定是英文：`You hit <名字>.`、`You kill <名字>.`、`<名字> bites you.`、`You die.`。
