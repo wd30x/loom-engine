@@ -408,7 +408,7 @@ fn next_tick_due(last_frame: Instant, accumulated: f64) -> Instant {
 }
 
 /// Reads back the last frame and writes it as PNG. Returns the path as given.
-fn save_screenshot(renderer: &Renderer, path: &Path) -> Result<String> {
+pub(crate) fn save_screenshot(renderer: &Renderer, path: &Path) -> Result<String> {
     let (width, height) = renderer.size();
     let pixels = renderer.read_pixels().context("reading back the frame")?;
     ensure_parent_dir(path)?;

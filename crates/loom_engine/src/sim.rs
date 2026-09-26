@@ -2,12 +2,13 @@
 //! optional recorder. Headless and window mode both drive it one `tick()`
 //! at a time, so the per-tick logic exists only here.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use loom_core::input::{
     ActionMap, ActionState, InputCollector, InputRecorder, InputScript, Key, ScriptPlayer,
-    TickInput,
+    TickInput, canonical_axis_value,
 };
 use loom_sim::{Game, demo_bindings, demo_scene};
 
@@ -28,6 +29,9 @@ enum InputSource {
     },
     /// Window mode without `--input`: the keyboard and the mouse.
     Live(InputCollector),
+    /// `loom serve`: the same input every tick until a request changes it
+    /// ([`Sim::set_input`]).
+    Held(TickInput),
 }
 
 pub(crate) struct Sim {
@@ -38,7 +42,8 @@ pub(crate) struct Sim {
     recorder: Option<InputRecorder>,
     /// `--scene` as given; `None` for the built-in scene.
     scene_path: Option<String>,
-    /// Source text of `--scene` as loaded at start.
+    /// Source text of the scene as loaded (`--scene`, or a scene a serve
+    /// session loaded from a file or inline); `None` for the built-in scene.
     scene_source: Option<String>,
 }
 
@@ -80,6 +85,22 @@ impl Sim {
         })
     }
 
+    /// A `loom serve` session on `game`, from tick 0: the input is held
+    /// (nothing pressed to start with) and always recorded. `scene_path`
+    /// and `scene_source` say where `game` came from, as in [`Sim::new`];
+    /// scene text given inline has a source but no path.
+    pub fn held(game: Game, scene_path: Option<String>, scene_source: Option<String>) -> Self {
+        Self {
+            game,
+            actions: ActionState::new(),
+            bindings: demo_bindings(),
+            source: InputSource::Held(TickInput::default()),
+            recorder: Some(InputRecorder::new()),
+            scene_path,
+            scene_source,
+        }
+    }
+
     /// Starts over from tick 0 with `game` (a reloaded scene): the clock,
     /// action state, recording and script replay restart; keys held on the
     /// keyboard stay held.
@@ -94,7 +115,7 @@ impl Sim {
         }
     }
 
-    /// Source text of `--scene` as loaded at start; `None` for the built-in scene.
+    /// Source text of the scene as loaded; `None` for the built-in scene.
     pub fn scene_source(&self) -> Option<&str> {
         self.scene_source.as_deref()
     }
@@ -106,6 +127,7 @@ impl Sim {
             InputSource::Idle => TickInput::default(),
             InputSource::Script { player, .. } => player.next_tick(),
             InputSource::Live(collector) => collector.sample(&self.bindings),
+            InputSource::Held(input) => input.clone(),
         };
         self.actions.advance(next);
         if let Some(recorder) = &mut self.recorder {
@@ -140,6 +162,50 @@ impl Sim {
         }
     }
 
+    /// Changes the held input of a serve session, from the next tick on:
+    /// presses (`true`) or releases (`false`) `actions` and sets `axes`
+    /// (canonical, `0.0` removes the axis); what is not mentioned stays.
+    /// Every name must be in the bindings and every value finite, or
+    /// nothing changes. Returns the held input after the change.
+    pub fn set_input(
+        &mut self,
+        actions: &BTreeMap<String, bool>,
+        axes: &BTreeMap<String, f32>,
+    ) -> Result<&TickInput> {
+        let InputSource::Held(held) = &mut self.source else {
+            bail!("only a serve session holds input");
+        };
+        for action in actions.keys() {
+            if !self.bindings.contains(action) {
+                bail!("unknown action {action:?}");
+            }
+        }
+        for (axis, value) in axes {
+            if !self.bindings.contains_axis(axis) {
+                bail!("unknown axis {axis:?}");
+            }
+            if !value.is_finite() {
+                bail!("axis {axis:?}: the value is not finite");
+            }
+        }
+        for (action, &down) in actions {
+            if down {
+                held.actions.insert(action.clone());
+            } else {
+                held.actions.remove(action);
+            }
+        }
+        for (axis, &value) in axes {
+            let value = canonical_axis_value(value);
+            if value == 0.0 {
+                held.axes.remove(axis);
+            } else {
+                held.axes.insert(axis.clone(), value);
+            }
+        }
+        Ok(held)
+    }
+
     /// Input comes from the keyboard and mouse (not a script), so the window
     /// should capture the mouse while focused.
     pub fn is_live(&self) -> bool {
@@ -148,6 +214,10 @@ impl Sim {
 
     pub fn game(&self) -> &Game {
         &self.game
+    }
+
+    pub fn bindings(&self) -> &ActionMap {
+        &self.bindings
     }
 
     pub fn state_dump(&self) -> StateDump {
@@ -167,7 +237,7 @@ impl Sim {
                 events: player.event_count(),
                 applied: player.applied(),
             }),
-            InputSource::Idle | InputSource::Live(_) => None,
+            InputSource::Idle | InputSource::Live(_) | InputSource::Held(_) => None,
         }
     }
 

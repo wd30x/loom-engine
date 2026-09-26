@@ -285,6 +285,56 @@ Test-Check 'H4' 'WGPU_BACKEND=vulkan overrides the default backend and renders t
     Assert-SameBytes "$out/h1_a.png" "$out/h4.png"
 }
 
+Test-Check 'H5' 'serve screenshots match loom run and reuse the renderer' {
+    Assert-True (Test-Path "$out/h1_a.png") 'no screenshot from H1'
+    $requests = @(
+        '{"jsonrpc":"2.0","id":1,"method":"step","params":{"ticks":60}}'
+        "{`"jsonrpc`":`"2.0`",`"id`":2,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h5_a.png`"}}"
+        "{`"jsonrpc`":`"2.0`",`"id`":3,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h5_b.png`"}}"
+        "{`"jsonrpc`":`"2.0`",`"id`":4,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h5_c.png`",`"size`":[640,360]}}"
+        '{"jsonrpc":"2.0","id":5,"method":"quit"}'
+    )
+    $lines = @($requests | & $exe serve 2>$null)
+    Assert-True ($LASTEXITCODE -eq 0) "loom serve exit code $LASTEXITCODE"
+    Assert-True ($lines.Count -eq $requests.Count) "expected $($requests.Count) replies, got $($lines.Count): $($lines -join ' | ')"
+    $replies = @($lines | ForEach-Object { $_ | ConvertFrom-Json })
+    foreach ($reply in $replies) {
+        Assert-True ($null -eq $reply.PSObject.Properties['error']) "error reply: $($reply | ConvertTo-Json -Compress -Depth 5)"
+    }
+    $ms = @($replies[1..3] | ForEach-Object { $_.result.render_ms })
+    $script:detail = 'render_ms A {0}, B {1}, C {2} (640x360)' -f $ms[0], $ms[1], $ms[2]
+    Assert-SameBytes "$out/h1_a.png" "$out/h5_a.png"
+    Assert-SameBytes "$out/h1_a.png" "$out/h5_b.png"
+    $size = Get-PngSize "$out/h5_c.png"
+    Assert-True ($size -eq '640x360') "C is $size"
+    Assert-True ($ms[1] -lt $ms[0] / 2) "B took $($ms[1]) ms, not under half of A's $($ms[0]) ms: the renderer was not reused?"
+}
+
+Test-Check 'H6' 'serve session without screenshot loads no GPU driver' {
+    $psi = [Diagnostics.ProcessStartInfo]::new($exe, 'serve')
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.Environment['RUST_LOG'] = 'warn'   # keep smoke's own output clean
+    $process = [Diagnostics.Process]::Start($psi)
+    try {
+        # Stdin stays open: the session must still be running when checked.
+        $process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"describe"}')
+        $process.StandardInput.Flush()
+        $read = $process.StandardOutput.ReadLineAsync()
+        Assert-True ($read.Wait(10000)) 'no reply to describe within 10 s'
+        Assert-True ($read.Result -like '{"jsonrpc":"2.0","id":1,"result":{"tick_hz":60,*') "unexpected reply: $($read.Result)"
+        Assert-True (-not $process.HasExited) 'loom serve exited with stdin still open'
+        $gpu = @(Get-ModuleNames $process | Where-Object { Test-GpuModule $_ })
+        Assert-True ($gpu.Count -eq 0) "loaded $($gpu -join ', ')"
+    } finally {
+        if (-not $process.HasExited) {
+            $process.Kill()
+            $null = $process.WaitForExit(10000)
+        }
+    }
+}
+
 # ---------------------------------------------------------------- W: window
 
 if (-not $HeadlessOnly) {

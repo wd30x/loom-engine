@@ -1,11 +1,14 @@
 //! `loom` command-line runner. Specified in `docs/tasks/E0-see.md`.
 //!
-//! stdout carries exactly one JSON object per invocation; logs go to stderr.
+//! stdout carries exactly one JSON object per invocation, except for
+//! `loom serve`, whose stdout is one JSON-RPC reply per line; logs go to
+//! stderr.
 
 mod output;
 mod reload;
 mod report;
 mod run;
+mod serve;
 mod sim;
 mod state;
 mod view;
@@ -31,6 +34,9 @@ enum Command {
     Run(RunArgs),
     /// Print GPU adapter information without rendering.
     Info,
+    /// Serve a headless remote-control session: JSON-RPC requests on stdin,
+    /// one reply per line on stdout.
+    Serve(ServeArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -63,6 +69,16 @@ pub(crate) struct RunArgs {
     #[arg(long, conflicts_with = "headless")]
     no_capture: bool,
     /// Render resolution.
+    #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
+    size: Size,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ServeArgs {
+    /// Load a scene file instead of the built-in demo scene.
+    #[arg(long, value_name = "PATH")]
+    scene: Option<PathBuf>,
+    /// Screenshot size when a request gives none.
     #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
     size: Size,
 }
@@ -112,6 +128,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Run(args) => run::run(&args, started).map(|r| report::emit(&r)),
         Command::Info => run::info().map(|r| report::emit(&r)),
+        // Replies are written as they go; only a startup error is reported below.
+        Command::Serve(args) => serve::serve(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
