@@ -22,6 +22,11 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)
 
 以后新增的 crate（场景、远程控制等）也照这个思路来：**各自只依赖自己必须用到的东西**，由 `loom_engine` 统一组装。
 
+**引擎和游戏分开**（2026-09-27，用户决定：做支持 2D 和 3D 的通用引擎，但功能仍由具体需求驱动）：
+- 引擎 crate（`loom_core`、`loom_platform`、`loom_render`、`loom_scene`，以及以后的远程控制等）里**不许出现具体游戏的概念**。例如 `loom_render` 只认网格、材质、相机、光，不认「角色」；`loom_scene` 的组件要是通用的，不能是某个游戏专用的。
+- 游戏逻辑放在游戏自己的 crate 里。现在只有 `loom_sim`，装的是类魂原型的角色、相机和碰撞。第二个游戏（E4 的 2D 示例）出现时，再决定 `loom_sim` 怎么拆分或改名、`loom` 命令行怎么选游戏。接口等有了两个使用者再定，不提前抽象。
+- 判断一个功能该不该进引擎：至少要有一个真实的使用者需要它；放进引擎的那一部分，另一个游戏也用得上。
+
 ## 2. 两种运行模式
 
 | | 窗口模式 | 无头模式 `--headless` |
@@ -532,3 +537,23 @@ return p
 - **两个方块夹出的窄缝和凹角**：4 轮推出不保证完全分开，可能留下很小的重叠（下一个 tick 继续推）。
 - **相机没有碰撞**：`pitch_max` 太大时相机会钻到地面以下（本机实测：`pivot_height` 1.5、`distance` 4 时，超过约 22° 就会穿地）。演示场景用 20°。以后做相机碰撞（被墙或地面挡住时拉近）再放开。
 - 没有加速和减速：移动速度在一个 tick 内从 0 到满。
+
+## 12. 外部工具对接（2026-09-27 起的原则）
+
+用户希望 loom 能和 Aseprite、Blender、Houdini、Substance、Cascadeur、FL Studio、FMOD 这类工具通过 AI 协作。原则：
+
+1. **松耦合，AI 在中间串联**。AI 用工具自己的命令行或脚本接口操作它（例如 `blender -b --python`、`hython`、`sbsrender`、`aseprite -b --script`），用 loom 的远程控制（E3）加载资源、截图、导出状态。loom 不链接这些工具的代码，也不调用它们。
+2. **交换用开放格式**：3D 模型、骨骼和动画用 glTF 2.0；贴图、高度图用 PNG；精灵用 Aseprite 的 sprite sheet 导出（PNG 加 `--data` JSON）；音频用 WAV/OGG；元数据用 JSON。loom **只读导出结果**，不读工具的工程文件（`.aseprite`、`.blend`、`.hip`、`.sbs`、`.flp`、`.fspro`）。
+3. **能用文本当源头就用文本**：生成资源的脚本（Python、VEX、Lua）进仓库，资源可以重新生成。导出的二进制资源按 CLAUDE.md 走 Git LFS；很小的测试资源可以直接提交。
+4. **loom 的测试不依赖外部工具**：测试用的是提交进仓库的导出结果。重新生成资源的脚本单独放，不进 `verify.ps1`，和 GPU 不进 `cargo test` 是同一个思路。
+5. **按需求引进**：每种格式的导入都要等有真实的使用者需要时才做（第 1 节）。各工具的可行性和启用条件见 TODO 的延后项 X.2。
+
+### Aseprite（E4）
+
+aseprite-rs（`B:\Material\Project\claude\ports\aseprite-rs`，ADR-0004）和 loom 的约定：交换格式是原版的 sprite sheet 导出。原版 `aseprite.exe -b x.aseprite --sheet x.png --data x.json` 现在就能生成，以后 aseprite-rs 输出同样的格式。
+
+已知要点（规划者 2026-09-27 实测原版导出）：
+- 先只支持 `--format json-array`。`json-hash` 用对象的键表示帧，serde_json 默认按键排序，帧顺序会错（`x 10` 排在 `x 2` 前面）。
+- 索引色精灵导出的 sheet 是索引色 PNG（`meta.format` 为 `I8`），读入时要展开成 RGBA。
+- 帧时长是毫秒（`duration`，例如 100），不一定是 tick（1/60 s）的整数倍。换算规则要定成整数运算，保证确定性。
+- 测试精灵不用 aseprite 仓库里的样例（受它的 EULA 约束），用 Lua 脚本通过原版生成我们自己的。
