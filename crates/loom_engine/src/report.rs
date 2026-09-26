@@ -17,8 +17,22 @@ pub(crate) struct RunReport {
     pub screenshot: Option<String>,
     /// `--dump-state` path, if the state was dumped.
     pub state: Option<String>,
+    /// `--record` path, if input was recorded.
+    pub record: Option<String>,
+    /// Replay summary, if `--input` was given.
+    pub input: Option<InputReport>,
     /// `None` when no GPU device was created (headless without screenshot).
     pub adapter: Option<RunAdapter>,
+}
+
+/// The script replayed with `--input`.
+#[derive(Debug, Serialize)]
+pub(crate) struct InputReport {
+    pub path: String,
+    /// Events in the script.
+    pub events: usize,
+    /// Events that took effect; less than `events` if the script outlasts the run.
+    pub applied: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +113,12 @@ mod tests {
             size: [1280, 720],
             screenshot: None,
             state: Some("out/s.json".into()),
+            record: None,
+            input: Some(InputReport {
+                path: "in.ron".into(),
+                events: 3,
+                applied: 2,
+            }),
             adapter,
         }
     }
@@ -112,7 +132,7 @@ mod tests {
         }));
         assert_eq!(
             serde_json::to_string(&report).unwrap(),
-            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","adapter":{"name":"gpu","backend":"Dx12","driver":"d"}}"#
+            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"input":{"path":"in.ron","events":3,"applied":2},"adapter":{"name":"gpu","backend":"Dx12","driver":"d"}}"#
         );
     }
 
@@ -120,7 +140,7 @@ mod tests {
     fn report_without_gpu_has_null_adapter() {
         assert_eq!(
             serde_json::to_string(&headless_report(None)).unwrap(),
-            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","adapter":null}"#
+            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"input":{"path":"in.ron","events":3,"applied":2},"adapter":null}"#
         );
     }
 }

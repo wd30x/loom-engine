@@ -1,0 +1,8 @@
+// Key bindings for the cube demo. Key names are W3C KeyboardEvent.code values
+// (docs/architecture.md section 9).
+[
+    (action: "move_forward", keys: [KeyW, ArrowUp]),
+    (action: "move_back",    keys: [KeyS, ArrowDown]),
+    (action: "move_left",    keys: [KeyA, ArrowLeft]),
+    (action: "move_right",   keys: [KeyD, ArrowRight]),
+]

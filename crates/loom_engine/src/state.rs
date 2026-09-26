@@ -5,6 +5,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use glam::Vec3;
+use loom_core::input::{ActionSet, ActionState};
 use serde::Serialize;
 
 use crate::game::CubeGame;
@@ -14,22 +16,27 @@ use crate::run::ensure_parent_dir;
 pub(crate) struct StateDump {
     pub tick: u64,
     pub sim_time: f64,
+    /// Actions active in the last tick, sorted by name.
+    pub actions: ActionSet,
     /// Game state, under one field named after the game.
     pub demo: DemoState,
 }
 
-/// State of the E0 spinning-cube demo.
+/// State of the spinning-cube demo.
 #[derive(Debug, Serialize)]
 pub(crate) struct DemoState {
     /// Spin angle around Y in radians, in `[0, 2π)`.
     pub yaw: f64,
+    /// Position in meters; serialized as `[x, y, z]`.
+    pub position: Vec3,
 }
 
 impl StateDump {
-    pub fn of(game: &CubeGame) -> Self {
+    pub fn of(game: &CubeGame, actions: &ActionState) -> Self {
         Self {
             tick: game.clock().tick(),
             sim_time: game.clock().sim_time(),
+            actions: actions.current().clone(),
             demo: game.state(),
         }
     }
@@ -60,12 +67,14 @@ mod tests {
     #[test]
     fn dump_is_pretty_json_with_trailing_newline() {
         let mut game = CubeGame::default();
+        let actions = ActionState::new();
         for _ in 0..60 {
-            game.tick();
+            game.tick(&actions);
         }
         assert_eq!(
-            StateDump::of(&game).to_json(),
-            "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"demo\": {\n    \"yaw\": 1.0\n  }\n}\n"
+            StateDump::of(&game, &actions).to_json(),
+            "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"actions\": [],\n  \"demo\": {\n    \
+             \"yaw\": 1.0,\n    \"position\": [\n      0.0,\n      0.0,\n      0.0\n    ]\n  }\n}\n"
         );
     }
 }

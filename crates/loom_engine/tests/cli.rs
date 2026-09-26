@@ -100,9 +100,25 @@ fn state_dump_after_sixty_ticks_matches_expected_bytes() {
     let r = report(&out);
     assert_eq!(out.code, 0);
     assert_eq!(r["state"], path_str(&file));
+    assert!(r["record"].is_null());
+    assert!(r["input"].is_null());
     assert_eq!(
         fs::read_to_string(&file).expect("state file was written"),
-        "{\n  \"tick\": 60,\n  \"sim_time\": 1.0,\n  \"demo\": {\n    \"yaw\": 1.0\n  }\n}\n"
+        concat!(
+            "{\n",
+            "  \"tick\": 60,\n",
+            "  \"sim_time\": 1.0,\n",
+            "  \"actions\": [],\n",
+            "  \"demo\": {\n",
+            "    \"yaw\": 1.0,\n",
+            "    \"position\": [\n",
+            "      0.0,\n",
+            "      0.0,\n",
+            "      0.0\n",
+            "    ]\n",
+            "  }\n",
+            "}\n",
+        )
     );
 }
 
@@ -208,4 +224,201 @@ fn malformed_size_is_an_argument_error() {
     let r = report(&out);
     assert_eq!(out.code, 2);
     assert_eq!(r["status"], "error");
+}
+
+/// Writes an input script with the given events (RON event tuples) and
+/// returns its path.
+fn write_script(dir: &std::path::Path, name: &str, events: &[&str]) -> PathBuf {
+    let path = dir.join(name);
+    let body = format!(
+        "(version: 1, tick_hz: 60, events: [{}])\n",
+        events.join(", ")
+    );
+    fs::write(&path, body).expect("script file can be written");
+    path
+}
+
+fn run_headless_replay(frames: &str, script: &std::path::Path, state: &std::path::Path) -> Value {
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        frames,
+        "--input",
+        path_str(script),
+        "--dump-state",
+        path_str(state),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 0, "{r}");
+    r
+}
+
+#[test]
+fn replayed_input_moves_the_cube_to_the_expected_state() {
+    let dir = test_dir("replayed_input_moves_the_cube_to_the_expected_state");
+    let script = write_script(
+        &dir,
+        "b.ron",
+        &[
+            r#"(tick: 1, action: "move_right", down: true)"#,
+            r#"(tick: 61, action: "move_right", down: false)"#,
+        ],
+    );
+    let state = dir.join("s.json");
+    let r = run_headless_replay("90", &script, &state);
+    assert_eq!(
+        r["input"],
+        serde_json::json!({"path": path_str(&script), "events": 2, "applied": 2})
+    );
+    assert_eq!(
+        fs::read_to_string(&state).expect("state file was written"),
+        concat!(
+            "{\n",
+            "  \"tick\": 90,\n",
+            "  \"sim_time\": 1.5,\n",
+            "  \"actions\": [],\n",
+            "  \"demo\": {\n",
+            "    \"yaw\": 1.5,\n",
+            "    \"position\": [\n",
+            "      1.9999994,\n",
+            "      0.0,\n",
+            "      0.0\n",
+            "    ]\n",
+            "  }\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
+fn diagonal_replay_matches_the_expected_state() {
+    let dir = test_dir("diagonal_replay_matches_the_expected_state");
+    let script = write_script(
+        &dir,
+        "c.ron",
+        &[
+            r#"(tick: 1, action: "move_forward", down: true)"#,
+            r#"(tick: 1, action: "move_right", down: true)"#,
+        ],
+    );
+    let state = dir.join("s.json");
+    run_headless_replay("30", &script, &state);
+    assert_eq!(
+        fs::read_to_string(&state).expect("state file was written"),
+        concat!(
+            "{\n",
+            "  \"tick\": 30,\n",
+            "  \"sim_time\": 0.5,\n",
+            "  \"actions\": [\n",
+            "    \"move_forward\",\n",
+            "    \"move_right\"\n",
+            "  ],\n",
+            "  \"demo\": {\n",
+            "    \"yaw\": 0.5,\n",
+            "    \"position\": [\n",
+            "      0.707107,\n",
+            "      0.0,\n",
+            "      -0.707107\n",
+            "    ]\n",
+            "  }\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
+fn recording_while_replaying_reproduces_the_sorted_script() {
+    let dir = test_dir("recording_while_replaying_reproduces_the_sorted_script");
+    // Same-tick events deliberately out of name order.
+    let script = write_script(
+        &dir,
+        "unsorted.ron",
+        &[
+            r#"(tick: 1, action: "move_right", down: true)"#,
+            r#"(tick: 1, action: "move_forward", down: true)"#,
+            r#"(tick: 31, action: "move_right", down: false)"#,
+        ],
+    );
+    let record = dir.join("rec/out.ron");
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "40",
+        "--input",
+        path_str(&script),
+        "--record",
+        path_str(&record),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 0, "{r}");
+    assert_eq!(r["record"], path_str(&record));
+    assert_eq!(
+        fs::read_to_string(&record).expect("recording was written"),
+        concat!(
+            "(\n",
+            "    version: 1,\n",
+            "    tick_hz: 60,\n",
+            "    events: [\n",
+            "        (tick: 1, action: \"move_forward\", down: true),\n",
+            "        (tick: 1, action: \"move_right\", down: true),\n",
+            "        (tick: 31, action: \"move_right\", down: false),\n",
+            "    ],\n",
+            ")\n",
+        )
+    );
+}
+
+#[test]
+fn invalid_input_script_is_a_runtime_error_naming_the_event() {
+    let dir = test_dir("invalid_input_script_is_a_runtime_error_naming_the_event");
+    let script = write_script(
+        &dir,
+        "bad.ron",
+        &[
+            r#"(tick: 1, action: "move_right", down: true)"#,
+            r#"(tick: 42, action: "move_left", down: false)"#,
+        ],
+    );
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "60",
+        "--input",
+        path_str(&script),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 1);
+    assert_eq!(r["status"], "error");
+    let error = r["error"].as_str().expect("error is a string");
+    for part in [path_str(&script), "events[1]", "tick 42"] {
+        assert!(
+            error.contains(part),
+            "error should contain {part:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn input_events_after_the_final_tick_are_counted_as_unapplied() {
+    let dir = test_dir("input_events_after_the_final_tick_are_counted_as_unapplied");
+    let script = write_script(
+        &dir,
+        "late.ron",
+        &[r#"(tick: 100, action: "move_back", down: true)"#],
+    );
+    let out = run_loom(&[
+        "run",
+        "--headless",
+        "--frames",
+        "60",
+        "--input",
+        path_str(&script),
+    ]);
+    let r = report(&out);
+    assert_eq!(out.code, 0, "{r}");
+    assert_eq!(r["input"]["events"], 1);
+    assert_eq!(r["input"]["applied"], 0);
 }

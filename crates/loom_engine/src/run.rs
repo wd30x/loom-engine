@@ -6,13 +6,14 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use loom_core::FixedTimestep;
+use loom_core::input::Key;
 use loom_platform::{AppControl, Window, WindowApp, WindowConfig};
 use loom_render::Renderer;
 
 use crate::RunArgs;
-use crate::game::CubeGame;
 use crate::report::{InfoReport, RunReport};
-use crate::state::{StateDump, write_state};
+use crate::sim::Sim;
+use crate::state::write_state;
 
 pub(crate) fn info() -> Result<InfoReport> {
     let adapter = loom_render::probe_adapter()?;
@@ -37,18 +38,15 @@ pub(crate) fn run(args: &RunArgs) -> Result<RunReport> {
 /// screenshot is requested. Without one, the GPU is never touched.
 fn run_headless(args: &RunArgs) -> Result<RunReport> {
     let frames = args.frames.expect("clap requires --frames with --headless");
-    let mut game = CubeGame::default();
+    let mut sim = Sim::new(args, false)?;
     for _ in 0..frames {
-        game.tick();
+        sim.tick();
     }
-    let state = match &args.dump_state {
-        Some(path) => Some(write_state(path, &StateDump::of(&game))?),
-        None => None,
-    };
+    let (record, state) = write_sim_outputs(args, &sim)?;
     let (screenshot, adapter) = match &args.screenshot {
         Some(path) => {
             let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
-            renderer.render(game.model_matrix())?;
+            renderer.render(sim.game().model_matrix())?;
             let saved = save_screenshot(&renderer, path)?;
             (Some(saved), Some(renderer.adapter_summary().into()))
         }
@@ -58,20 +56,38 @@ fn run_headless(args: &RunArgs) -> Result<RunReport> {
         status: "ok",
         mode: "headless",
         frames,
-        ticks: game.clock().tick(),
-        sim_time: game.clock().sim_time(),
+        ticks: sim.game().clock().tick(),
+        sim_time: sim.game().clock().sim_time(),
         size: [args.size.width, args.size.height],
         screenshot,
         state,
+        record,
+        input: sim.input_report(),
         adapter,
     })
 }
 
+/// Writes the recording, then the state dump, as requested. Both modes call
+/// this once the last tick has run.
+fn write_sim_outputs(args: &RunArgs, sim: &Sim) -> Result<(Option<String>, Option<String>)> {
+    let record = match &args.record {
+        Some(path) => Some(sim.write_record(path)?),
+        None => None,
+    };
+    let state = match &args.dump_state {
+        Some(path) => Some(write_state(path, &sim.state_dump())?),
+        None => None,
+    };
+    Ok((record, state))
+}
+
 fn run_window(args: &RunArgs) -> Result<RunReport> {
+    // Loads --input before the window opens: a bad script never runs a tick.
+    let sim = Sim::new(args, true)?;
     let mut app = WindowRun {
         args,
         renderer: None,
-        game: CubeGame::default(),
+        sim,
         timestep: FixedTimestep::new(),
         last_frame: None,
         frames: 0,
@@ -79,6 +95,7 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         has_frame: false,
         screenshot: None,
         state: None,
+        record: None,
         error: None,
         done: false,
     };
@@ -98,11 +115,13 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         status: "ok",
         mode: "window",
         frames: app.frames,
-        ticks: app.game.clock().tick(),
-        sim_time: app.game.clock().sim_time(),
+        ticks: app.sim.game().clock().tick(),
+        sim_time: app.sim.game().clock().sim_time(),
         size: app.last_size,
         screenshot: app.screenshot,
         state: app.state,
+        record: app.record,
+        input: app.sim.input_report(),
         adapter: Some(renderer.adapter_summary().into()),
     })
 }
@@ -111,7 +130,7 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
 struct WindowRun<'a> {
     args: &'a RunArgs,
     renderer: Option<Renderer>,
-    game: CubeGame,
+    sim: Sim,
     timestep: FixedTimestep,
     last_frame: Option<Instant>,
     /// Frames actually rendered (minimized frames are not counted).
@@ -123,6 +142,7 @@ struct WindowRun<'a> {
     has_frame: bool,
     screenshot: Option<String>,
     state: Option<String>,
+    record: Option<String>,
     error: Option<anyhow::Error>,
     /// Set once we decided to exit; later events are ignored.
     done: bool,
@@ -136,20 +156,18 @@ impl WindowRun<'_> {
     }
 
     /// The single exit path for every way a window run ends (`--frames`
-    /// reached, Esc, window closed). Dumps the state when `--dump-state` was
-    /// given, then saves the last rendered frame when `--screenshot` was.
+    /// reached, Esc, window closed). Writes the recording and the state dump
+    /// as requested, then saves the last rendered frame for `--screenshot`.
     fn finish(&mut self) -> AppControl {
         if self.done {
             return AppControl::Exit;
         }
         self.done = true;
         let args = self.args;
-        // The state exists even if nothing was ever rendered (minimized).
-        if let Some(path) = &args.dump_state {
-            match write_state(path, &StateDump::of(&self.game)) {
-                Ok(saved) => self.state = Some(saved),
-                Err(e) => return self.fail(e),
-            }
+        // Recording and state exist even if nothing was ever rendered (minimized).
+        match write_sim_outputs(args, &self.sim) {
+            Ok((record, state)) => (self.record, self.state) = (record, state),
+            Err(e) => return self.fail(e),
         }
         let Some(path) = &args.screenshot else {
             return AppControl::Exit;
@@ -179,10 +197,10 @@ impl WindowRun<'_> {
         self.last_frame = Some(now);
         log::trace!("frame {} dt {:.2} ms", self.frames + 1, dt * 1000.0);
         for _ in 0..self.timestep.advance(dt) {
-            self.game.tick();
+            self.sim.tick();
         }
 
-        if !renderer.render(self.game.model_matrix())? {
+        if !renderer.render(self.sim.game().model_matrix())? {
             return Ok(AppControl::Continue);
         }
         self.frames += 1;
@@ -243,6 +261,16 @@ impl WindowApp for WindowRun<'_> {
 
     fn escape_pressed(&mut self) -> AppControl {
         self.finish()
+    }
+
+    fn key(&mut self, key: Key, down: bool) -> AppControl {
+        self.sim.key(key, down);
+        AppControl::Continue
+    }
+
+    fn focus_lost(&mut self) -> AppControl {
+        self.sim.focus_lost();
+        AppControl::Continue
     }
 }
 

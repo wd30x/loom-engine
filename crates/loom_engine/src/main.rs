@@ -5,6 +5,7 @@
 mod game;
 mod report;
 mod run;
+mod sim;
 mod state;
 
 use std::path::PathBuf;
@@ -44,6 +45,13 @@ pub(crate) struct RunArgs {
     /// Write the simulation state as JSON before exiting. Parent directories are created.
     #[arg(long, value_name = "PATH")]
     dump_state: Option<PathBuf>,
+    /// Replay an input script; the keyboard no longer drives actions (Esc still quits).
+    #[arg(long, value_name = "PATH")]
+    input: Option<PathBuf>,
+    /// Record this run's per-tick action changes as an input script before exiting.
+    /// Parent directories are created.
+    #[arg(long, value_name = "PATH")]
+    record: Option<PathBuf>,
     /// Render resolution.
     #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
     size: Size,

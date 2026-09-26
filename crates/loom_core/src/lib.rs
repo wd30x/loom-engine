@@ -5,6 +5,7 @@
 //! simulation can run (and be tested) fully headless and deterministically.
 //! See `docs/architecture.md`.
 
+pub mod input;
 pub mod time;
 
 pub use time::{FixedTimestep, MAX_TICKS_PER_FRAME, SimClock, TICK_DT, TICK_HZ};

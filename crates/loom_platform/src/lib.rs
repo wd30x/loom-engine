@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use loom_core::input::Key;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -49,6 +50,14 @@ pub trait WindowApp {
     /// Escape was pressed. Defaults to exiting.
     fn escape_pressed(&mut self) -> AppControl {
         AppControl::Exit
+    }
+    /// A bindable key went down or up. OS key repeats are not reported.
+    fn key(&mut self, _key: Key, _down: bool) -> AppControl {
+        AppControl::Continue
+    }
+    /// The window lost keyboard focus; key-up events may be missed from now.
+    fn focus_lost(&mut self) -> AppControl {
+        AppControl::Continue
     }
 }
 
@@ -130,6 +139,20 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
                     },
                 ..
             } => self.app.escape_pressed(),
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(code),
+                        state,
+                        repeat: false,
+                        ..
+                    },
+                ..
+            } => match translate_key(code) {
+                Some(key) => self.app.key(key, state == ElementState::Pressed),
+                None => AppControl::Continue,
+            },
+            WindowEvent::Focused(false) => self.app.focus_lost(),
             WindowEvent::RedrawRequested => {
                 let control = self.app.redraw();
                 if let Some(window) = &self.window {
@@ -140,5 +163,78 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
             _ => AppControl::Continue,
         };
         self.apply(event_loop, control);
+    }
+}
+
+/// Translates a winit key code into a bindable [`Key`]. `Escape` (reserved
+/// for quitting) and keys outside the supported range give `None`.
+pub fn translate_key(code: KeyCode) -> Option<Key> {
+    Some(match code {
+        KeyCode::KeyA => Key::KeyA,
+        KeyCode::KeyB => Key::KeyB,
+        KeyCode::KeyC => Key::KeyC,
+        KeyCode::KeyD => Key::KeyD,
+        KeyCode::KeyE => Key::KeyE,
+        KeyCode::KeyF => Key::KeyF,
+        KeyCode::KeyG => Key::KeyG,
+        KeyCode::KeyH => Key::KeyH,
+        KeyCode::KeyI => Key::KeyI,
+        KeyCode::KeyJ => Key::KeyJ,
+        KeyCode::KeyK => Key::KeyK,
+        KeyCode::KeyL => Key::KeyL,
+        KeyCode::KeyM => Key::KeyM,
+        KeyCode::KeyN => Key::KeyN,
+        KeyCode::KeyO => Key::KeyO,
+        KeyCode::KeyP => Key::KeyP,
+        KeyCode::KeyQ => Key::KeyQ,
+        KeyCode::KeyR => Key::KeyR,
+        KeyCode::KeyS => Key::KeyS,
+        KeyCode::KeyT => Key::KeyT,
+        KeyCode::KeyU => Key::KeyU,
+        KeyCode::KeyV => Key::KeyV,
+        KeyCode::KeyW => Key::KeyW,
+        KeyCode::KeyX => Key::KeyX,
+        KeyCode::KeyY => Key::KeyY,
+        KeyCode::KeyZ => Key::KeyZ,
+        KeyCode::Digit0 => Key::Digit0,
+        KeyCode::Digit1 => Key::Digit1,
+        KeyCode::Digit2 => Key::Digit2,
+        KeyCode::Digit3 => Key::Digit3,
+        KeyCode::Digit4 => Key::Digit4,
+        KeyCode::Digit5 => Key::Digit5,
+        KeyCode::Digit6 => Key::Digit6,
+        KeyCode::Digit7 => Key::Digit7,
+        KeyCode::Digit8 => Key::Digit8,
+        KeyCode::Digit9 => Key::Digit9,
+        KeyCode::ArrowUp => Key::ArrowUp,
+        KeyCode::ArrowDown => Key::ArrowDown,
+        KeyCode::ArrowLeft => Key::ArrowLeft,
+        KeyCode::ArrowRight => Key::ArrowRight,
+        KeyCode::Space => Key::Space,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::ShiftLeft => Key::ShiftLeft,
+        KeyCode::ShiftRight => Key::ShiftRight,
+        KeyCode::ControlLeft => Key::ControlLeft,
+        KeyCode::ControlRight => Key::ControlRight,
+        KeyCode::AltLeft => Key::AltLeft,
+        KeyCode::AltRight => Key::AltRight,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn winit_key_codes_translate_to_loom_keys() {
+        assert_eq!(translate_key(KeyCode::KeyW), Some(Key::KeyW));
+        assert_eq!(translate_key(KeyCode::Digit0), Some(Key::Digit0));
+        assert_eq!(translate_key(KeyCode::ArrowUp), Some(Key::ArrowUp));
+        assert_eq!(translate_key(KeyCode::ShiftLeft), Some(Key::ShiftLeft));
+        assert_eq!(translate_key(KeyCode::Escape), None);
+        assert_eq!(translate_key(KeyCode::F5), None);
     }
 }
