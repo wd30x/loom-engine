@@ -86,6 +86,20 @@ fn new_instance() -> wgpu::Instance {
     wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
 }
 
+/// Runs one step of renderer creation, logging (at debug level) before it
+/// starts and how long it took. If a step hangs, the last line of the log
+/// names it.
+fn init_step<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    log::debug!("renderer init: {name} ...");
+    let start = std::time::Instant::now();
+    let out = f();
+    log::debug!(
+        "renderer init: {name} took {} ms",
+        start.elapsed().as_millis()
+    );
+    out
+}
+
 fn adapter_options<'a>(
     surface: Option<&'a wgpu::Surface<'a>>,
 ) -> wgpu::RequestAdapterOptions<'a, 'a> {
@@ -204,7 +218,7 @@ impl Presenter {
         adapter: &wgpu::Adapter,
         surface: wgpu::Surface<'static>,
     ) -> Result<Self, RenderError> {
-        let caps = surface.get_capabilities(adapter);
+        let caps = init_step("get_capabilities", || surface.get_capabilities(adapter));
         let format = caps
             .formats
             .iter()
@@ -392,8 +406,10 @@ pub struct Renderer {
 impl Renderer {
     /// Creates a renderer without any surface. Frames can only be read back.
     pub fn new_headless(width: u32, height: u32) -> Result<Self, RenderError> {
-        let instance = new_instance();
-        let adapter = pollster::block_on(instance.request_adapter(&adapter_options(None)))?;
+        let instance = init_step("create_instance", new_instance);
+        let adapter = init_step("request_adapter", || {
+            pollster::block_on(instance.request_adapter(&adapter_options(None)))
+        })?;
         let mut renderer = Self::with_adapter(adapter)?;
         renderer.resize(width, height)?;
         Ok(renderer)
@@ -406,10 +422,11 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> Result<Self, RenderError> {
-        let instance = new_instance();
-        let surface = instance.create_surface(target)?;
-        let adapter =
-            pollster::block_on(instance.request_adapter(&adapter_options(Some(&surface))))?;
+        let instance = init_step("create_instance", new_instance);
+        let surface = init_step("create_surface", || instance.create_surface(target))?;
+        let adapter = init_step("request_adapter", || {
+            pollster::block_on(instance.request_adapter(&adapter_options(Some(&surface))))
+        })?;
         let mut renderer = Self::with_adapter(adapter)?;
         renderer.presenter = Some(Presenter::new(
             &renderer.device,
@@ -432,12 +449,15 @@ impl Renderer {
             max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
             ..Default::default()
         };
-        let (device, queue) =
+        let (device, queue) = init_step("request_device", || {
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("loom"),
                 required_limits: limits,
                 ..Default::default()
-            }))?;
+            }))
+        })?;
+        log::debug!("renderer init: pipeline and resources ...");
+        let resources_start = std::time::Instant::now();
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl"));
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -519,6 +539,10 @@ impl Renderer {
             .map(|&kind| (kind, GpuMesh::new(&device, kind)))
             .collect();
 
+        log::debug!(
+            "renderer init: pipeline and resources took {} ms",
+            resources_start.elapsed().as_millis()
+        );
         Ok(Self {
             adapter,
             device,

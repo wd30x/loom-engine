@@ -29,6 +29,10 @@ pub(crate) struct RunReport {
     pub reload_errors: u64,
     /// `None` when no GPU device was created (headless without screenshot).
     pub adapter: Option<RunAdapter>,
+    /// Milliseconds from process start until the renderer was created
+    /// (device, pipelines and, in window mode, the surface); `None` without
+    /// a renderer. Wall clock, for diagnosis only; never in the state dump.
+    pub renderer_init_ms: Option<u64>,
 }
 
 /// The script replayed with `--input`.
@@ -129,6 +133,7 @@ mod tests {
             reloads: 0,
             reload_errors: 0,
             adapter,
+            renderer_init_ms: None,
         }
     }
 
@@ -141,7 +146,7 @@ mod tests {
         }));
         assert_eq!(
             serde_json::to_string(&report).unwrap(),
-            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"reloads":0,"reload_errors":0,"adapter":{"name":"gpu","backend":"Dx12","driver":"d"}}"#
+            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"reloads":0,"reload_errors":0,"adapter":{"name":"gpu","backend":"Dx12","driver":"d"},"renderer_init_ms":null}"#
         );
     }
 
@@ -149,7 +154,7 @@ mod tests {
     fn report_without_gpu_has_null_adapter() {
         assert_eq!(
             serde_json::to_string(&headless_report(None)).unwrap(),
-            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"reloads":0,"reload_errors":0,"adapter":null}"#
+            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"reloads":0,"reload_errors":0,"adapter":null,"renderer_init_ms":null}"#
         );
     }
 }

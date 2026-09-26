@@ -517,6 +517,7 @@ fn headless_run_without_screenshot_reports_null_adapter() {
     assert_eq!(r["status"], "ok");
     assert_eq!(r["mode"], "headless");
     assert!(r["adapter"].is_null());
+    assert!(r["renderer_init_ms"].is_null());
     assert!(r["screenshot"].is_null());
     assert!(r["state"].is_null());
     assert_eq!(r["frames"], 60);

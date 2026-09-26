@@ -12,6 +12,7 @@ mod view;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 
@@ -85,10 +86,13 @@ fn parse_size(s: &str) -> Result<Size, String> {
 }
 
 fn main() -> ExitCode {
+    // Process start, for `renderer_init_ms` in the report.
+    let started = Instant::now();
     env_logger::Builder::from_env(
         env_logger::Env::default()
             .default_filter_or("warn,loom=info,loom_render=info,loom_platform=info"),
     )
+    .format_timestamp_millis()
     .init();
 
     let cli = match Cli::try_parse() {
@@ -106,7 +110,7 @@ fn main() -> ExitCode {
     };
 
     let result = match cli.command {
-        Command::Run(args) => run::run(&args).map(|r| report::emit(&r)),
+        Command::Run(args) => run::run(&args, started).map(|r| report::emit(&r)),
         Command::Info => run::info().map(|r| report::emit(&r)),
     };
     match result {

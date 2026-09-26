@@ -26,12 +26,18 @@ pub(crate) fn info() -> Result<InfoReport> {
     })
 }
 
-pub(crate) fn run(args: &RunArgs) -> Result<RunReport> {
+/// `started` is the process start, for `renderer_init_ms`.
+pub(crate) fn run(args: &RunArgs, started: Instant) -> Result<RunReport> {
     if args.headless {
-        run_headless(args)
+        run_headless(args, started)
     } else {
-        run_window(args)
+        run_window(args, started)
     }
+}
+
+/// Whole milliseconds since `started`.
+fn millis_since(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Headless: frame k runs exactly tick k. No wall clock.
@@ -39,21 +45,26 @@ pub(crate) fn run(args: &RunArgs) -> Result<RunReport> {
 /// Intermediate frames are never seen and rendering is a pure function of
 /// the state, so only the final state is rendered, and only when a
 /// screenshot is requested. Without one, the GPU is never touched.
-fn run_headless(args: &RunArgs) -> Result<RunReport> {
+fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
     let frames = args.frames.expect("clap requires --frames with --headless");
     let mut sim = Sim::new(args, false)?;
     for _ in 0..frames {
         sim.tick();
     }
     let (record, state) = write_sim_outputs(args, &sim)?;
-    let (screenshot, adapter) = match &args.screenshot {
+    let (screenshot, adapter, renderer_init_ms) = match &args.screenshot {
         Some(path) => {
             let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
+            let init_ms = millis_since(started);
             render_scene(&mut renderer, sim.game().scene())?;
             let saved = save_screenshot(&renderer, path)?;
-            (Some(saved), Some(renderer.adapter_summary().into()))
+            (
+                Some(saved),
+                Some(renderer.adapter_summary().into()),
+                Some(init_ms),
+            )
         }
-        None => (None, None),
+        None => (None, None, None),
     };
     Ok(RunReport {
         status: "ok",
@@ -70,6 +81,7 @@ fn run_headless(args: &RunArgs) -> Result<RunReport> {
         reloads: 0,
         reload_errors: 0,
         adapter,
+        renderer_init_ms,
     })
 }
 
@@ -87,7 +99,7 @@ fn write_sim_outputs(args: &RunArgs, sim: &Sim) -> Result<(Option<String>, Optio
     Ok((record, state))
 }
 
-fn run_window(args: &RunArgs) -> Result<RunReport> {
+fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
     // Stat before reading: if the file changes in between, the watcher sees
     // a newer time than recorded and simply re-reads it.
     let modified = args
@@ -101,6 +113,8 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         .map(|src| SceneWatcher::new(Instant::now(), modified, src.to_owned()));
     let mut app = WindowRun {
         args,
+        started,
+        renderer_init_ms: None,
         window: None,
         renderer: None,
         sim,
@@ -145,12 +159,16 @@ fn run_window(args: &RunArgs) -> Result<RunReport> {
         reloads: app.reloads,
         reload_errors: app.reload_errors,
         adapter: Some(renderer.adapter_summary().into()),
+        renderer_init_ms: app.renderer_init_ms,
     })
 }
 
 /// Window mode: wall-clock time drives the fixed-step accumulator.
 struct WindowRun<'a> {
     args: &'a RunArgs,
+    /// Process start, and how long after it the renderer was ready.
+    started: Instant,
+    renderer_init_ms: Option<u64>,
     /// Kept to capture and release the mouse on focus changes.
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
@@ -298,6 +316,7 @@ impl WindowApp for WindowRun<'_> {
         let size = window.inner_size();
         match Renderer::new_with_surface(window, size.width, size.height) {
             Ok(renderer) => {
+                self.renderer_init_ms = Some(millis_since(self.started));
                 self.renderer = Some(renderer);
                 AppControl::Continue
             }

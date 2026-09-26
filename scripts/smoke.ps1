@@ -69,6 +69,10 @@ $keyCodes = @{ W = @(0x57, 0x11); A = @(0x41, 0x1E); D = @(0x44, 0x20); L = @(0x
 $gpuDlls = @('vulkan-1.dll', 'd3d12.dll', 'd3d12core.dll', 'd3d11.dll')
 $gpuDriverPrefixes = @('nv', 'amd', 'ig')
 
+# Start-LoomWindow waits for loom_render's "surface format" info line; pin the
+# default filter so an outer RUST_LOG cannot hide it.
+$env:RUST_LOG = 'warn,loom=info,loom_render=info,loom_platform=info'
+
 $script:passed = 0
 $script:failed = 0
 
@@ -127,30 +131,59 @@ function Start-Loom([string]$name, [string[]]$loomArgs) {
     [pscustomobject]@{ Process = $process; Stdout = $stdout; Stderr = $stderr; Window = [IntPtr]::Zero }
 }
 
-# Starts a windowed run and waits (up to 10 s) for its window.
+# The last log line (they start with `[`; continuation lines do not) of a
+# run's stderr, to show where a stalled run got stuck.
+function Get-LastLogLine($run) {
+    $lines = @(Get-Content $run.Stderr -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\[' })
+    if ($lines.Count) { $lines[-1] } else { '(no log yet)' }
+}
+
+# Starts a windowed run and waits (up to 10 s) for its window, then (up to
+# 30 s) for the renderer: the fixed sleeps of the checks count from there.
+# Renderer creation sometimes stalls for minutes (G1.4); that is reported as
+# such instead of surfacing as some later assertion.
 function Start-LoomWindow([string]$name, [string[]]$loomArgs) {
     $run = Start-Loom $name $loomArgs
     $deadline = (Get-Date).AddSeconds(10)
-    while ((Get-Date) -lt $deadline) {
-        $run.Window = [SmokeWin32]::FindWindow([uint32]$run.Process.Id, 'loom')
-        if ($run.Window -ne [IntPtr]::Zero) { return $run }
+    while ($run.Window -eq [IntPtr]::Zero) {
+        if ((Get-Date) -ge $deadline) {
+            Stop-Loom $run
+            throw 'loom window did not appear within 10 s'
+        }
         if ($run.Process.HasExited) { throw "loom exited early with code $($run.Process.ExitCode)" }
         Start-Sleep -Milliseconds 100
+        $run.Window = [SmokeWin32]::FindWindow([uint32]$run.Process.Id, 'loom')
     }
-    Stop-Loom $run
-    throw 'loom window did not appear within 10 s'
+    $deadline = (Get-Date).AddSeconds(30)
+    while (-not (Select-String -Path $run.Stderr -Pattern 'surface format' -Quiet -ErrorAction SilentlyContinue)) {
+        if ($run.Process.HasExited) { throw "loom exited early with code $($run.Process.ExitCode); last log line: $(Get-LastLogLine $run)" }
+        if ((Get-Date) -ge $deadline) {
+            $last = Get-LastLogLine $run
+            Stop-Loom $run
+            throw "renderer init stalled: no `"surface format`" after 30 s; last log line: $last"
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    $run
 }
 
-# Kills the process if it is still running.
+# Kills the process if it is still running. A process stuck in the driver
+# may not die at once: give up after 10 s instead of blocking smoke.
 function Stop-Loom($run) {
-    if ($run -and -not $run.Process.HasExited) { $run.Process.Kill(); $run.Process.WaitForExit() }
+    if ($run -and -not $run.Process.HasExited) {
+        $run.Process.Kill()
+        if (-not $run.Process.WaitForExit(10000)) {
+            Write-Host "     note: process $($run.Process.Id) did not exit 10 s after Kill (driver stall?)"
+        }
+    }
 }
 
 # Waits (up to 10 s) for a run to exit. Returns exit code and parsed JSON.
 function Wait-Loom($run) {
     if (-not $run.Process.WaitForExit(10000)) {
+        $last = Get-LastLogLine $run
         Stop-Loom $run
-        throw 'loom did not exit within 10 s'
+        throw "loom did not exit within 10 s; last log line: $last"
     }
     $text = Get-Content $run.Stdout -Raw
     $json = if ($text) { $text | ConvertFrom-Json } else { $null }
@@ -358,6 +391,7 @@ if (-not $HeadlessOnly) {
             Stop-Loom $run
         }
         $tick = (Get-Content "$out/w6.json" -Raw | ConvertFrom-Json).tick
+        Assert-True ($tick -gt 0) 'window replay ran 0 ticks'
         $replay = Invoke-HeadlessReplay "$out/w5.ron" $tick "$out/w6_replay.json"
         Assert-SameBytes "$out/w6.json" $replay
     }
@@ -379,12 +413,14 @@ if (-not $HeadlessOnly) {
             Assert-ExitOk $r
             $lifetime = ($run.Process.ExitTime - $run.Process.StartTime).TotalSeconds
             $ratio = $r.Json.ticks / ($lifetime * 60)
-            # Wall time not covered by ticks. Startup (GPU init) and shutdown
-            # cost a fixed ~0.9 s; had ticks stopped while minimized, the
-            # 3 s minimized span would add to it.
-            $untracked = $lifetime - $r.Json.ticks / 60
-            $script:detail = 'minimized CPU {0:P1} of one core; {1} ticks in {2:N2} s wall = {3:N3} x 60 Hz; {4:N2} s not covered by ticks' -f `
-                $cpu, $r.Json.ticks, $lifetime, $ratio, $untracked
+            # Wall time not covered by ticks, not counting startup up to the
+            # ready renderer (renderer_init_ms), which varies and sometimes
+            # stalls. Had ticks stopped while minimized, the 3 s minimized
+            # span would add to it.
+            $initS = $r.Json.renderer_init_ms / 1000
+            $untracked = $lifetime - $initS - $r.Json.ticks / 60
+            $script:detail = 'minimized CPU {0:P1} of one core; {1} ticks in {2:N2} s wall = {3:N3} x 60 Hz; renderer_init_ms {5}; {4:N2} s not covered by ticks' -f `
+                $cpu, $r.Json.ticks, $lifetime, $ratio, $untracked, $r.Json.renderer_init_ms
             Assert-True ($cpu -lt 0.05) ('minimized CPU is {0:P1} of one core' -f $cpu)
             Assert-True ($untracked -ge 0 -and $untracked -lt 1.5) ('{0:N2} s of wall time not covered by ticks' -f $untracked)
         } finally {
