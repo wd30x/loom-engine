@@ -131,6 +131,7 @@ loom info                  输出 GPU adapter 信息，不渲染
 - `record`：没有录制时为 `null`，否则是 `--record` 给的路径
 - `input`：没有回放时为 `null`，否则是 `{"path":…,"events":脚本里的事件数,"applied":实际生效的事件数}`。脚本比运行长时 `applied < events`
 - `adapter`：没有创建 GPU 设备时为 `null`（无头模式且没有 `--screenshot`）
+- `renderer_init_ms`（G1.4 起）：从进程启动到渲染器创建完成（设备、管线都建好，窗口模式还包括 surface）的毫秒数，整数；没有创建渲染器时为 `null`。用来区分「启动慢」和「运行中出错」。它是墙钟时间，只用于诊断，不进状态导出
 - `scene`：用内置演示场景时为 `null`，否则是 `--scene` 给的路径
 - `reloads`：窗口模式下成功热重载的次数；`reload_errors`：热重载时场景文件解析或校验失败的次数（失败时保持旧场景继续跑）。无头模式两者都是 0
 - 窗口模式提前退出（Esc、关窗）时，`frames` 和 `ticks` 是实际跑到的数
