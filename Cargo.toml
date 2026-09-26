@@ -41,6 +41,11 @@ thiserror = "2.0.21"
 log = "0.4.34"
 env_logger = "0.11.11"
 
+# MCP adapter only (crates/loom_mcp); the engine crates never use these
+rmcp = { version = "3.4.1", features = ["server", "macros", "transport-io"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "process", "sync", "time"] }
+base64 = "0.23.1"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 unused_must_use = "deny"

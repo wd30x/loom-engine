@@ -335,6 +335,64 @@ Test-Check 'H6' 'serve session without screenshot loads no GPU driver' {
     }
 }
 
+# Through scripts/mcp.ps1, as .mcp.json starts it, so this covers the script too.
+Test-Check 'H7' 'mcp screenshot returns the PNG inline' {
+    Assert-True (Test-Path "$out/h1_a.png") 'no screenshot from H1'
+    $shot = Join-Path $root 'out/mcp/shot-1.png'
+    if (Test-Path $shot) { Remove-Item $shot }
+    $psi = [Diagnostics.ProcessStartInfo]::new('pwsh')
+    foreach ($a in '-NoProfile', '-File', 'scripts/mcp.ps1') { $psi.ArgumentList.Add($a) }
+    $psi.WorkingDirectory = $root
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.Environment['RUST_LOG'] = 'warn'   # keep smoke's own output clean
+    $process = [Diagnostics.Process]::Start($psi)
+    $send = { param($message) $process.StandardInput.WriteLine(($message | ConvertTo-Json -Compress -Depth 10)); $process.StandardInput.Flush() }
+    # The reply with `id`, waiting at most `seconds` for each line.
+    $receive = {
+        param([int]$id, [int]$seconds)
+        while ($true) {
+            $read = $process.StandardOutput.ReadLineAsync()
+            if (-not $read.Wait($seconds * 1000)) { throw "no reply to request $id within $seconds s" }
+            if ($null -eq $read.Result) { throw "loom-mcp closed stdout before replying to request $id" }
+            $reply = $read.Result | ConvertFrom-Json -Depth 20
+            if ($reply.PSObject.Properties['id'] -and $reply.id -eq $id) { return $reply }
+        }
+    }
+    try {
+        & $send @{ jsonrpc = '2.0'; id = 1; method = 'initialize'; params = @{
+                protocolVersion = '2025-11-25'; capabilities = @{}; clientInfo = @{ name = 'smoke'; version = '0' } } }
+        # The first reply may wait for mcp.ps1's cargo build.
+        $init = & $receive 1 180
+        Assert-True ($init.result.serverInfo.name -eq 'loom-mcp') "unexpected initialize reply: $($init | ConvertTo-Json -Compress -Depth 10)"
+        & $send @{ jsonrpc = '2.0'; method = 'notifications/initialized' }
+        & $send @{ jsonrpc = '2.0'; id = 2; method = 'tools/call'; params = @{ name = 'step'; arguments = @{ ticks = 60 } } }
+        $step = & $receive 2 60
+        Assert-True (-not $step.result.isError -and $step.result.content[0].text -eq '{"tick":60}') "step: $($step | ConvertTo-Json -Compress -Depth 10)"
+        & $send @{ jsonrpc = '2.0'; id = 3; method = 'tools/call'; params = @{ name = 'screenshot'; arguments = @{} } }
+        $reply = & $receive 3 60
+        $content = @($reply.result.content)
+        Assert-True (-not $reply.result.isError -and $content.Count -eq 2) "screenshot: $($content[0].text)"
+        $image = $content[1]
+        Assert-True ($image.type -eq 'image' -and $image.mimeType -eq 'image/png') "second content is $($image.type) $($image.mimeType)"
+        $bytes = [Convert]::FromBase64String($image.data)
+        [IO.File]::WriteAllBytes((Join-Path $root "$out/h7_inline.png"), $bytes)
+        $script:detail = '{0} PNG bytes inline; {1}' -f $bytes.Length, $content[0].text
+        Assert-SameBytes "$out/h1_a.png" "$out/h7_inline.png"
+        Assert-True (Test-Path $shot) 'out/mcp/shot-1.png was not written'
+        Assert-SameBytes "$out/h1_a.png" $shot
+        $process.StandardInput.Close()
+        Assert-True ($process.WaitForExit(20000)) 'loom-mcp did not exit within 20 s after stdin closed'
+        Assert-True ($process.ExitCode -eq 0) "mcp.ps1 exit code $($process.ExitCode)"
+    } finally {
+        if (-not $process.HasExited) {
+            $process.Kill($true)
+            $null = $process.WaitForExit(10000)
+        }
+    }
+}
+
 # ---------------------------------------------------------------- W: window
 
 if (-not $HeadlessOnly) {

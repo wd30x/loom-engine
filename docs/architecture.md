@@ -703,12 +703,12 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 
 **`.mcp.json` 和 Windows 的文件锁**：Windows 不允许覆盖正在运行的 exe。如果 MCP 直接运行 `target/debug/` 里的 `loom.exe`，只要有会话开着 MCP，实现者就编译不了。所以：
 
-- `.mcp.json` 运行 `pwsh -NoProfile -File scripts/mcp.ps1`。
+- `.mcp.json` 运行 `pwsh -NoProfile -File ${CLAUDE_PROJECT_DIR:-.}/scripts/mcp.ps1`。Claude Code 的文档没有保证 MCP 服务的工作目录是项目根目录，但会设置 `CLAUDE_PROJECT_DIR`；这个变量没设置时，退回相对路径（E3.2 实现者查文档发现）。
 - 脚本做这几件事：
   1. 切到仓库根目录；
   2. `cargo build -q -p loom_engine -p loom_mcp`，编译输出进 stderr；
   3. 把 `loom.exe` 和 `loom-mcp.exe` 复制到 `target/mcp-run/<时间戳>-<pid>/`；
   4. 从那里运行 `loom-mcp`，stdin 和 stdout 直接交给它；
-  5. 顺手删掉 `target/mcp-run/` 下没在用的旧目录，删不掉的（正在运行）跳过。
+  5. 顺手删掉 `target/mcp-run/` 下没在用的旧目录。**先单独删目录里的 `loom-mcp.exe`**，删不掉说明那个会话还在，整个目录跳过。原因是会话启动后、第一次调用工具之前，它的 `loom.exe` 还没运行，也没被锁住，直接整个目录递归删除会把它删掉（E3.2 实现者发现）。
 - 所以每次启动都用最新代码，而且不会锁住 `target/debug/`。
 - 工具里的相对路径（截图、场景、录制）都相对**仓库根目录**。

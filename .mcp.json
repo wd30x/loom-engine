@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "loom": {
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "${CLAUDE_PROJECT_DIR:-.}/scripts/mcp.ps1"]
+    }
+  }
+}
