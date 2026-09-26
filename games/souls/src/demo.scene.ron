@@ -28,6 +28,18 @@
                 ("backstep_distance", 1.5),      // meters
                 ("backstep_invuln_from", 1),     // as for the roll
                 ("backstep_invuln_to", 8),
+                ("attack_cost", 15),             // light attack: stamina points
+                ("attack_startup_ticks", 10),    // before the swing; can still turn
+                ("attack_active_ticks", 4),      // the swing, sliding forward
+                ("attack_recovery_ticks", 16),   // after the swing; the next action can be buffered
+                ("attack_distance", 0.3),        // meters slid during the swing
+                ("heavy_cost", 25),              // heavy attack: as for the light one
+                ("heavy_startup_ticks", 22),
+                ("heavy_active_ticks", 5),
+                ("heavy_recovery_ticks", 23),
+                ("heavy_distance", 0.6),
+                ("attack_turn_speed", 180),      // degrees per second, during startup
+                ("combo_max", 3),                // most light attacks in a row
             ],
             children: [
                 // 面朝方向的标记：胶囊体本身是旋转对称的，看不出朝向

@@ -675,7 +675,7 @@ invulnerable = (action == roll || action == backstep) && invuln_from_of(action) 
 
 - 换算：`attack_step = attack_distance / attack_active_ticks`，`heavy_step` 同理，`attack_turn_step = attack_turn_speed.to_radians() / 60`。
 - `attack_step`、`heavy_step` 也必须小于胶囊体半径，报错文案和翻滚的一样，`<action>` 写 `attack` 或 `heavy`。
-- 检查顺序：接在上一小节的检查后面，按上表顺序，最后是每 tick 距离（attack、heavy）。
+- 检查顺序：所有 prop 的取值检查是一次遍历同一张表，所以新参数的取值检查接在 G2.1 参数的取值检查后面、无敌帧区间检查前面；每 tick 距离的检查接在 sprint、roll、backstep 后面（G2.3 审查时按实现定下）。
 
 **状态**：
 - `action` 多了 `attack`、`heavy` 两个值；`action_tick` 从 1 数到 `startup + active + recovery`。
@@ -709,7 +709,7 @@ next_action():
 
 start(roll):   同上一小节的翻滚或后撤步开始
 start(attack 或 heavy):
-    combo = (n == attack) ? (from_buffer && 上一个动作是 attack && combo < combo_max ? combo + 1 : 1) : 0
+    combo = (n == attack) ? (from_buffer && 上一个动作是 attack && 上一刀的 combo < combo_max ? 上一刀的 combo + 1 : 1) : 0
     action = n; action_tick = 1
     stamina = max(stamina - cost_of(n), 0.0); stamina_wait = stamina_delay_ticks
     attack_tick(n)
@@ -729,10 +729,13 @@ attack_tick(a):                                           // S、A、R 是 a 的
         else if input.just_pressed("attack") { buffered = attack }
         else if tap { buffered = roll }
     }
-    if action_tick == S + A + R { action = idle; action_tick = 0; attack_phase = null }
+    if action_tick == S + A + R {
+        记下「上一个动作 = a，上一刀的 combo = combo」       // 内部变量，不进状态导出
+        action = idle; action_tick = 0; attack_phase = null; combo = 0
+    }
 ```
 
-- 「上一个动作是 attack」：用一个不进状态导出的内部变量记住最近结束的动作。连段只在**预输入**接上时继续；攻击结束后等一会儿再按，是新的第 1 刀。
+- 「上一个动作是 attack」：用一个不进状态导出的内部变量记住最近结束的动作和它的 combo。导出的 `combo` 在攻击之外总是 0（G2.3 审查决定）。连段只在**预输入**接上时继续；攻击结束后等一会儿再按，是新的第 1 刀。
 - 预输入会被后来的输入**覆盖**（同一次攻击里先按了轻、后按了重，最后接的是重）。前摇里的按键直接丢掉。
 - 预输入在攻击结束后的**下一个 tick** 执行，所以最后一个后摇 tick 和下一刀的第 1 个 tick 相邻，中间没有空档。
 - 翻滚和后撤步期间的按键仍然丢掉，不预输入（和上一小节相同）。

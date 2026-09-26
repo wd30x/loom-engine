@@ -1,6 +1,6 @@
-//! Stamina, roll, sprint and backstep: the parameters, read from the
-//! character node's props with defaults, and the action state
-//! (`docs/architecture.md` section 11, "耐力、翻滚、冲刺").
+//! Stamina, roll, sprint, backstep and attacks: the parameters, read from
+//! the character node's props with defaults, and the action state
+//! (`docs/architecture.md` section 11, "耐力、翻滚、冲刺" and "攻击").
 
 use loom_scene::{NodeId, Scene};
 use serde::Serialize;
@@ -15,6 +15,30 @@ pub enum Action {
     Sprint,
     Roll,
     Backstep,
+    /// A light attack.
+    Attack,
+    /// A heavy attack.
+    Heavy,
+}
+
+/// The part of an attack; serialized in lower case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttackPhase {
+    Startup,
+    Active,
+    Recovery,
+}
+
+/// An action pressed during an attack, to start once it is over;
+/// serialized in lower case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Buffered {
+    Attack,
+    Heavy,
+    /// The roll key: a roll, or a backstep without a direction.
+    Roll,
 }
 
 /// How a prop's value is checked.
@@ -29,7 +53,7 @@ enum Rule {
 /// Every prop the character understands, with its default and rule, in
 /// the order they are checked. Reading, checking and rejecting unknown
 /// names all go through this one table.
-const PARAMS: [(&str, f64, Rule); 16] = [
+const PARAMS: [(&str, f64, Rule); 28] = [
     ("stamina_max", 100.0, Rule::Positive),
     ("stamina_regen", 45.0, Rule::Positive),
     ("stamina_delay_ticks", 30.0, Rule::AtLeast(0)),
@@ -46,6 +70,18 @@ const PARAMS: [(&str, f64, Rule); 16] = [
     ("backstep_distance", 1.5, Rule::Positive),
     ("backstep_invuln_from", 1.0, Rule::AtLeast(1)),
     ("backstep_invuln_to", 8.0, Rule::AtLeast(1)),
+    ("attack_cost", 15.0, Rule::Positive),
+    ("attack_startup_ticks", 10.0, Rule::AtLeast(1)),
+    ("attack_active_ticks", 4.0, Rule::AtLeast(1)),
+    ("attack_recovery_ticks", 16.0, Rule::AtLeast(1)),
+    ("attack_distance", 0.3, Rule::Positive),
+    ("heavy_cost", 25.0, Rule::Positive),
+    ("heavy_startup_ticks", 22.0, Rule::AtLeast(1)),
+    ("heavy_active_ticks", 5.0, Rule::AtLeast(1)),
+    ("heavy_recovery_ticks", 23.0, Rule::AtLeast(1)),
+    ("heavy_distance", 0.6, Rule::Positive),
+    ("attack_turn_speed", 180.0, Rule::Positive),
+    ("combo_max", 3.0, Rule::AtLeast(1)),
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -58,6 +94,17 @@ pub(crate) struct Move {
     /// Invulnerable while `invuln_from <= action_tick <= invuln_to`.
     pub invuln_from: u32,
     pub invuln_to: u32,
+}
+
+/// A light or heavy attack, in per-tick units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Attack {
+    pub cost: f32,
+    pub startup: u32,
+    pub active: u32,
+    pub recovery: u32,
+    /// Meters per active tick: `distance / active`.
+    pub step: f32,
 }
 
 /// The parameters in per-tick units.
@@ -74,13 +121,18 @@ pub(crate) struct Params {
     pub sprint_drain: f32,
     pub roll: Move,
     pub backstep: Move,
+    pub attack: Attack,
+    pub heavy: Attack,
+    /// Radians per tick during startup: `attack_turn_speed.to_radians() / 60`.
+    pub attack_turn_step: f32,
+    pub combo_max: u32,
 }
 
 impl Params {
     /// Reads and checks the props of the character `id`, whose capsule has
     /// `radius`: unknown names (in file order), then each value (in table
     /// order), then the invulnerability windows (roll, backstep), then the
-    /// per-tick distances (sprint, roll, backstep).
+    /// per-tick distances (sprint, roll, backstep, attack, heavy).
     pub fn new(scene: &Scene, id: NodeId, radius: f32) -> Result<Self, GameError> {
         let node = scene.node(id);
         let character = scene.path(id);
@@ -134,6 +186,16 @@ impl Params {
                 invuln_to: ticks(&format!("{action}_invuln_to")),
             }
         };
+        let attack = |action: &str| {
+            let active = ticks(&format!("{action}_active_ticks"));
+            Attack {
+                cost: get(&format!("{action}_cost")) as f32,
+                startup: ticks(&format!("{action}_startup_ticks")),
+                active,
+                recovery: ticks(&format!("{action}_recovery_ticks")),
+                step: get(&format!("{action}_distance")) as f32 / active as f32,
+            }
+        };
         let params = Self {
             stamina_max: get("stamina_max") as f32,
             regen_step: get("stamina_regen") as f32 / 60.0,
@@ -143,6 +205,10 @@ impl Params {
             sprint_drain: get("sprint_cost") as f32 / 60.0,
             roll: movement("roll"),
             backstep: movement("backstep"),
+            attack: attack("attack"),
+            heavy: attack("heavy"),
+            attack_turn_step: (get("attack_turn_speed") as f32).to_radians() / 60.0,
+            combo_max: ticks("combo_max"),
         };
         for (action, m) in [("roll", params.roll), ("backstep", params.backstep)] {
             if !(m.invuln_from <= m.invuln_to && m.invuln_to <= m.ticks) {
@@ -153,6 +219,8 @@ impl Params {
             ("sprint", params.sprint_step),
             ("roll", params.roll.step),
             ("backstep", params.backstep.step),
+            ("attack", params.attack.step),
+            ("heavy", params.heavy.step),
         ] {
             if step >= radius {
                 return Err(GameError::StepTooLong {
@@ -171,8 +239,19 @@ impl Params {
         match action {
             Action::Roll => self.roll,
             Action::Backstep => self.backstep,
-            Action::Idle | Action::Sprint => {
-                unreachable!("only rolls and backsteps are timed moves")
+            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy => {
+                unreachable!("only rolls and backsteps are moves")
+            }
+        }
+    }
+
+    /// The light or heavy attack `action`.
+    pub fn attack_of(&self, action: Action) -> Attack {
+        match action {
+            Action::Attack => self.attack,
+            Action::Heavy => self.heavy,
+            Action::Idle | Action::Sprint | Action::Roll | Action::Backstep => {
+                unreachable!("only light and heavy attacks are attacks")
             }
         }
     }
@@ -184,7 +263,7 @@ mod tests {
     use loom_core::input::{ActionState, TickInput};
 
     use super::*;
-    use crate::{Game, GameState, LOOK_X, MOVE_X, MOVE_Y, ROLL};
+    use crate::{ATTACK, Game, GameState, HEAVY, LOOK_X, MOVE_X, MOVE_Y, ROLL};
 
     /// Props of the test scene: every per-tick amount is a power-of-two
     /// fraction, so positions and stamina are exact. Per tick: run 0.0625,
@@ -233,13 +312,14 @@ mod tests {
 
         /// One tick with `roll` held or not and `axes` pushed.
         fn tick(&mut self, roll: bool, axes: &[(&str, f32)]) -> GameState {
-            let actions = if roll {
-                [ROLL.to_owned()].into()
-            } else {
-                Default::default()
-            };
+            let actions: &[&str] = if roll { &[ROLL] } else { &[] };
+            self.hold(actions, axes)
+        }
+
+        /// One tick with exactly `actions` held and `axes` pushed.
+        fn hold(&mut self, actions: &[&str], axes: &[(&str, f32)]) -> GameState {
             self.input.advance(TickInput {
-                actions,
+                actions: actions.iter().map(|&a| a.to_owned()).collect(),
                 axes: axes.iter().map(|&(a, v)| (a.to_owned(), v)).collect(),
             });
             self.game.tick(&self.input);
@@ -473,15 +553,294 @@ mod tests {
             game: Game::from_source(&without).unwrap(),
             input: ActionState::new(),
         };
-        for t in 1..=120 {
-            let roll = matches!(t, 1 | 60..=90);
+        for t in 1..=200 {
+            let actions: &[&str] = match t {
+                1 | 60..=90 => &[ROLL],
+                100 | 125 | 160 => &[ATTACK],
+                140 => &[HEAVY],
+                _ => &[],
+            };
             let axes = if t < 40 {
                 &FORWARD[..]
             } else {
                 &[(MOVE_X, -1.0)][..]
             };
-            assert_eq!(a.tick(roll, axes), b.tick(roll, axes), "tick {t}");
+            let s = a.hold(actions, axes);
+            assert_eq!(s, b.hold(actions, axes), "tick {t}");
+            // The press on 125 was buffered: a second light attack.
+            if t == 130 {
+                assert_eq!((s.player.action, s.player.combo), (Action::Attack, 2));
+            }
         }
+        assert_eq!(a.game.state().player.action, Action::Heavy);
+    }
+
+    // ----------------------------------------------------------------- attacks
+
+    /// [`PROPS`] plus attacks whose slides are exact: light 4 startup, 4
+    /// active (0.5 / 4 = 0.125 per tick), 6 recovery, so ticks 1-4, 5-8,
+    /// 9-14; heavy 6, 8 (1.0 / 8 = 0.125), 8, so ticks 1-6, 7-14, 15-22.
+    /// Costs are the defaults: light 15, heavy 25; combo_max 3.
+    fn attack_props() -> String {
+        format!(
+            r#"{PROPS}, ("attack_startup_ticks", 4), ("attack_active_ticks", 4),
+            ("attack_recovery_ticks", 6), ("attack_distance", 0.5),
+            ("heavy_startup_ticks", 6), ("heavy_active_ticks", 8),
+            ("heavy_recovery_ticks", 8), ("heavy_distance", 1.0)"#
+        )
+    }
+
+    /// Presses `action` on the ticks in `presses` (1-based, counting from
+    /// the run's current tick) and nothing else, for `ticks` ticks with
+    /// `axes`; returns the state of every tick.
+    fn press_on(
+        run: &mut Run,
+        action: &str,
+        presses: &[u32],
+        ticks: u32,
+        axes: &[(&str, f32)],
+    ) -> Vec<GameState> {
+        (1..=ticks)
+            .map(|t| {
+                let actions: &[&str] = if presses.contains(&t) { &[action] } else { &[] };
+                run.hold(actions, axes)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn light_attack_winds_up_slides_forward_recovers_then_idles() {
+        let mut run = Run::new(&attack_props());
+        let states = press_on(&mut run, ATTACK, &[1], 15, &NONE);
+        for (i, s) in states[..14].iter().enumerate() {
+            let t = i as u32 + 1;
+            let p = s.player;
+            let (phase, z) = match t {
+                1..=4 => (Some(AttackPhase::Startup), 0.0),
+                5..=8 => (Some(AttackPhase::Active), -0.125 * (t - 4) as f32),
+                9..=13 => (Some(AttackPhase::Recovery), -0.5),
+                // The last recovery tick already counts as idle.
+                _ => (None, -0.5),
+            };
+            assert_eq!(p.attack_phase, phase, "tick {t}");
+            assert_eq!(p.position, Vec3::new(0.0, 0.0, z), "tick {t}");
+            if t < 14 {
+                assert_eq!((p.action, p.action_tick, p.combo), (Action::Attack, t, 1));
+            } else {
+                assert_eq!((p.action, p.action_tick, p.combo), (Action::Idle, 0, 0));
+            }
+            // Paid on the first tick; no regeneration or countdown while
+            // attacking, the last tick included; never invulnerable.
+            assert_eq!((p.stamina, p.stamina_wait), (85.0, 30), "tick {t}");
+            assert!(!p.invulnerable);
+            assert_eq!(p.buffered, None);
+        }
+        assert_eq!(states[14].player.stamina_wait, 29);
+    }
+
+    #[test]
+    fn heavy_attack_slides_its_own_distance_and_costs_its_own_stamina() {
+        let mut run = Run::new(&attack_props());
+        let states = press_on(&mut run, HEAVY, &[1], 22, &NONE);
+        let p = states[5].player; // tick 6: the last startup tick
+        assert_eq!(
+            (p.action, p.attack_phase),
+            (Action::Heavy, Some(AttackPhase::Startup))
+        );
+        assert_eq!((p.position, p.stamina, p.combo), (Vec3::ZERO, 75.0, 0));
+        let p = states[13].player; // tick 14: the last active tick
+        assert_eq!(p.attack_phase, Some(AttackPhase::Active));
+        assert_eq!(p.position, Vec3::new(0.0, 0.0, -1.0));
+        let p = states[20].player; // tick 21
+        assert_eq!(
+            (p.action_tick, p.attack_phase),
+            (21, Some(AttackPhase::Recovery))
+        );
+        let p = states[21].player; // tick 22 ends it
+        assert_eq!((p.action, p.attack_phase), (Action::Idle, None));
+        assert_eq!(p.position, Vec3::new(0.0, 0.0, -1.0));
+    }
+
+    #[test]
+    fn attack_turns_only_during_startup_at_most_the_attack_turn_step() {
+        let mut run = Run::new(&attack_props());
+        // Pushing right (+X, facing -π/2) the whole time.
+        let right = [(MOVE_X, 1.0)];
+        let states = press_on(&mut run, ATTACK, &[1], 15, &right);
+        let turn = 180.0_f32.to_radians() / 60.0;
+        let mut facing = 0.0_f32;
+        let mut position = Vec3::ZERO;
+        for (i, s) in states[..14].iter().enumerate() {
+            let t = i + 1;
+            if t <= 4 {
+                facing -= turn;
+            } else if t <= 8 {
+                // Slides the way it faces once the startup turn is done.
+                position += Vec3::new(-libm::sinf(facing), 0.0, -libm::cosf(facing)) * 0.125;
+            }
+            assert_eq!(s.player.facing.to_bits(), facing.to_bits(), "tick {t}");
+            assert_eq!(s.player.position, position, "tick {t}");
+        }
+        // Idle again: running and turning at the normal speed (12° a tick).
+        let s = states[14].player;
+        assert_eq!(s.position.x, position.x + 0.0625);
+        assert!(s.facing < facing - turn);
+    }
+
+    #[test]
+    fn buffered_light_attacks_combo_up_to_combo_max_then_start_over() {
+        let mut run = Run::new(&attack_props());
+        // Attacks start on ticks 1, 15, 29 and 43, each 14 ticks long; the
+        // presses on 6 (active), 23 and 40 (recovery) are buffered.
+        let states = press_on(&mut run, ATTACK, &[1, 6, 23, 40], 43, &NONE);
+        assert_eq!(states[5].player.buffered, Some(Buffered::Attack));
+        assert_eq!(states[13].player.action, Action::Idle); // tick 14 ends attack 1
+        assert_eq!(states[13].player.buffered, Some(Buffered::Attack));
+        for (tick, combo) in [(15, 2), (29, 3), (43, 1)] {
+            let p = states[tick - 1].player;
+            assert_eq!(
+                (p.action, p.action_tick),
+                (Action::Attack, 1),
+                "tick {tick}"
+            );
+            assert_eq!(p.combo, combo, "tick {tick}");
+            assert_eq!(p.buffered, None);
+        }
+        assert_eq!(states[42].player.stamina, 40.0);
+    }
+
+    #[test]
+    fn light_attack_not_buffered_starts_a_new_combo() {
+        // Pressed on the tick right after an attack ended: not buffered.
+        let mut run = Run::new(&attack_props());
+        let states = press_on(&mut run, ATTACK, &[1, 15], 15, &NONE);
+        assert_eq!(
+            (states[14].player.action, states[14].player.combo),
+            (Action::Attack, 1)
+        );
+        // Pressed some ticks later.
+        let mut run = Run::new(&attack_props());
+        let states = press_on(&mut run, ATTACK, &[1, 20], 20, &NONE);
+        assert_eq!(
+            (states[19].player.action, states[19].player.combo),
+            (Action::Attack, 1)
+        );
+        // Buffered, but after a heavy attack.
+        let mut run = Run::new(&attack_props());
+        press_on(&mut run, HEAVY, &[1], 20, &NONE);
+        let states = press_on(&mut run, ATTACK, &[1], 3, &NONE); // ticks 21..=23
+        assert_eq!(states[2].player.combo, 1);
+        assert_eq!(states[2].player.action_tick, 1); // started on tick 23
+    }
+
+    #[test]
+    fn presses_during_startup_are_dropped() {
+        let mut run = Run::new(&attack_props());
+        let states = press_on(&mut run, ATTACK, &[1, 3], 16, &NONE);
+        assert!(states.iter().all(|s| s.player.buffered.is_none()));
+        assert_eq!(states[14].player.action, Action::Idle);
+        assert_eq!(states[15].player.stamina, 85.0);
+    }
+
+    #[test]
+    fn later_buffered_press_replaces_an_earlier_one() {
+        let mut run = Run::new(&attack_props());
+        press_on(&mut run, ATTACK, &[1, 6], 9, &NONE);
+        let states = press_on(&mut run, HEAVY, &[1], 6, &NONE); // ticks 10..=15
+        assert_eq!(states[0].player.buffered, Some(Buffered::Heavy));
+        let p = states[5].player; // tick 15
+        assert_eq!((p.action, p.action_tick, p.combo), (Action::Heavy, 1, 0));
+        assert_eq!(p.stamina, 60.0);
+    }
+
+    #[test]
+    fn heavy_beats_light_when_both_are_pressed_on_one_tick() {
+        let mut run = Run::new(&attack_props());
+        let both = [ATTACK, HEAVY];
+        let s = run.hold(&both, &NONE);
+        assert_eq!((s.player.action, s.player.stamina), (Action::Heavy, 75.0));
+        run.ticks(14, false, &NONE); // ticks 2..=15: heavy recovery from 15
+        run.tick(false, &NONE);
+        let s = run.hold(&both, &NONE); // tick 17
+        assert_eq!(s.player.buffered, Some(Buffered::Heavy));
+    }
+
+    #[test]
+    fn roll_key_tapped_during_recovery_rolls_right_after_the_attack() {
+        for (axes, action, facing) in [
+            (
+                &[(MOVE_X, 1.0)][..],
+                Action::Roll,
+                -std::f32::consts::FRAC_PI_2,
+            ),
+            (&NONE[..], Action::Backstep, 0.0),
+        ] {
+            let mut run = Run::new(&attack_props());
+            run.hold(&[ATTACK], &NONE);
+            run.ticks(7, false, &NONE); // ticks 2..=8
+            run.tick(true, &NONE); // tick 9: recovery, roll pressed
+            let s = run.tick(false, &NONE); // tick 10: released: a tap
+            assert_eq!(s.player.buffered, Some(Buffered::Roll));
+            let s = run.ticks(4, false, &NONE); // ticks 11..=14
+            assert_eq!(s.player.action, Action::Idle);
+            // Tick 15: the direction is this tick's input.
+            let s = run.tick(false, axes);
+            assert_eq!((s.player.action, s.player.action_tick), (action, 1));
+            assert_eq!(s.player.facing, facing);
+            assert_eq!(s.player.buffered, None);
+            let cost = if action == Action::Roll { 20.0 } else { 12.0 };
+            assert_eq!(s.player.stamina, 85.0 - cost);
+        }
+    }
+
+    #[test]
+    fn attack_with_less_stamina_than_its_cost_still_happens_and_stops_at_zero() {
+        let mut run = Run::new(&format!(r#"{}, ("stamina_max", 10)"#, attack_props()));
+        let s = run.hold(&[ATTACK], &NONE);
+        assert_eq!((s.player.action, s.player.stamina), (Action::Attack, 0.0));
+    }
+
+    #[test]
+    fn with_no_stamina_new_and_buffered_actions_are_dropped() {
+        let mut run = Run::new(&format!(r#"{}, ("stamina_max", 10)"#, attack_props()));
+        let states = press_on(&mut run, ATTACK, &[1, 6], 14, &NONE);
+        assert_eq!(states[13].player.buffered, Some(Buffered::Attack));
+        // Tick 15: the buffered attack is dropped; an ordinary run step.
+        let s = run.tick(false, &FORWARD);
+        assert_eq!((s.player.action, s.player.buffered), (Action::Idle, None));
+        assert_eq!(s.player.position.z, -0.5625);
+        assert_eq!((s.player.stamina, s.player.stamina_wait), (0.0, 29));
+        // Tick 16: a new press is dropped too.
+        let s = run.hold(&[ATTACK], &FORWARD);
+        assert_eq!((s.player.action, s.player.buffered), (Action::Idle, None));
+        assert_eq!(s.player.position.z, -0.625);
+    }
+
+    #[test]
+    fn attacking_while_sprinting_stops_the_sprint() {
+        let mut run = Run::new(&attack_props());
+        let s = run.ticks(20, true, &FORWARD); // sprinting from tick 16
+        assert_eq!(s.player.action, Action::Sprint);
+        let s = run.hold(&[ROLL, ATTACK], &FORWARD); // tick 21
+        assert_eq!((s.player.action, s.player.combo), (Action::Attack, 1));
+        assert_eq!(s.player.position.z, -1.5625); // startup: no step
+        assert_eq!(s.player.stamina, 97.5 - 15.0);
+        let s = run.ticks(3, true, &FORWARD); // ticks 22..=24: still startup
+        assert_eq!(s.player.position.z, -1.5625);
+        assert_eq!(s.player.stamina, 82.5);
+    }
+
+    #[test]
+    fn attacks_pressed_during_a_roll_are_dropped() {
+        let mut run = Run::new(&attack_props());
+        run.tick(true, &FORWARD);
+        run.tick(false, &FORWARD); // tick 2: roll tick 1 of 24
+        let states = press_on(&mut run, ATTACK, &[8, 20], 23, &NONE); // ticks 3..=25
+        assert!(states.iter().all(|s| s.player.buffered.is_none()));
+        assert_eq!(states[22].player.action, Action::Idle);
+        let s = run.hold(&[HEAVY], &NONE); // tick 26: a new press works
+        assert_eq!(s.player.action, Action::Heavy);
+        assert_eq!(s.player.stamina, 55.0);
     }
 
     // ------------------------------------------------------------ scene errors
@@ -527,6 +886,29 @@ mod tests {
     }
 
     #[test]
+    fn attack_props_are_checked_like_the_others() {
+        assert_eq!(
+            error_of(r#"("attack_cost", 0)"#),
+            "the character \"player\": prop \"attack_cost\" must be greater than 0, got 0"
+        );
+        assert_eq!(
+            error_of(r#"("heavy_active_ticks", 0)"#),
+            "the character \"player\": prop \"heavy_active_ticks\" must be a whole number of at \
+             least 1, got 0"
+        );
+        assert_eq!(
+            error_of(r#"("attack_turn_speed", -90)"#),
+            "the character \"player\": prop \"attack_turn_speed\" must be greater than 0, got -90"
+        );
+        assert_eq!(
+            error_of(r#"("combo_max", 1.5)"#),
+            "the character \"player\": prop \"combo_max\" must be a whole number of at least 1, \
+             got 1.5"
+        );
+        assert!(Game::from_source(&scene(r#"("combo_max", 1)"#)).is_ok());
+    }
+
+    #[test]
     fn invulnerability_window_must_lie_inside_the_move() {
         assert_eq!(
             error_of(r#"("roll_invuln_to", 33)"#),
@@ -557,6 +939,16 @@ mod tests {
             "the character \"player\": backstep moves 0.5 m per tick, which must be less than the \
              capsule radius 0.35"
         );
+        assert_eq!(
+            error_of(r#"("attack_distance", 2)"#),
+            "the character \"player\": attack moves 0.5 m per tick, which must be less than the \
+             capsule radius 0.35"
+        );
+        assert_eq!(
+            error_of(r#"("heavy_distance", 2.5)"#),
+            "the character \"player\": heavy moves 0.5 m per tick, which must be less than the \
+             capsule radius 0.35"
+        );
     }
 
     #[test]
@@ -575,6 +967,16 @@ mod tests {
         // Distances: sprint before roll.
         assert!(
             error_of(r#"("roll_distance", 16), ("sprint_speed", 30)"#).contains("sprint moves")
+        );
+        // Attack values after the G2.1 values, in table order.
+        assert!(error_of(r#"("combo_max", 0), ("backstep_cost", 0)"#).contains("backstep_cost"));
+        assert!(error_of(r#"("combo_max", 0), ("heavy_cost", 0)"#).contains("heavy_cost"));
+        // All values come from one table: before the G2.1 windows.
+        assert!(error_of(r#"("roll_invuln_to", 40), ("heavy_cost", 0)"#).contains("heavy_cost"));
+        // Attack distances last: after roll, light before heavy.
+        assert!(error_of(r#"("heavy_distance", 5), ("roll_distance", 16)"#).contains("roll moves"));
+        assert!(
+            error_of(r#"("heavy_distance", 5), ("attack_distance", 2)"#).contains("attack moves")
         );
     }
 }

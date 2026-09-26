@@ -238,6 +238,25 @@ mod tests {
     }
 
     #[test]
+    fn mouse_buttons_parse_and_bind_to_actions_like_keys() {
+        let src = actions(
+            r#"(action: "attack", keys: [MouseLeft]), (action: "heavy", keys: [MouseRight]),
+            (action: "lock", keys: [MouseMiddle, KeyQ])"#,
+        );
+        let map = ActionMap::parse(&src).unwrap();
+        for (key, action) in [
+            (Key::MouseLeft, "attack"),
+            (Key::MouseRight, "heavy"),
+            (Key::MouseMiddle, "lock"),
+        ] {
+            let pressed = map.actions_for(&BTreeSet::from([key]));
+            assert_eq!(pressed, BTreeSet::from([action.to_owned()]), "{key:?}");
+        }
+        // Buttons are not the mouse motion: no axis reads the mouse.
+        assert!(!map.uses_mouse());
+    }
+
+    #[test]
     fn action_map_rejects_a_duplicate_action() {
         let src = actions(r#"(action: "jump", keys: [Space]), (action: "jump", keys: [KeyJ])"#);
         let err = ActionMap::parse(&src).unwrap_err();

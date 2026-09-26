@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 /// A physical key, named after its W3C `KeyboardEvent.code` (the same names
 /// winit's `KeyCode` uses). Position-based, independent of keyboard layout.
+/// The mouse buttons are keys too, under names of loom's own: W3C has no
+/// `code` for them.
 ///
 /// `Escape` is deliberately absent: it is reserved for quitting the engine
 /// and cannot be bound.
@@ -67,4 +69,7 @@ pub enum Key {
     Numpad8,
     Numpad9,
     Period,
+    MouseLeft,
+    MouseRight,
+    MouseMiddle,
 }

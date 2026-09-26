@@ -130,7 +130,7 @@ fn describe_lists_the_demo_bindings_sorted_without_a_scene_path() {
         json!({"tick_hz": 60, "tick": 0, "game": "souls", "scene": null, "actions": actions, "axes": axes})
     );
     assert_eq!(r["axes"], json!(["look_x", "look_y", "move_x", "move_y"]));
-    assert_eq!(r["actions"], json!(["roll"]));
+    assert_eq!(r["actions"], json!(["attack", "heavy", "roll"]));
 }
 
 #[test]
@@ -634,6 +634,66 @@ fn souls_roll_key_sprints_when_held_rolls_when_tapped_and_replays() {
     let line = &session.lines[9];
     let raw = line
         .strip_prefix(r#"{"jsonrpc":"2.0","id":10,"result":"#)
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or_else(|| panic!("unexpected state reply: {line}"));
+    let dumped: String = fs::read_to_string(&dump)
+        .expect("the state dump was written")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert_eq!(raw, dumped);
+}
+
+#[test]
+fn souls_attack_pressed_through_held_input_reaches_its_active_phase_and_replays() {
+    let dir =
+        test_dir("souls_attack_pressed_through_held_input_reaches_its_active_phase_and_replays");
+    let record = dir.join("rec.ron");
+    let dump = dir.join("dump.json");
+    let requests = [
+        req(1, "input", json!({"actions": {"attack": true}})),
+        req(2, "step", json!({})),
+        req(3, "input", json!({"actions": {"attack": false}})),
+        req(4, "step", json!({"ticks": 11})),
+        req(5, "state", json!({})),
+        req(6, "record", json!({"path": path_str(&record)})),
+    ];
+    let session = serve_raw(&requests);
+    assert_eq!(session.code, 0);
+    assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
+    let replies: Vec<Value> = session
+        .lines
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("JSON"))
+        .collect();
+    // Default light attack: startup ticks 1-10, active 11-14.
+    let player = &result(&replies[4])["game"]["player"];
+    assert_eq!(player["action"], "attack");
+    assert_eq!(player["action_tick"], 12);
+    assert_eq!(player["attack_phase"], "active");
+    assert_eq!(player["combo"], 1);
+    assert_eq!(
+        *result(&replies[5]),
+        json!({"path": path_str(&record), "ticks": 12})
+    );
+    let script = fs::read_to_string(&record).expect("the recording was written");
+    assert!(
+        script.contains(r#"action: "attack", down: true"#),
+        "{script}"
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .args(["run", "--headless", "--frames", "12", "--input"])
+        .arg(&record)
+        .arg("--dump-state")
+        .arg(&dump)
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("loom run can be started");
+    assert!(out.status.success(), "{out:?}");
+    let line = &session.lines[4];
+    let raw = line
+        .strip_prefix(r#"{"jsonrpc":"2.0","id":5,"result":"#)
         .and_then(|rest| rest.strip_suffix('}'))
         .unwrap_or_else(|| panic!("unexpected state reply: {line}"));
     let dumped: String = fs::read_to_string(&dump)

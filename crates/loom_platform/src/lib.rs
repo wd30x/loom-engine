@@ -9,7 +9,9 @@ use std::time::Instant;
 use loom_core::input::Key;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{DeviceEvent, DeviceId, ElementState, KeyEvent, StartCause, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, StartCause, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, WindowId};
@@ -184,6 +186,11 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
                 Some(key) => self.app.key(key, state == ElementState::Pressed),
                 None => AppControl::Continue,
             },
+            // Captured or not: a click that focuses the window counts too.
+            WindowEvent::MouseInput { state, button, .. } => match translate_mouse_button(button) {
+                Some(key) => self.app.key(key, state == ElementState::Pressed),
+                None => AppControl::Continue,
+            },
             WindowEvent::Focused(false) => {
                 self.focused = false;
                 self.app.focus_lost()
@@ -308,6 +315,17 @@ pub fn translate_key(code: KeyCode) -> Option<Key> {
     })
 }
 
+/// Translates a winit mouse button into a bindable [`Key`]. Buttons other
+/// than left, right and middle give `None`.
+pub fn translate_mouse_button(button: MouseButton) -> Option<Key> {
+    Some(match button {
+        MouseButton::Left => Key::MouseLeft,
+        MouseButton::Right => Key::MouseRight,
+        MouseButton::Middle => Key::MouseMiddle,
+        MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +360,23 @@ mod tests {
         // Keys rogue does not bind stay outside the supported range.
         assert_eq!(translate_key(KeyCode::Numpad0), None);
         assert_eq!(translate_key(KeyCode::NumpadDecimal), None);
+    }
+
+    #[test]
+    fn left_right_and_middle_mouse_buttons_translate_and_others_are_ignored() {
+        assert_eq!(
+            translate_mouse_button(MouseButton::Left),
+            Some(Key::MouseLeft)
+        );
+        assert_eq!(
+            translate_mouse_button(MouseButton::Right),
+            Some(Key::MouseRight)
+        );
+        assert_eq!(
+            translate_mouse_button(MouseButton::Middle),
+            Some(Key::MouseMiddle)
+        );
+        assert_eq!(translate_mouse_button(MouseButton::Back), None);
+        assert_eq!(translate_mouse_button(MouseButton::Other(7)), None);
     }
 }

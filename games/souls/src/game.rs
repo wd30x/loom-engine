@@ -11,7 +11,7 @@ use loom_core::input::ActionState;
 use loom_scene::{MeshKind, NodeId, Scene, SceneError};
 use serde::Serialize;
 
-use crate::moves::{Action, Params};
+use crate::moves::{Action, AttackPhase, Buffered, Params};
 
 /// Sideways movement in `[-1, 1]`; positive is to the camera's right.
 pub const MOVE_X: &str = "move_x";
@@ -24,6 +24,10 @@ pub const LOOK_Y: &str = "look_y";
 /// The roll key: a tap rolls (or backsteps without a direction), holding
 /// it sprints.
 pub const ROLL: &str = "roll";
+/// A light attack, on the tick it is pressed.
+pub const ATTACK: &str = "attack";
+/// A heavy attack, on the tick it is pressed.
+pub const HEAVY: &str = "heavy";
 
 #[derive(Debug, thiserror::Error)]
 pub enum GameError {
@@ -103,9 +107,16 @@ pub struct PlayerState {
     /// Ticks left before stamina starts coming back.
     pub stamina_wait: u32,
     pub action: Action,
-    /// Which tick of a roll or backstep this is, from 1; 0 otherwise.
+    /// Which tick of a roll, backstep or attack this is, from 1; 0
+    /// otherwise.
     pub action_tick: u32,
     pub invulnerable: bool,
+    /// The part of the attack running; `None` outside attacks.
+    pub attack_phase: Option<AttackPhase>,
+    /// Which light attack of a combo this is, from 1; 0 otherwise.
+    pub combo: u32,
+    /// The action to start once the running attack is over.
+    pub buffered: Option<Buffered>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -188,6 +199,19 @@ pub struct Game {
     spent: bool,
     /// Unit direction of the current roll or backstep.
     action_dir: Vec3,
+    /// The action that ended last, and its `combo`; not in the state dump.
+    finished: (Action, u32),
+}
+
+/// This tick's input as step 4 uses it.
+struct Intent<'a> {
+    input: &'a ActionState,
+    /// The roll key was tapped (step 0).
+    tap: bool,
+    /// Movement input, at most 1 long (step 2).
+    v: Vec2,
+    /// `v` relative to the camera (step 3).
+    dir: Vec3,
 }
 
 impl Game {
@@ -258,6 +282,9 @@ impl Game {
                 action: Action::Idle,
                 action_tick: 0,
                 invulnerable: false,
+                attack_phase: None,
+                combo: 0,
+                buffered: None,
             },
             camera: CameraState {
                 yaw: wrap(orbit.yaw_degrees.to_radians()),
@@ -287,6 +314,7 @@ impl Game {
             hold: 0,
             spent: false,
             action_dir: Vec3::ZERO,
+            finished: (Action::Idle, 0),
         };
         game.place_camera(true);
         Ok(game)
@@ -312,7 +340,10 @@ impl Game {
             tap
         };
 
-        let GameState { player, camera } = &mut self.state;
+        let GameState {
+            mut player,
+            mut camera,
+        } = self.state;
 
         // 1. Camera angles.
         camera.yaw = wrap(camera.yaw - input.axis(LOOK_X));
@@ -332,6 +363,7 @@ impl Game {
 
         // 4. Actions and movement; each move ends by pushing the capsule
         // out of the colliders. `busy`: stamina used or an action running.
+        let intent = Intent { input, tap, v, dir };
         let mut busy = true;
         if matches!(player.action, Action::Roll | Action::Backstep) {
             let m = params.movement(player.action);
@@ -344,35 +376,22 @@ impl Game {
             );
             // The last tick still moves.
             if player.action_tick == m.ticks {
+                self.finished = (player.action, 0);
                 player.action = Action::Idle;
                 player.action_tick = 0;
             }
-        } else if tap && player.stamina > 0.0 {
-            if v.length_squared() > 0.0 {
-                // Roll the way the input points, turning there at once.
-                player.action = Action::Roll;
-                self.action_dir = dir / dir.length();
-                player.facing =
-                    positive_zero(wrap(libm::atan2f(-self.action_dir.x, -self.action_dir.z)));
-            } else {
-                // Backstep: away from where the character faces, no turn.
-                player.action = Action::Backstep;
-                self.action_dir =
-                    Vec3::new(libm::sinf(player.facing), 0.0, libm::cosf(player.facing));
-            }
-            let m = params.movement(player.action);
-            player.stamina = f32::max(player.stamina - m.cost, 0.0);
-            player.stamina_wait = params.delay_ticks;
-            player.action_tick = 1;
-            player.position = resolve(
-                &self.boxes,
-                self.radius,
-                self.height,
-                player.position + self.action_dir * m.step,
-            );
-            if m.ticks == 1 {
-                player.action = Action::Idle;
-                player.action_tick = 0;
+        } else if matches!(player.action, Action::Attack | Action::Heavy) {
+            player.action_tick += 1;
+            self.attack_tick(&mut player, &intent);
+        } else if let Some((next, from_buffer)) = next_action(&mut player, &intent) {
+            match next {
+                Buffered::Roll => self.start_roll(&mut player, &intent),
+                Buffered::Attack => {
+                    self.start_attack(&mut player, Action::Attack, from_buffer, &intent);
+                }
+                Buffered::Heavy => {
+                    self.start_attack(&mut player, Action::Heavy, from_buffer, &intent);
+                }
             }
         } else {
             let sprinting = input.pressed(ROLL)
@@ -425,14 +444,120 @@ impl Game {
                 let m = params.movement(player.action);
                 (m.invuln_from..=m.invuln_to).contains(&player.action_tick)
             }
-            Action::Idle | Action::Sprint => false,
+            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy => false,
         };
+        self.state = GameState { player, camera };
 
         // 6. Write the nodes.
         let transform = self.scene.transform_mut(self.player);
         transform.position = player.position;
         transform.rotation = Quat::from_rotation_y(player.facing);
         self.place_camera(false);
+    }
+
+    /// Starts a roll the way the input points, or a backstep without a
+    /// direction, and runs its first tick.
+    fn start_roll(&mut self, player: &mut PlayerState, intent: &Intent) {
+        if intent.v.length_squared() > 0.0 {
+            // Roll the way the input points, turning there at once.
+            player.action = Action::Roll;
+            self.action_dir = intent.dir / intent.dir.length();
+            player.facing =
+                positive_zero(wrap(libm::atan2f(-self.action_dir.x, -self.action_dir.z)));
+        } else {
+            // Backstep: away from where the character faces, no turn.
+            player.action = Action::Backstep;
+            self.action_dir = Vec3::new(libm::sinf(player.facing), 0.0, libm::cosf(player.facing));
+        }
+        let m = self.params.movement(player.action);
+        player.stamina = f32::max(player.stamina - m.cost, 0.0);
+        player.stamina_wait = self.params.delay_ticks;
+        player.action_tick = 1;
+        player.position = resolve(
+            &self.boxes,
+            self.radius,
+            self.height,
+            player.position + self.action_dir * m.step,
+        );
+        if m.ticks == 1 {
+            self.finished = (player.action, 0);
+            player.action = Action::Idle;
+            player.action_tick = 0;
+        }
+    }
+
+    /// Starts the light or heavy attack `action` and runs its first tick.
+    /// A light attack continues the combo only when it was buffered right
+    /// after a light attack that had not reached `combo_max`.
+    fn start_attack(
+        &mut self,
+        player: &mut PlayerState,
+        action: Action,
+        from_buffer: bool,
+        intent: &Intent,
+    ) {
+        let (last, last_combo) = self.finished;
+        player.combo = match action {
+            Action::Attack
+                if from_buffer && last == Action::Attack && last_combo < self.params.combo_max =>
+            {
+                last_combo + 1
+            }
+            Action::Attack => 1,
+            _ => 0,
+        };
+        player.action = action;
+        player.action_tick = 1;
+        let a = self.params.attack_of(action);
+        player.stamina = f32::max(player.stamina - a.cost, 0.0);
+        player.stamina_wait = self.params.delay_ticks;
+        self.attack_tick(player, intent);
+    }
+
+    /// Tick `action_tick` of the running attack: turning during startup,
+    /// sliding forward while active, and from then on buffering the next
+    /// action. The last tick ends the attack.
+    fn attack_tick(&mut self, player: &mut PlayerState, intent: &Intent) {
+        let a = self.params.attack_of(player.action);
+        let phase = if player.action_tick <= a.startup {
+            if intent.v.length_squared() > 0.0 {
+                let turn = self.params.attack_turn_step;
+                let target = libm::atan2f(-intent.dir.x, -intent.dir.z);
+                let diff = wrap(target - player.facing);
+                player.facing = wrap(player.facing + diff.clamp(-turn, turn));
+            }
+            AttackPhase::Startup
+        } else if player.action_tick <= a.startup + a.active {
+            let forward = Vec3::new(-libm::sinf(player.facing), 0.0, -libm::cosf(player.facing));
+            player.position = resolve(
+                &self.boxes,
+                self.radius,
+                self.height,
+                player.position + forward * a.step,
+            );
+            AttackPhase::Active
+        } else {
+            AttackPhase::Recovery
+        };
+        player.attack_phase = Some(phase);
+        if phase != AttackPhase::Startup {
+            // A later press replaces an earlier one; on one tick, heavy
+            // beats light beats the roll key. Startup presses are dropped.
+            if intent.input.just_pressed(HEAVY) {
+                player.buffered = Some(Buffered::Heavy);
+            } else if intent.input.just_pressed(ATTACK) {
+                player.buffered = Some(Buffered::Attack);
+            } else if intent.tap {
+                player.buffered = Some(Buffered::Roll);
+            }
+        }
+        if player.action_tick == a.startup + a.active + a.recovery {
+            self.finished = (player.action, player.combo);
+            player.action = Action::Idle;
+            player.action_tick = 0;
+            player.attack_phase = None;
+            player.combo = 0;
+        }
     }
 
     /// Step 6 for the camera node: orbit the pivot above the player, pulled
@@ -551,6 +676,24 @@ fn resolve(boxes: &[BoxCollider], r: f32, h: f32, mut p: Vec3) -> Vec3 {
         }
     }
     p
+}
+
+/// `next_action` of step 4: the buffered action, else a new press (heavy,
+/// then light, then a roll-key tap), with whether it was buffered. With no
+/// stamina left there is none, and the input, buffered or not, is dropped.
+fn next_action(player: &mut PlayerState, intent: &Intent) -> Option<(Buffered, bool)> {
+    let next = if let Some(buffered) = player.buffered.take() {
+        (buffered, true)
+    } else if intent.input.just_pressed(HEAVY) {
+        (Buffered::Heavy, false)
+    } else if intent.input.just_pressed(ATTACK) {
+        (Buffered::Attack, false)
+    } else if intent.tap {
+        (Buffered::Roll, false)
+    } else {
+        return None;
+    };
+    (player.stamina > 0.0).then_some(next)
 }
 
 /// Wraps an angle into `[-π, π)`. `floor` is exactly rounded, so this is
@@ -784,7 +927,6 @@ mod tests {
         );
     }
 
-    /// The demo scene with `player`'s line replaced.
     /// Steps 1-5 as they were in G1, before G2.1 added the roll key,
     /// copied here as the reference: `(position, facing, yaw, pitch)`.
     fn g1_reference_tick(game: &Game, s: &mut (Vec3, f32, f32, f32), input: &ActionState) {
@@ -858,6 +1000,89 @@ mod tests {
         assert_ne!(reference.0, start.player.position);
     }
 
+    /// The input of [`without_attack_keys_every_tick_matches_g2_1`] at
+    /// `tick`: whether the roll key is held, and the axes.
+    fn g2_1_reference_input(tick: u32) -> (bool, Axes) {
+        let roll = matches!(
+            tick,
+            41 | 90..=150 | 170 | 200 | 204 | 208 | 212 | 216 | 262 | 300..=330
+        );
+        let axes = match tick {
+            1..=60 => vec![(MOVE_Y, 1.0), (LOOK_X, 0.01)],
+            61..=160 => vec![(MOVE_X, -0.6), (MOVE_Y, 0.8), (LOOK_Y, -0.02)],
+            161..=199 => vec![(LOOK_X, -0.03)],
+            200..=260 => vec![(MOVE_X, 1.0), (MOVE_Y, -1.0)],
+            _ => vec![(MOVE_Y, 1.0), (LOOK_X, 0.02)],
+        };
+        (roll, axes)
+    }
+
+    /// FNV-1a over the bits of every field the state dump had in G2.1.
+    fn g2_1_fingerprint(hash: &mut u64, s: &GameState) {
+        let p = s.player;
+        let words = [
+            p.position.x.to_bits(),
+            p.position.y.to_bits(),
+            p.position.z.to_bits(),
+            p.facing.to_bits(),
+            p.stamina.to_bits(),
+            p.stamina_wait,
+            p.action as u32,
+            p.action_tick,
+            u32::from(p.invulnerable),
+            s.camera.yaw.to_bits(),
+            s.camera.pitch.to_bits(),
+            s.camera.distance.to_bits(),
+        ];
+        for byte in words.iter().flat_map(|w| w.to_le_bytes()) {
+            *hash = (*hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    #[test]
+    fn without_attack_keys_every_tick_matches_g2_1() {
+        // The expected hash was computed by this same test on the G2.1 code
+        // (commit 6b9c77a), before attacks existed: it covers every tick
+        // of a run with rolls, backsteps, sprints, taps without stamina
+        // and regeneration, with pillars and the slanted wall in the way.
+        let src = demo_with(r#"("stamina_max", 100)"#, r#"("stamina_max", 40)"#);
+        let mut game = Game::from_source(&src).unwrap();
+        let mut input = ActionState::new();
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut seen = Vec::new();
+        let mut taps_without_stamina = 0;
+        for t in 1..=400 {
+            let (roll, axes) = g2_1_reference_input(t);
+            let released = !roll && g2_1_reference_input(t - 1).0;
+            input.advance(TickInput {
+                actions: if roll {
+                    [ROLL.to_owned()].into()
+                } else {
+                    Default::default()
+                },
+                axes: axes.into_iter().map(|(a, v)| (a.to_owned(), v)).collect(),
+            });
+            game.tick(&input);
+            let s = game.state();
+            g2_1_fingerprint(&mut hash, &s);
+            let p = s.player;
+            assert_eq!((p.attack_phase, p.combo, p.buffered), (None, 0, None));
+            if !seen.contains(&s.player.action) {
+                seen.push(s.player.action);
+            }
+            if released && s.player.stamina == 0.0 && s.player.action == Action::Idle {
+                taps_without_stamina += 1;
+            }
+        }
+        assert!(taps_without_stamina > 0);
+        assert_eq!(
+            seen,
+            [Action::Idle, Action::Roll, Action::Sprint, Action::Backstep]
+        );
+        assert_eq!(hash, 309_999_793_288_603_552);
+    }
+
+    /// The demo scene with `player`'s line replaced.
     fn demo_with(old: &str, new: &str) -> String {
         let src = include_str!("demo.scene.ron");
         assert!(src.contains(old), "{old}");
