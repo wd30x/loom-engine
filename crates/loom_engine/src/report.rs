@@ -35,6 +35,22 @@ pub(crate) struct RunReport {
     pub renderer_init_ms: Option<u64>,
 }
 
+/// `loom view`: one frame of a scene, rendered without simulating it.
+#[derive(Debug, Serialize)]
+pub(crate) struct ViewReport {
+    pub status: &'static str,
+    /// Always `"view"`.
+    pub mode: &'static str,
+    pub screenshot: String,
+    pub size: [u32; 2],
+    /// `--scene` path; `None` for the built-in demo scene.
+    pub scene: Option<String>,
+    pub adapter: RunAdapter,
+    /// Milliseconds from process start until the renderer was created, as
+    /// in [`RunReport`].
+    pub renderer_init_ms: u64,
+}
+
 /// The script replayed with `--input`.
 #[derive(Debug, Serialize)]
 pub(crate) struct InputReport {

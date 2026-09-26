@@ -736,3 +736,165 @@ fn misspelled_collider_kind_is_rejected() {
     assert!(matches!(err, SceneError::Syntax(_)), "{err}");
     assert!(err.to_string().contains("Boxx"), "{err}");
 }
+
+// ---- 2D: orthographic cameras, sprites and tilemaps (E4.2)
+
+#[test]
+fn orthographic_camera_parses_with_its_height() {
+    let src = scene_with("").replace(
+        "camera: (fov_y: 60.0, near: 0.1, far: 100.0)",
+        "camera: (ortho: (height: 11.25), near: 0.1, far: 100.0)",
+    );
+    let scene = Scene::parse(&src).unwrap();
+    let camera = scene.node(scene.camera()).camera.unwrap();
+    assert_eq!(
+        camera.projection,
+        Projection::Orthographic { height: 11.25 }
+    );
+    assert_eq!((camera.near, camera.far), (0.1, 100.0));
+    let perspective = Scene::parse(&scene_with("")).unwrap();
+    assert_eq!(
+        perspective
+            .node(perspective.camera())
+            .camera
+            .unwrap()
+            .projection,
+        Projection::Perspective {
+            fov_y_degrees: 60.0
+        }
+    );
+}
+
+#[test]
+fn camera_needs_exactly_one_projection() {
+    for camera in [
+        "camera: (near: 0.1, far: 10.0)",
+        "camera: (fov_y: 60.0, ortho: (height: 5.0), near: 0.1, far: 10.0)",
+    ] {
+        let p = node_problem(&format!("(name: \"c\", {camera})"), "c");
+        assert_eq!(p, Problem::CameraProjection, "{camera}");
+    }
+}
+
+#[test]
+fn orthographic_height_must_be_positive_and_finite() {
+    for height in ["0.0", "-2.0"] {
+        let p = node_problem(
+            &format!("(name: \"c\", camera: (ortho: (height: {height}), near: 0.1, far: 10.0))"),
+            "c",
+        );
+        assert_eq!(p, Problem::OrthoHeight, "{height}");
+    }
+    let p = node_problem(
+        "(name: \"c\", camera: (ortho: (height: inf), near: 0.1, far: 10.0))",
+        "c",
+    );
+    assert_eq!(p, Problem::NotFinite("camera"));
+}
+
+const SPRITE: &str = r#"(name: "hero", position: (3.0, -2.0, 1.0), sprite: (sheet: "art/tiles.json", tag: "player"))"#;
+const TILEMAP: &str = r####"(name: "map", tilemap: (sheet: "art/tiles.json", legend: [('#', "wall"), ('.', "floor")], rows: ["###", "#.#"]))"####;
+
+#[test]
+fn sprites_and_tilemaps_parse_and_are_listed_in_pre_order() {
+    let src = scene_with(&format!(
+        "{TILEMAP}, (name: \"units\", children: [{SPRITE}])"
+    ));
+    let scene = Scene::parse(&src).unwrap();
+    let map = scene.find("map").unwrap();
+    let hero = scene.find("units/hero").unwrap();
+    assert_eq!(scene.sprite_nodes(), [map, hero]);
+    assert_eq!(
+        scene.node(hero).sprite,
+        Some(Sprite {
+            sheet: "art/tiles.json".to_owned(),
+            tag: "player".to_owned()
+        })
+    );
+    let tilemap = scene.node(map).tilemap.as_ref().unwrap();
+    assert_eq!(
+        tilemap.legend,
+        [('#', "wall".to_owned()), ('.', "floor".to_owned())]
+    );
+    assert_eq!(tilemap.rows, ["###", "#.#"]);
+    assert_eq!((tilemap.tag('.'), tilemap.tag('x')), (Some("floor"), None));
+}
+
+#[test]
+fn mesh_sprite_and_tilemap_cannot_share_a_node() {
+    let sprite = r#"sprite: (sheet: "s.json", tag: "t")"#;
+    let tilemap = r#"tilemap: (sheet: "s.json", legend: [('.', "t")], rows: ["."])"#;
+    for components in [
+        format!("mesh: Cube, {sprite}"),
+        format!("mesh: Cube, {tilemap}"),
+        format!("{sprite}, {tilemap}"),
+    ] {
+        let p = node_problem(&format!("(name: \"n\", {components})"), "n");
+        assert_eq!(p, Problem::DrawableConflict, "{components}");
+    }
+}
+
+/// A node `map` with a tilemap of the given legend and rows.
+fn map_with(legend: &str, rows: &str) -> String {
+    format!(r#"(name: "map", tilemap: (sheet: "s.json", legend: [{legend}], rows: [{rows}]))"#)
+}
+
+#[test]
+fn tilemap_needs_at_least_one_row() {
+    let p = node_problem(&map_with(r#"('.', "t")"#, ""), "map");
+    assert_eq!(p, Problem::TilemapNoRows);
+}
+
+#[test]
+fn tilemap_rows_must_share_one_non_zero_width() {
+    for rows in [r#""..", ".""#, r#""""#, r#""", """#] {
+        let p = node_problem(&map_with(r#"('.', "t")"#, rows), "map");
+        assert_eq!(p, Problem::TilemapRowWidth, "{rows}");
+    }
+}
+
+#[test]
+fn tilemap_characters_must_be_in_the_legend() {
+    let p = node_problem(&map_with(r#"('.', "t")"#, r#""..", ".x""#), "map");
+    assert_eq!(
+        p,
+        Problem::TilemapUnknownChar {
+            row: 1,
+            column: 1,
+            ch: 'x'
+        }
+    );
+    assert!(p.to_string().contains("row 1, column 1"), "{p}");
+}
+
+#[test]
+fn tilemap_legend_characters_must_be_unique() {
+    let p = node_problem(&map_with(r#"('.', "a"), ('.', "b")"#, r#"".""#), "map");
+    assert_eq!(p, Problem::TilemapDuplicateLegend('.'));
+}
+
+#[test]
+fn sheet_and_tag_names_must_not_be_empty() {
+    for (node, field) in [
+        (
+            r#"(name: "n", sprite: (sheet: "", tag: "t"))"#.to_owned(),
+            "sprite sheet",
+        ),
+        (
+            r#"(name: "n", sprite: (sheet: "s.json", tag: ""))"#.to_owned(),
+            "sprite tag",
+        ),
+        (
+            r#"(name: "n", tilemap: (sheet: "", legend: [('.', "t")], rows: ["."]))"#.to_owned(),
+            "tilemap sheet",
+        ),
+        (
+            r#"(name: "n", tilemap: (sheet: "s.json", legend: [('.', "")], rows: ["."]))"#
+                .to_owned(),
+            "tilemap legend tag",
+        ),
+    ] {
+        let p = node_problem(&node, "n");
+        assert_eq!(p, Problem::EmptyField(field), "{node}");
+    }
+}

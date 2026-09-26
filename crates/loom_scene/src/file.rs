@@ -34,6 +34,8 @@ pub(crate) struct NodeDesc {
     pub character: Option<CharacterDesc>,
     pub orbit_camera: Option<OrbitCameraDesc>,
     pub collider: Option<ColliderKind>,
+    pub sprite: Option<SpriteDesc>,
+    pub tilemap: Option<TilemapDesc>,
     #[serde(default)]
     pub children: Vec<NodeDesc>,
 }
@@ -63,10 +65,40 @@ pub enum MeshKind {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CameraDesc {
-    /// Vertical field of view in degrees.
-    pub fov_y: f32,
+    /// Perspective: vertical field of view in degrees. Exactly one of
+    /// `fov_y` and `ortho` is given.
+    pub fov_y: Option<f32>,
+    /// Orthographic.
+    pub ortho: Option<OrthoDesc>,
     pub near: f32,
     pub far: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OrthoDesc {
+    /// World length the view covers vertically; the width follows the
+    /// aspect ratio.
+    pub height: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SpriteDesc {
+    /// Path of an Aseprite json-array sprite sheet.
+    pub sheet: String,
+    pub tag: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TilemapDesc {
+    /// Path of an Aseprite json-array sprite sheet.
+    pub sheet: String,
+    /// Which tag each map character draws.
+    pub legend: Vec<(char, String)>,
+    /// One string per row, top row first; one character per cell.
+    pub rows: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -11,8 +11,8 @@ use std::sync::mpsc;
 
 use wgpu::util::DeviceExt;
 
-pub use frame::{DirectionalLight, DrawItem, Frame};
-use frame::{GpuDraw, GpuGlobals};
+pub use frame::{DirectionalLight, DrawItem, Frame, Projection, SpriteDraw};
+use frame::{GpuDraw, GpuGlobals, GpuSprite};
 pub use mesh::MeshKind;
 
 /// Format of the offscreen color target. Readback returns its bytes as-is,
@@ -50,7 +50,23 @@ pub enum RenderError {
     MapRange(#[from] wgpu::MapRangeError),
     #[error("the readback buffer map callback never ran")]
     MapCallbackLost,
+    #[error("texture size {width}x{height} must be non-zero and at most {max} pixels per side")]
+    TextureSize { width: u32, height: u32, max: u32 },
+    #[error("a {width}x{height} RGBA8 texture needs {expected} bytes, got {actual}")]
+    TextureData {
+        width: u32,
+        height: u32,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("sprite uses texture {0}, which this renderer did not create")]
+    UnknownTexture(u32),
 }
+
+/// Handle of a texture created by [`Renderer::create_texture`]; only valid
+/// with the renderer that created it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureId(u32);
 
 /// GPU adapter description, for `loom info` and run reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,20 +155,23 @@ fn adapter_options<'a>(
 }
 
 impl DrawBuffer {
+    /// A buffer for `capacity` items of `stride` bytes, bound with `globals`.
     fn new(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         globals: &wgpu::Buffer,
+        label: &'static str,
+        stride: usize,
         capacity: usize,
     ) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("draws"),
-            size: (capacity * std::mem::size_of::<GpuDraw>()) as wgpu::BufferAddress,
+            label: Some(label),
+            size: (capacity * stride) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mesh"),
+            label: Some(label),
             layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -167,8 +186,24 @@ impl DrawBuffer {
         });
         Self {
             buffer,
+            label,
+            stride,
             capacity,
             bind_group,
+        }
+    }
+
+    /// Replaces the buffer with a larger one if `len` items do not fit.
+    fn reserve(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        globals: &wgpu::Buffer,
+        len: usize,
+    ) {
+        if len > self.capacity {
+            let capacity = len.next_power_of_two();
+            *self = Self::new(device, layout, globals, self.label, self.stride, capacity);
         }
     }
 }
@@ -401,10 +436,13 @@ impl GpuMesh {
     }
 }
 
-/// Per-draw data (model matrix, normal matrix, color) for every draw item of
-/// a frame, read by the shader by instance index. Grows as needed.
+/// Per-draw data for every draw item (or sprite) of a frame, read by the
+/// shader by instance index, bound together with the globals. Grows as needed.
 struct DrawBuffer {
     buffer: wgpu::Buffer,
+    label: &'static str,
+    /// Bytes per item.
+    stride: usize,
     capacity: usize,
     bind_group: wgpu::BindGroup,
 }
@@ -419,6 +457,12 @@ pub struct Renderer {
     bind_group_layout: wgpu::BindGroupLayout,
     globals_buffer: wgpu::Buffer,
     draws: DrawBuffer,
+    sprite_pipeline: wgpu::RenderPipeline,
+    texture_layout: wgpu::BindGroupLayout,
+    sprites: DrawBuffer,
+    /// Bind groups of the textures, each binding one as group 1 of the
+    /// sprite pipeline; indexed by [`TextureId`], never removed.
+    textures: Vec<wgpu::BindGroup>,
     /// Every mesh uploaded so far, found by `==`: the built-in ones, then
     /// each capsule shape at its first use. Shapes that are no longer drawn
     /// (e.g. after a hot reload changed a capsule) stay; there are only a few.
@@ -522,6 +566,8 @@ impl Renderer {
             &device,
             &bind_group_layout,
             &globals_buffer,
+            "mesh",
+            std::mem::size_of::<GpuDraw>(),
             INITIAL_DRAW_CAPACITY,
         );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -561,6 +607,70 @@ impl Renderer {
             cache: None,
         });
 
+        // Sprites share group 0's layout with meshes (globals, then per-draw
+        // storage read by the vertex stage); group 1 is the texture.
+        let sprite_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/sprite.wgsl"));
+        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sprite texture"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let sprites = DrawBuffer::new(
+            &device,
+            &bind_group_layout,
+            &globals_buffer,
+            "sprite",
+            std::mem::size_of::<GpuSprite>(),
+            INITIAL_DRAW_CAPACITY,
+        );
+        let sprite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sprite"),
+            bind_group_layouts: &[Some(&bind_group_layout), Some(&texture_layout)],
+            immediate_size: 0,
+        });
+        let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sprite"),
+            layout: Some(&sprite_layout),
+            vertex: wgpu::VertexState {
+                module: &sprite_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                front_face: wgpu::FrontFace::Ccw,
+                // No culling: a sprite stays visible whichever way its node is
+                // turned (e.g. a negative scale to mirror it), rather than
+                // depending on the winding surviving the model matrix.
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &sprite_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(COLOR_FORMAT.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let meshes = MeshKind::BUILT_IN
             .iter()
             .map(|&kind| (kind, GpuMesh::new(&device, kind)))
@@ -578,6 +688,10 @@ impl Renderer {
             bind_group_layout,
             globals_buffer,
             draws,
+            sprite_pipeline,
+            texture_layout,
+            sprites,
+            textures: Vec::new(),
             meshes,
             size: (0, 0),
             offscreen: None,
@@ -602,6 +716,10 @@ impl Renderer {
             bind_group_layout,
             globals_buffer,
             draws,
+            sprite_pipeline,
+            texture_layout,
+            sprites,
+            textures,
             meshes,
             size: _,
             offscreen,
@@ -612,15 +730,73 @@ impl Renderer {
             drop((
                 offscreen,
                 draws,
+                sprites,
+                textures,
                 meshes,
                 pipeline,
+                sprite_pipeline,
                 bind_group_layout,
+                texture_layout,
                 globals_buffer,
             ));
         });
         step(EXIT, "queue", || drop(queue));
         step(EXIT, "device", || drop(device));
         step(EXIT, "adapter", || drop(adapter));
+    }
+
+    /// Uploads a `width` x `height` texture from tightly packed, sRGB-encoded
+    /// RGBA8 rows (top row first), for [`SpriteDraw`]s.
+    pub fn create_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<TextureId, RenderError> {
+        let max = self.device.limits().max_texture_dimension_2d;
+        if width == 0 || height == 0 || width > max || height > max {
+            return Err(RenderError::TextureSize { width, height, max });
+        }
+        let expected = width as usize * height as usize * 4;
+        if rgba.len() != expected {
+            return Err(RenderError::TextureData {
+                width,
+                height,
+                expected,
+                actual: rgba.len(),
+            });
+        }
+        let texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("sprite texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        let view = texture.create_view(&Default::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sprite texture"),
+            layout: &self.texture_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        let id = u32::try_from(self.textures.len()).expect("far fewer than 2^32 textures");
+        self.textures.push(bind_group);
+        Ok(TextureId(id))
     }
 
     /// Current render size in pixels; `(0, 0)` while minimized.
@@ -667,15 +843,24 @@ impl Renderer {
         if self.offscreen.is_none() {
             return Ok(false);
         }
-        if frame.draws.len() > self.draws.capacity {
-            let capacity = frame.draws.len().next_power_of_two();
-            self.draws = DrawBuffer::new(
-                &self.device,
-                &self.bind_group_layout,
-                &self.globals_buffer,
-                capacity,
-            );
+        for sprite in frame.sprites {
+            let TextureId(id) = sprite.texture;
+            if self.textures.get(id as usize).is_none() {
+                return Err(RenderError::UnknownTexture(id));
+            }
         }
+        self.draws.reserve(
+            &self.device,
+            &self.bind_group_layout,
+            &self.globals_buffer,
+            frame.draws.len(),
+        );
+        self.sprites.reserve(
+            &self.device,
+            &self.bind_group_layout,
+            &self.globals_buffer,
+            frame.sprites.len(),
+        );
         for item in frame.draws {
             if !self.meshes.iter().any(|(kind, _)| *kind == item.mesh) {
                 log::debug!("uploading mesh {:?}", item.mesh);
@@ -694,6 +879,11 @@ impl Renderer {
         if !draws.is_empty() {
             self.queue
                 .write_buffer(&self.draws.buffer, 0, bytemuck::cast_slice(&draws));
+        }
+        let sprites: Vec<GpuSprite> = frame.sprites.iter().map(GpuSprite::new).collect();
+        if !sprites.is_empty() {
+            self.queue
+                .write_buffer(&self.sprites.buffer, 0, bytemuck::cast_slice(&sprites));
         }
 
         let mut encoder = self
@@ -743,6 +933,20 @@ impl Renderer {
                 // The instance index selects this item's per-draw data.
                 let instance = u32::try_from(i).expect("draw count fits in u32");
                 pass.draw_indexed(0..mesh.index_count, 0, instance..instance + 1);
+            }
+            if !frame.sprites.is_empty() {
+                pass.set_pipeline(&self.sprite_pipeline);
+                pass.set_bind_group(0, &self.sprites.bind_group, &[]);
+                // One draw per run of consecutive sprites with the same
+                // texture; the instance index selects each one's data.
+                let mut start = 0;
+                for run in frame.sprites.chunk_by(|a, b| a.texture == b.texture) {
+                    let TextureId(id) = run[0].texture;
+                    pass.set_bind_group(1, &self.textures[id as usize], &[]);
+                    let end = start + u32::try_from(run.len()).expect("sprite count fits in u32");
+                    pass.draw(0..6, start..end);
+                    start = end;
+                }
             }
         }
 

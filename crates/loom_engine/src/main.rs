@@ -9,6 +9,7 @@ mod reload;
 mod report;
 mod run;
 mod serve;
+mod sheet;
 mod sim;
 mod state;
 mod view;
@@ -37,6 +38,9 @@ enum Command {
     /// Serve a headless remote-control session: JSON-RPC requests on stdin,
     /// one reply per line on stdout.
     Serve(ServeArgs),
+    /// Render a scene once, headless and without simulating it (so it needs
+    /// no character), and save a screenshot.
+    View(ViewArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -79,6 +83,19 @@ pub(crate) struct ServeArgs {
     #[arg(long, value_name = "PATH")]
     scene: Option<PathBuf>,
     /// Screenshot size when a request gives none.
+    #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
+    size: Size,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ViewArgs {
+    /// Scene file to render instead of the built-in demo scene.
+    #[arg(long, value_name = "PATH")]
+    scene: Option<PathBuf>,
+    /// Where to save the PNG. Parent directories are created.
+    #[arg(long, value_name = "PATH")]
+    screenshot: PathBuf,
+    /// Render resolution.
     #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
     size: Size,
 }
@@ -128,6 +145,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Run(args) => run::run(&args, started).map(|r| report::emit(&r)),
         Command::Info => run::info().map(|r| report::emit(&r)),
+        Command::View(args) => view::view(&args, started).map(|r| report::emit(&r)),
         // Replies are written as they go; only a startup error is reported below.
         Command::Serve(args) => serve::serve(&args),
     };

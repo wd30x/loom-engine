@@ -306,6 +306,37 @@ fn failed_scene_load_keeps_the_running_session() {
 }
 
 #[test]
+fn scene_load_with_an_unknown_sprite_tag_keeps_the_running_session() {
+    let sheet = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/art/tiles.json")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let badge = format!("(name: \"badge\", sprite: (sheet: \"{sheet}\", tag: \"playr\")),");
+    let source = DEMO_SCENE.replacen(
+        "(name: \"ground\",",
+        &format!("{badge}\n        (name: \"ground\","),
+        1,
+    );
+    assert_ne!(source, DEMO_SCENE);
+    let requests = [
+        req(1, "step", json!({"ticks": 5})),
+        req(2, "load_scene", json!({"source": source})),
+        req(3, "describe", json!({})),
+    ];
+    let replies = serve(&requests);
+    assert_eq!(error_code(&replies[1]), -32000);
+    let message = replies[1]["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("invalid scene source") && message.contains("node badge: sprite"),
+        "{}",
+        replies[1]
+    );
+    assert!(message.contains("has no tag \"playr\""), "{message}");
+    assert_eq!(result(&replies[2])["tick"], 5);
+}
+
+#[test]
 fn reset_restarts_the_scene_loaded_from_source() {
     let old = "(name: \"player\", position: (0.0, 0.0, 0.0),";
     assert!(DEMO_SCENE.contains(old));

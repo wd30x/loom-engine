@@ -7,7 +7,7 @@
 use std::io;
 use std::time::{Duration, Instant, SystemTime};
 
-use loom_sim::Game;
+use crate::sim::LoadedScene;
 
 /// How often the file's modification time is checked.
 pub(crate) const CHECK_INTERVAL: Duration = Duration::from_millis(500);
@@ -20,7 +20,7 @@ pub(crate) enum Poll {
     /// file is momentarily missing (editors often delete or rename on save).
     Unchanged,
     /// The file holds a new valid scene. The caller restarts with it.
-    Reloaded(Box<Game>),
+    Reloaded(Box<LoadedScene>),
     /// New content that fails to parse or validate. Keep the running scene,
     /// log the error and count it.
     Failed(anyhow::Error),
@@ -78,13 +78,13 @@ impl SceneWatcher {
         if content == self.current {
             return Poll::Unchanged;
         }
-        match Game::from_source(&content) {
-            Ok(game) => {
+        match LoadedScene::from_source(&content) {
+            Ok(loaded) => {
                 self.current = content;
                 self.last_failure = None;
-                Poll::Reloaded(Box::new(game))
+                Poll::Reloaded(Box::new(loaded))
             }
-            Err(e) => self.fail(content, e.into()),
+            Err(e) => self.fail(content, e),
         }
     }
 
@@ -127,6 +127,23 @@ mod tests {
     /// A watcher started at `t0` on `GOOD` with modification time 1.
     fn watcher(t0: Instant) -> SceneWatcher {
         SceneWatcher::new(t0, Some(at(1)), GOOD.to_owned())
+    }
+
+    /// `GOOD` plus a node `badge` showing `tag` of the project's tile sheet
+    /// (an absolute path, so the test does not depend on the working
+    /// directory).
+    fn with_sprite(tag: &str) -> String {
+        let sheet = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/art/tiles.json")
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        let badge = format!("(name: \"badge\", sprite: (sheet: \"{sheet}\", tag: \"{tag}\")),");
+        GOOD.replacen(
+            "(name: \"ground\",",
+            &format!("{badge}\n        (name: \"ground\","),
+            1,
+        )
     }
 
     fn moved_player() -> String {
@@ -219,10 +236,11 @@ mod tests {
     fn changed_valid_scene_reloads() {
         let t0 = Instant::now();
         let mut w = watcher(t0);
-        let Poll::Reloaded(game) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &moved_player())
+        let Poll::Reloaded(loaded) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &moved_player())
         else {
             panic!("expected a reload");
         };
+        let game = &loaded.game;
         assert_eq!(game.state().player.position, glam::Vec3::new(3.0, 0.0, 0.0));
         assert_eq!(game.clock().tick(), 0);
         // The new content is now current: touching it again is no reload.
@@ -259,6 +277,24 @@ mod tests {
         assert!(matches!(
             poll_with(&mut w, step(5), 6, broken),
             Poll::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn scene_with_an_unknown_sprite_tag_fails_to_reload() {
+        let t0 = Instant::now();
+        let mut w = watcher(t0);
+        let Poll::Failed(e) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &with_sprite("playr"))
+        else {
+            panic!("expected a failure");
+        };
+        let error = format!("{e:#}");
+        assert!(error.contains("node badge: sprite"), "{error}");
+        assert!(error.contains("has no tag \"playr\""), "{error}");
+        // The same scene with a tag the sheet has reloads.
+        assert!(matches!(
+            poll_with(&mut w, t0 + CHECK_INTERVAL * 2, 3, &with_sprite("player")),
+            Poll::Reloaded(_)
         ));
     }
 

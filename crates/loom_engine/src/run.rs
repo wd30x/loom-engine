@@ -16,7 +16,6 @@ use crate::reload::{self, Poll, SceneWatcher};
 use crate::report::{InfoReport, RunReport};
 use crate::sim::Sim;
 use crate::state::write_state;
-use crate::view::render_scene;
 
 pub(crate) fn info() -> Result<InfoReport> {
     let adapter = loom_render::probe_adapter()?;
@@ -36,7 +35,7 @@ pub(crate) fn run(args: &RunArgs, started: Instant) -> Result<RunReport> {
 }
 
 /// Whole milliseconds since `started`.
-fn millis_since(started: Instant) -> u64 {
+pub(crate) fn millis_since(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -56,7 +55,7 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
         Some(path) => {
             let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
             let init_ms = millis_since(started);
-            render_scene(&mut renderer, sim.game().scene())?;
+            sim.render(&mut renderer)?;
             let saved = save_screenshot(&renderer, path)?;
             let adapter = renderer.adapter_summary();
             renderer.shutdown();
@@ -260,8 +259,8 @@ impl WindowRun<'_> {
             || reload::modified_time(path),
             || reload::read_source(path),
         ) {
-            Poll::Reloaded(game) => {
-                self.sim.restart(*game);
+            Poll::Reloaded(loaded) => {
+                self.sim.restart(*loaded);
                 self.reloads += 1;
                 log::info!("scene {} reloaded; restarting from tick 0", path.display());
                 true
@@ -301,7 +300,7 @@ impl WindowRun<'_> {
             .renderer
             .as_mut()
             .expect("checked at the top of frame()");
-        if !render_scene(renderer, self.sim.game().scene())? {
+        if !self.sim.render(renderer)? {
             return Ok(AppControl::Continue);
         }
         self.frames += 1;

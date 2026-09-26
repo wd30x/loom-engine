@@ -10,12 +10,39 @@ use loom_core::input::{
     ActionMap, ActionState, InputCollector, InputRecorder, InputScript, Key, ScriptPlayer,
     TickInput, canonical_axis_value,
 };
+use loom_render::{RenderError, Renderer};
 use loom_sim::{Game, demo_bindings, demo_scene};
 
 use crate::RunArgs;
 use crate::output::ensure_parent_dir;
 use crate::report::InputReport;
+use crate::sheet::Sheets;
 use crate::state::StateDump;
+use crate::view::render_scene;
+
+/// A scene ready to simulate: the game and the sprite sheets its scene
+/// uses, loaded together so a missing sheet or tag fails the load like any
+/// other invalid scene.
+pub(crate) struct LoadedScene {
+    pub game: Game,
+    pub sheets: Sheets,
+}
+
+impl LoadedScene {
+    pub fn from_source(src: &str) -> Result<Self> {
+        Self::new(Game::from_source(src)?)
+    }
+
+    /// The built-in demo scene.
+    pub fn builtin() -> Result<Self> {
+        Self::new(Game::new(demo_scene())?)
+    }
+
+    fn new(game: Game) -> Result<Self> {
+        let sheets = Sheets::load(game.scene())?;
+        Ok(Self { game, sheets })
+    }
+}
 
 enum InputSource {
     /// Headless without `--input`: every tick has no input.
@@ -36,6 +63,8 @@ enum InputSource {
 
 pub(crate) struct Sim {
     game: Game,
+    /// Sheets of `game`'s scene; only ever drawn with one renderer.
+    sheets: Sheets,
     actions: ActionState,
     bindings: ActionMap,
     source: InputSource,
@@ -51,15 +80,15 @@ impl Sim {
     /// Reads and validates `--scene` and `--input` (if given) before any
     /// tick runs. Without a script, `live` selects keyboard input over none.
     pub fn new(args: &RunArgs, live: bool) -> Result<Self> {
-        let (game, scene_source) = match &args.scene {
+        let (loaded, scene_source) = match &args.scene {
             Some(path) => {
                 let src = std::fs::read_to_string(path)
                     .with_context(|| format!("reading scene {}", path.display()))?;
-                let game = Game::from_source(&src)
+                let loaded = LoadedScene::from_source(&src)
                     .with_context(|| format!("invalid scene {}", path.display()))?;
-                (game, Some(src))
+                (loaded, Some(src))
             }
-            None => (Game::new(demo_scene())?, None),
+            None => (LoadedScene::builtin()?, None),
         };
         let bindings = demo_bindings();
         let source = match &args.input {
@@ -75,7 +104,8 @@ impl Sim {
             None => InputSource::Idle,
         };
         Ok(Self {
-            game,
+            game: loaded.game,
+            sheets: loaded.sheets,
             actions: ActionState::new(),
             bindings,
             source,
@@ -85,13 +115,18 @@ impl Sim {
         })
     }
 
-    /// A `loom serve` session on `game`, from tick 0: the input is held
+    /// A `loom serve` session on `loaded`, from tick 0: the input is held
     /// (nothing pressed to start with) and always recorded. `scene_path`
-    /// and `scene_source` say where `game` came from, as in [`Sim::new`];
+    /// and `scene_source` say where `loaded` came from, as in [`Sim::new`];
     /// scene text given inline has a source but no path.
-    pub fn held(game: Game, scene_path: Option<String>, scene_source: Option<String>) -> Self {
+    pub fn held(
+        loaded: LoadedScene,
+        scene_path: Option<String>,
+        scene_source: Option<String>,
+    ) -> Self {
         Self {
-            game,
+            game: loaded.game,
+            sheets: loaded.sheets,
             actions: ActionState::new(),
             bindings: demo_bindings(),
             source: InputSource::Held(TickInput::default()),
@@ -101,11 +136,12 @@ impl Sim {
         }
     }
 
-    /// Starts over from tick 0 with `game` (a reloaded scene): the clock,
+    /// Starts over from tick 0 with `loaded` (a reloaded scene): the clock,
     /// action state, recording and script replay restart; keys held on the
     /// keyboard stay held.
-    pub fn restart(&mut self, game: Game) {
-        self.game = game;
+    pub fn restart(&mut self, loaded: LoadedScene) {
+        self.game = loaded.game;
+        self.sheets = loaded.sheets;
         self.actions = ActionState::new();
         if self.recorder.is_some() {
             self.recorder = Some(InputRecorder::new());
@@ -214,6 +250,13 @@ impl Sim {
 
     pub fn game(&self) -> &Game {
         &self.game
+    }
+
+    /// Draws the current state with `renderer`, which must be the only
+    /// renderer this `Sim` ever draws with (it owns the sheets' textures).
+    /// Returns `false` if the frame was skipped (zero render size).
+    pub fn render(&mut self, renderer: &mut Renderer) -> Result<bool, RenderError> {
+        render_scene(renderer, self.game.scene(), &mut self.sheets)
     }
 
     pub fn bindings(&self) -> &ActionMap {

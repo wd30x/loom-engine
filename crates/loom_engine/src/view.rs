@@ -1,14 +1,31 @@
 //! Scene to renderer: builds the [`Frame`] for the current scene state. The
 //! renderer and the scene crate know nothing of each other; this is the only
-//! place that knows both.
+//! place that knows both. Also `loom view`, which renders a scene once
+//! without simulating it.
 
-use glam::Vec3;
-use loom_render::{DirectionalLight, DrawItem, Frame, RenderError, Renderer};
+use std::time::Instant;
+
+use anyhow::{Context, Result};
+use glam::{Mat4, Vec3};
+use loom_render::{
+    DirectionalLight, DrawItem, Frame, Projection, RenderError, Renderer, SpriteDraw,
+};
 use loom_scene::Scene;
+use loom_sim::demo_scene;
 
-/// Draws `scene` from its camera. Returns `false` if the frame was skipped
-/// (zero render size).
-pub(crate) fn render_scene(renderer: &mut Renderer, scene: &Scene) -> Result<bool, RenderError> {
+use crate::ViewArgs;
+use crate::report::ViewReport;
+use crate::run::{millis_since, save_screenshot};
+use crate::sheet::Sheets;
+
+/// Draws `scene` from its camera. `sheets` must have been loaded for `scene`
+/// ([`Sheets::load`]) and only ever be drawn with `renderer`. Returns
+/// `false` if the frame was skipped (zero render size).
+pub(crate) fn render_scene(
+    renderer: &mut Renderer,
+    scene: &Scene,
+    sheets: &mut Sheets,
+) -> Result<bool, RenderError> {
     let draws: Vec<DrawItem> = scene
         .ids()
         .filter_map(|id| {
@@ -20,6 +37,7 @@ pub(crate) fn render_scene(renderer: &mut Renderer, scene: &Scene) -> Result<boo
             })
         })
         .collect();
+    let sprites = sprite_draws(renderer, scene, sheets)?;
 
     let camera_id = scene.camera();
     let camera = scene
@@ -43,13 +61,63 @@ pub(crate) fn render_scene(renderer: &mut Renderer, scene: &Scene) -> Result<boo
 
     renderer.render(&Frame {
         view: scene.world_matrix(camera_id).inverse(),
-        fov_y: camera.fov_y_degrees.to_radians(),
+        projection: projection(camera.projection),
         near: camera.near,
         far: camera.far,
         ambient: scene.ambient(),
         light,
         draws: &draws,
+        sprites: &sprites,
     })
+}
+
+/// One draw per sprite node, and one per cell of each tilemap node (row by
+/// row, each row left to right), in scene pre-order.
+fn sprite_draws(
+    renderer: &mut Renderer,
+    scene: &Scene,
+    sheets: &mut Sheets,
+) -> Result<Vec<SpriteDraw>, RenderError> {
+    let mut sprites = Vec::new();
+    for &id in scene.sprite_nodes() {
+        let node = scene.node(id);
+        let world = scene.world_matrix(id);
+        if let Some(sprite) = &node.sprite {
+            let (texture, rect) = sheets.draw(renderer, &sprite.sheet, &sprite.tag)?;
+            sprites.push(SpriteDraw {
+                texture,
+                model: world,
+                rect,
+            });
+        }
+        if let Some(tilemap) = &node.tilemap {
+            for (r, row) in tilemap.rows.iter().enumerate() {
+                for (c, ch) in row.chars().enumerate() {
+                    let tag = tilemap
+                        .tag(ch)
+                        .expect("Scene::parse checks every tilemap character is in the legend");
+                    let (texture, rect) = sheets.draw(renderer, &tilemap.sheet, tag)?;
+                    // Cell (r, c) is centered at (c, -r, 0): row 0 on top.
+                    let offset = Vec3::new(c as f32, -(r as f32), 0.0);
+                    sprites.push(SpriteDraw {
+                        texture,
+                        model: world * Mat4::from_translation(offset),
+                        rect,
+                    });
+                }
+            }
+        }
+    }
+    Ok(sprites)
+}
+
+fn projection(projection: loom_scene::Projection) -> Projection {
+    match projection {
+        loom_scene::Projection::Perspective { fov_y_degrees } => Projection::Perspective {
+            fov_y: fov_y_degrees.to_radians(),
+        },
+        loom_scene::Projection::Orthographic { height } => Projection::Orthographic { height },
+    }
 }
 
 fn mesh_kind(kind: loom_scene::MeshKind) -> loom_render::MeshKind {
@@ -61,4 +129,42 @@ fn mesh_kind(kind: loom_scene::MeshKind) -> loom_render::MeshKind {
             loom_render::MeshKind::Capsule { radius, height }
         }
     }
+}
+
+/// `loom view`: renders the scene as loaded, without a game (so it needs no
+/// character) and without ticking, and saves a screenshot. The scene and
+/// its sheets are checked before the GPU is touched. `started` is the
+/// process start, for `renderer_init_ms`.
+pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
+    let (scene, mut sheets) = match &args.scene {
+        Some(path) => {
+            let src = std::fs::read_to_string(path)
+                .with_context(|| format!("reading scene {}", path.display()))?;
+            let scene =
+                Scene::parse(&src).with_context(|| format!("invalid scene {}", path.display()))?;
+            let sheets = Sheets::load(&scene)
+                .with_context(|| format!("invalid scene {}", path.display()))?;
+            (scene, sheets)
+        }
+        None => {
+            let scene = demo_scene();
+            let sheets = Sheets::load(&scene)?;
+            (scene, sheets)
+        }
+    };
+    let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
+    let renderer_init_ms = millis_since(started);
+    render_scene(&mut renderer, &scene, &mut sheets)?;
+    let screenshot = save_screenshot(&renderer, &args.screenshot)?;
+    let adapter = renderer.adapter_summary();
+    renderer.shutdown();
+    Ok(ViewReport {
+        status: "ok",
+        mode: "view",
+        screenshot,
+        size: [args.size.width, args.size.height],
+        scene: args.scene.as_ref().map(|p| p.display().to_string()),
+        adapter: adapter.into(),
+        renderer_init_ms,
+    })
 }

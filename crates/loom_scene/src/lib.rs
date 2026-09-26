@@ -3,7 +3,7 @@
 //!
 //! A scene is a tree of named nodes. Each node has a local transform and may
 //! carry optional components (`mesh`, `camera`, `light`, `character`,
-//! `orbit_camera`, `collider`). Nodes are stored in
+//! `orbit_camera`, `collider`, `sprite`, `tilemap`). Nodes are stored in
 //! one array in pre-order (a parent before its children, children in file
 //! order) and addressed by [`NodeId`] (an index) or by path (`arena/pillar`).
 //! The tree is simulation state: its structure is fixed after parsing, only
@@ -17,7 +17,9 @@ use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use serde::Serialize;
 
 pub use file::MeshKind;
-use file::{ColliderKind, NodeDesc, OrbitCameraDesc, SceneFile, Triple};
+use file::{
+    CameraDesc, ColliderKind, NodeDesc, OrbitCameraDesc, SceneFile, SpriteDesc, TilemapDesc, Triple,
+};
 
 /// The only scene file version so far.
 const VERSION: u32 = 1;
@@ -64,6 +66,22 @@ pub enum Problem {
     FovOutOfRange,
     #[error("camera must satisfy 0 < near < far")]
     NearFar,
+    #[error("camera needs exactly one of fov_y (perspective) and ortho (orthographic)")]
+    CameraProjection,
+    #[error("camera ortho height must be greater than 0")]
+    OrthoHeight,
+    #[error("mesh, sprite and tilemap cannot share a node: give at most one of them")]
+    DrawableConflict,
+    #[error("{0} must not be empty")]
+    EmptyField(&'static str),
+    #[error("tilemap rows must not be empty")]
+    TilemapNoRows,
+    #[error("tilemap rows must all have the same number of characters, at least 1")]
+    TilemapRowWidth,
+    #[error("tilemap row {row}, column {column}: {ch:?} is not in the legend")]
+    TilemapUnknownChar { row: usize, column: usize, ch: char },
+    #[error("tilemap legend lists {0:?} more than once")]
+    TilemapDuplicateLegend(char),
     #[error("light intensity must be at least 0")]
     NegativeIntensity,
     #[error("a second light; the scene already has one at {0:?}")]
@@ -137,10 +155,52 @@ pub struct Mesh {
 /// Looks along the node's -Z.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
-    /// Vertical field of view in degrees.
-    pub fov_y_degrees: f32,
+    pub projection: Projection,
     pub near: f32,
     pub far: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Projection {
+    /// Vertical field of view in degrees.
+    Perspective { fov_y_degrees: f32 },
+    /// `height` is the world length the view covers vertically; the width
+    /// follows the aspect ratio (`docs/architecture.md` section 14).
+    Orthographic { height: f32 },
+}
+
+/// A 1x1 quad on the node's XY plane, centered at its origin, showing the
+/// first frame of `tag` (`docs/architecture.md` section 14).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sprite {
+    /// Path of an Aseprite json-array sprite sheet, relative to the working
+    /// directory. Whether it exists and has `tag` is checked by the engine.
+    pub sheet: String,
+    pub tag: String,
+}
+
+/// A grid of 1x1 cells on the node's XY plane: row `r`, column `c` is
+/// centered at `(c, -r, 0)`, row 0 on top (`docs/architecture.md` section 14).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tilemap {
+    /// Path of an Aseprite json-array sprite sheet, as for [`Sprite`].
+    pub sheet: String,
+    /// Which tag each character draws; characters are unique. A list, not a
+    /// map, so it keeps the file's order.
+    pub legend: Vec<(char, String)>,
+    /// Non-empty, all of the same (non-zero) character count, every
+    /// character in `legend`.
+    pub rows: Vec<String>,
+}
+
+impl Tilemap {
+    /// The tag `ch` draws, if it is in the legend.
+    pub fn tag(&self, ch: char) -> Option<&str> {
+        self.legend
+            .iter()
+            .find(|(c, _)| *c == ch)
+            .map(|(_, tag)| tag.as_str())
+    }
 }
 
 /// Directional light, shining along the node's -Z.
@@ -199,6 +259,8 @@ pub struct Node {
     pub character: Option<Character>,
     pub orbit_camera: Option<OrbitCamera>,
     pub collider: Option<Collider>,
+    pub sprite: Option<Sprite>,
+    pub tilemap: Option<Tilemap>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -212,6 +274,8 @@ pub struct Scene {
     orbit_camera: Option<NodeId>,
     /// In pre-order.
     colliders: Vec<NodeId>,
+    /// Nodes with a sprite or a tilemap, in pre-order.
+    sprite_nodes: Vec<NodeId>,
     ambient: Vec3,
 }
 
@@ -234,6 +298,7 @@ impl Scene {
             character: None,
             orbit_camera: None,
             colliders: Vec::new(),
+            sprite_nodes: Vec::new(),
         };
         let roots = builder.add_siblings(&file.nodes, None, "", None)?;
         let mut scene = Self {
@@ -244,6 +309,7 @@ impl Scene {
             character: builder.character,
             orbit_camera: None,
             colliders: builder.colliders,
+            sprite_nodes: builder.sprite_nodes,
             ambient,
         };
         // The target is a path from a root, resolved once the whole tree
@@ -371,6 +437,11 @@ impl Scene {
         &self.colliders
     }
 
+    /// Every node with a [`Sprite`] or a [`Tilemap`], in pre-order.
+    pub fn sprite_nodes(&self) -> &[NodeId] {
+        &self.sprite_nodes
+    }
+
     /// Ambient light, linear RGB.
     pub fn ambient(&self) -> Vec3 {
         self.ambient
@@ -396,6 +467,7 @@ struct Builder<'a> {
     /// Validated except for its target, which is resolved after the build.
     orbit_camera: Option<(NodeId, &'a OrbitCameraDesc)>,
     colliders: Vec<NodeId>,
+    sprite_nodes: Vec<NodeId>,
 }
 
 impl<'a> Builder<'a> {
@@ -434,6 +506,9 @@ impl<'a> Builder<'a> {
                     return Err(fail(Problem::ColliderAncestor(ancestor.to_owned())));
                 }
                 self.colliders.push(id);
+            }
+            if node.sprite.is_some() || node.tilemap.is_some() {
+                self.sprite_nodes.push(id);
             }
             if node.light.is_some() {
                 if let Some(first) = self.light {
@@ -511,25 +586,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         Some(c) => color(c, "color")?,
         None => DEFAULT_COLOR,
     };
-    let camera = match &desc.camera {
-        Some(c) => {
-            if ![c.fov_y, c.near, c.far].iter().all(|v| v.is_finite()) {
-                return Err(Problem::NotFinite("camera"));
-            }
-            if !(c.fov_y > 0.0 && c.fov_y < 180.0) {
-                return Err(Problem::FovOutOfRange);
-            }
-            if !(0.0 < c.near && c.near < c.far) {
-                return Err(Problem::NearFar);
-            }
-            Some(Camera {
-                fov_y_degrees: c.fov_y,
-                near: c.near,
-                far: c.far,
-            })
-        }
-        None => None,
-    };
+    let camera = desc.camera.as_ref().map(camera).transpose()?;
     let light = match &desc.light {
         Some(l) => {
             if !l.intensity.is_finite() {
@@ -571,6 +628,16 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     if let Some(o) = &desc.orbit_camera {
         validate_orbit_camera(o, camera.is_some())?;
     }
+    let drawables = [
+        desc.mesh.is_some(),
+        desc.sprite.is_some(),
+        desc.tilemap.is_some(),
+    ];
+    if drawables.iter().filter(|&&d| d).count() > 1 {
+        return Err(Problem::DrawableConflict);
+    }
+    let sprite = desc.sprite.as_ref().map(sprite).transpose()?;
+    let tilemap = desc.tilemap.as_ref().map(tilemap).transpose()?;
     let collider = match desc.collider {
         Some(ColliderKind::Box) => {
             let rotates_off_y = desc.rotation.is_some_and(|(x, _, z)| x != 0.0 || z != 0.0);
@@ -602,7 +669,89 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         character,
         orbit_camera: None,
         collider,
+        sprite,
+        tilemap,
     })
+}
+
+fn camera(c: &CameraDesc) -> Result<Camera, Problem> {
+    let height = c.ortho.as_ref().map(|o| o.height);
+    let numbers = [c.fov_y, height, Some(c.near), Some(c.far)];
+    if !numbers.iter().flatten().all(|v| v.is_finite()) {
+        return Err(Problem::NotFinite("camera"));
+    }
+    let projection = match (c.fov_y, height) {
+        (Some(fov_y), None) => {
+            if !(fov_y > 0.0 && fov_y < 180.0) {
+                return Err(Problem::FovOutOfRange);
+            }
+            Projection::Perspective {
+                fov_y_degrees: fov_y,
+            }
+        }
+        (None, Some(height)) => {
+            if height <= 0.0 {
+                return Err(Problem::OrthoHeight);
+            }
+            Projection::Orthographic { height }
+        }
+        _ => return Err(Problem::CameraProjection),
+    };
+    if !(0.0 < c.near && c.near < c.far) {
+        return Err(Problem::NearFar);
+    }
+    Ok(Camera {
+        projection,
+        near: c.near,
+        far: c.far,
+    })
+}
+
+fn sprite(s: &SpriteDesc) -> Result<Sprite, Problem> {
+    not_empty(&s.sheet, "sprite sheet")?;
+    not_empty(&s.tag, "sprite tag")?;
+    Ok(Sprite {
+        sheet: s.sheet.clone(),
+        tag: s.tag.clone(),
+    })
+}
+
+fn tilemap(t: &TilemapDesc) -> Result<Tilemap, Problem> {
+    not_empty(&t.sheet, "tilemap sheet")?;
+    let mut seen = BTreeSet::new();
+    for (ch, tag) in &t.legend {
+        if !seen.insert(*ch) {
+            return Err(Problem::TilemapDuplicateLegend(*ch));
+        }
+        not_empty(tag, "tilemap legend tag")?;
+    }
+    let Some(first) = t.rows.first() else {
+        return Err(Problem::TilemapNoRows);
+    };
+    let width = first.chars().count();
+    if width == 0 || t.rows.iter().any(|r| r.chars().count() != width) {
+        return Err(Problem::TilemapRowWidth);
+    }
+    for (row, text) in t.rows.iter().enumerate() {
+        for (column, ch) in text.chars().enumerate() {
+            if !seen.contains(&ch) {
+                return Err(Problem::TilemapUnknownChar { row, column, ch });
+            }
+        }
+    }
+    Ok(Tilemap {
+        sheet: t.sheet.clone(),
+        legend: t.legend.clone(),
+        rows: t.rows.clone(),
+    })
+}
+
+fn not_empty(value: &str, field: &'static str) -> Result<(), Problem> {
+    if value.is_empty() {
+        Err(Problem::EmptyField(field))
+    } else {
+        Ok(())
+    }
 }
 
 /// The node's own transform is at most a translation: no rotation (or all

@@ -16,15 +16,13 @@ use anyhow::{Context, Result, anyhow};
 use loom_core::TICK_HZ;
 use loom_core::input::ActionSet;
 use loom_render::{AdapterSummary, Renderer};
-use loom_sim::{Game, demo_scene};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::report::RunAdapter;
 use crate::run::save_screenshot;
-use crate::sim::Sim;
-use crate::view::render_scene;
+use crate::sim::{LoadedScene, Sim};
 use crate::{ServeArgs, Size};
 
 /// Runs a session until stdin ends or a `quit` request. A bad `--scene` is
@@ -233,12 +231,14 @@ impl Session {
     /// A fresh session on the current scene, from the text it was loaded
     /// from (not the file again, which may have changed since).
     fn restarted(&self) -> Result<Sim> {
-        let game = match self.sim.scene_source() {
-            Some(source) => Game::from_source(source).context("reloading the current scene")?,
-            None => Game::new(demo_scene())?,
+        let loaded = match self.sim.scene_source() {
+            Some(source) => {
+                LoadedScene::from_source(source).context("reloading the current scene")?
+            }
+            None => LoadedScene::builtin()?,
         };
         Ok(Sim::held(
-            game,
+            loaded,
             self.sim.scene_path(),
             self.sim.scene_source().map(str::to_owned),
         ))
@@ -258,7 +258,7 @@ impl Session {
         }
         let renderer = self.renderer.as_mut().expect("created just above");
         renderer.resize(width, height)?;
-        render_scene(renderer, self.sim.game().scene())?;
+        self.sim.render(renderer)?;
         let saved = save_screenshot(renderer, path)?;
         Ok((saved, renderer.adapter_summary()))
     }
@@ -268,10 +268,10 @@ impl Session {
 fn sim_from_file(path: &Path) -> Result<Sim> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("reading scene {}", path.display()))?;
-    let game =
-        Game::from_source(&source).with_context(|| format!("invalid scene {}", path.display()))?;
+    let loaded = LoadedScene::from_source(&source)
+        .with_context(|| format!("invalid scene {}", path.display()))?;
     Ok(Sim::held(
-        game,
+        loaded,
         Some(path.display().to_string()),
         Some(source),
     ))
@@ -279,13 +279,13 @@ fn sim_from_file(path: &Path) -> Result<Sim> {
 
 /// A session on scene text given inline.
 fn sim_from_source(source: String) -> Result<Sim> {
-    let game = Game::from_source(&source).context("invalid scene source")?;
-    Ok(Sim::held(game, None, Some(source)))
+    let loaded = LoadedScene::from_source(&source).context("invalid scene source")?;
+    Ok(Sim::held(loaded, None, Some(source)))
 }
 
 /// A session on the built-in demo scene.
 fn sim_builtin() -> Result<Sim> {
-    Ok(Sim::held(Game::new(demo_scene())?, None, None))
+    Ok(Sim::held(LoadedScene::builtin()?, None, None))
 }
 
 // ---------------------------------------------------------------- protocol

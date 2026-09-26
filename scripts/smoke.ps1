@@ -393,6 +393,62 @@ Test-Check 'H7' 'mcp screenshot returns the PNG inline' {
     }
 }
 
+Test-Check 'H8' 'view renders the tile preview pixel-exact' {
+    foreach ($n in 'a', 'b') {
+        $r = Invoke-Loom @('view', '--scene', 'assets/scenes/tiles_preview.ron', '--screenshot', "$out/h8_$n.png")
+        Assert-ExitOk $r
+        Assert-True ($r.Json.mode -eq 'view') "mode is $($r.Json.mode)"
+    }
+    Assert-SameBytes "$out/h8_a.png" "$out/h8_b.png"
+    $size = Get-PngSize "$out/h8_a.png"
+    Assert-True ($size -eq '1280x720') "PNG is $size"
+    $script:detail = "sha256 $((Get-FileHash "$out/h8_a.png").Hash)"
+
+    # 64 screen pixels per cell: each sheet pixel must become one 4x4 block.
+    Add-Type -AssemblyName System.Drawing
+    $sheetJson = Get-Content -Raw 'assets/art/tiles.json' | ConvertFrom-Json
+    $frameOf = {
+        param([string]$tag)
+        $from = ($sheetJson.meta.frameTags | Where-Object name -EQ $tag).from
+        $sheetJson.frames[$from].frame
+    }
+    $sheetImage = [Drawing.Bitmap]::new((Join-Path $root 'assets/art/tiles.png'))
+    $shot = [Drawing.Bitmap]::new((Join-Path $root "$out/h8_a.png"))
+    try {
+        # Compares the cell at screen (left, top) with what $expected (sx, sy
+        # in 0..15) says; returns the mismatch count and the first mismatch.
+        $compare = {
+            param([int]$left, [int]$top, [scriptblock]$expected)
+            $bad = 0; $first = ''
+            for ($y = 0; $y -lt 64; $y++) {
+                for ($x = 0; $x -lt 64; $x++) {
+                    $want = & $expected ([int][Math]::Floor($x / 4)) ([int][Math]::Floor($y / 4))
+                    $got = $shot.GetPixel($left + $x, $top + $y)
+                    if ($got.ToArgb() -ne $want.ToArgb()) {
+                        if ($bad -eq 0) { $first = "($($left + $x),$($top + $y)) is $($got.Name), expected $($want.Name)" }
+                        $bad++
+                    }
+                }
+            }
+            @($bad, $first)
+        }
+        $wall = & $frameOf 'wall'
+        $bad, $first = & $compare 0 0 { param($sx, $sy) $sheetImage.GetPixel($wall.x + $sx, $wall.y + $sy) }
+        Assert-True ($bad -eq 0) "wall cell (row 0, column 0): $bad of 4096 pixels differ, first $first"
+        $floor = & $frameOf 'floor'
+        $player = & $frameOf 'player'
+        $bad, $first = & $compare 192 128 {
+            param($sx, $sy)
+            $p = $sheetImage.GetPixel($player.x + $sx, $player.y + $sy)
+            if ($p.A -eq 0) { $sheetImage.GetPixel($floor.x + $sx, $floor.y + $sy) } else { $p }
+        }
+        Assert-True ($bad -eq 0) "player cell (row 2, column 3): $bad of 4096 pixels differ, first $first"
+    } finally {
+        $sheetImage.Dispose()
+        $shot.Dispose()
+    }
+}
+
 # ---------------------------------------------------------------- W: window
 
 if (-not $HeadlessOnly) {
