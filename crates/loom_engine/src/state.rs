@@ -10,7 +10,7 @@ use loom_core::input::{ActionSet, ActionState};
 use serde::Serialize;
 
 use crate::game::CubeGame;
-use crate::run::ensure_parent_dir;
+use crate::output::ensure_parent_dir;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct StateDump {

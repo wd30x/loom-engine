@@ -12,8 +12,8 @@ use loom_core::input::{
 
 use crate::RunArgs;
 use crate::game::{CubeGame, demo_bindings};
+use crate::output::ensure_parent_dir;
 use crate::report::InputReport;
-use crate::run::ensure_parent_dir;
 use crate::state::StateDump;
 
 enum InputSource {

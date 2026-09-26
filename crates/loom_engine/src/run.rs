@@ -2,15 +2,16 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use loom_core::FixedTimestep;
 use loom_core::input::Key;
+use loom_core::{FixedTimestep, TICK_DT};
 use loom_platform::{AppControl, Window, WindowApp, WindowConfig};
 use loom_render::Renderer;
 
 use crate::RunArgs;
+use crate::output::ensure_parent_dir;
 use crate::report::{InfoReport, RunReport};
 use crate::sim::Sim;
 use crate::state::write_state;
@@ -272,6 +273,23 @@ impl WindowApp for WindowRun<'_> {
         self.sim.focus_lost();
         AppControl::Continue
     }
+
+    /// While minimized nothing is presented, so vsync no longer paces the
+    /// loop: sleep until the next tick is due instead of spinning. Ticks
+    /// still follow the wall clock (`docs/architecture.md` section 2).
+    fn wait_until(&self) -> Option<Instant> {
+        let minimized = self.renderer.as_ref()?.size() == (0, 0);
+        if !minimized || self.done {
+            return None;
+        }
+        Some(next_tick_due(self.last_frame?, self.timestep.accumulated()))
+    }
+}
+
+/// When the accumulator, holding `accumulated` seconds as of `last_frame`,
+/// reaches the next whole tick.
+fn next_tick_due(last_frame: Instant, accumulated: f64) -> Instant {
+    last_frame + Duration::from_secs_f64((TICK_DT - accumulated).clamp(0.0, TICK_DT))
 }
 
 /// Reads back the last frame and writes it as PNG. Returns the path as given.
@@ -288,11 +306,29 @@ fn save_screenshot(renderer: &Renderer, path: &Path) -> Result<String> {
     Ok(path.display().to_string())
 }
 
-/// Creates the parent directories of an output file, if it has any.
-pub(crate) fn ensure_parent_dir(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating directory {}", parent.display()))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_tick_is_due_one_tick_after_an_empty_accumulator() {
+        let t = Instant::now();
+        assert_eq!(next_tick_due(t, 0.0), t + Duration::from_secs_f64(TICK_DT));
     }
-    Ok(())
+
+    #[test]
+    fn next_tick_due_subtracts_the_time_already_accumulated() {
+        let t = Instant::now();
+        let due = next_tick_due(t, TICK_DT * 0.75);
+        let expected = t + Duration::from_secs_f64(TICK_DT * 0.25);
+        let diff = due.max(expected) - due.min(expected);
+        assert!(diff < Duration::from_micros(1), "{diff:?}");
+    }
+
+    #[test]
+    fn next_tick_due_never_lies_in_the_past_or_beyond_one_tick() {
+        let t = Instant::now();
+        assert_eq!(next_tick_due(t, TICK_DT * 2.0), t);
+        assert_eq!(next_tick_due(t, -1.0), t + Duration::from_secs_f64(TICK_DT));
+    }
 }

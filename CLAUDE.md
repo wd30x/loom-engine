@@ -51,6 +51,7 @@
 
 ```powershell
 pwsh scripts/verify.ps1                                   # 提交前必跑：fmt + clippy(-D warnings) + test
+pwsh scripts/smoke.ps1                                    # 规划者审查时跑：GPU 和窗口路径，需要桌面会话（-HeadlessOnly 只跑无头部分）
 cargo loom run                                            # 窗口模式（cargo alias，见 .cargo/config.toml）
 cargo loom run --headless --frames 60 --screenshot out/shot.png
 $env:RUST_LOG = "debug"                                   # 打开详细日志

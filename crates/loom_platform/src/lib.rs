@@ -4,11 +4,12 @@
 //! Headless runs never touch this crate. See `docs/architecture.md`.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use loom_core::input::Key;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowId;
@@ -59,6 +60,13 @@ pub trait WindowApp {
     fn focus_lost(&mut self) -> AppControl {
         AppControl::Continue
     }
+    /// When the next frame is due, asked after every redraw. `None` (the
+    /// default) redraws again right away, paced by the present's vsync.
+    /// `Some(t)` sleeps until `t` first; use it when nothing is presented
+    /// (e.g. minimized) and the loop would otherwise spin.
+    fn wait_until(&self) -> Option<Instant> {
+        None
+    }
 }
 
 /// Window creation parameters.
@@ -71,7 +79,8 @@ pub struct WindowConfig {
 }
 
 /// Opens a window and runs the event loop until `app` asks to exit or the
-/// window is closed. Redraws continuously.
+/// window is closed. Redraws continuously, or at the times the app asks for
+/// through [`WindowApp::wait_until`].
 pub fn run_window(config: WindowConfig, app: &mut impl WindowApp) -> Result<(), PlatformError> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -104,6 +113,16 @@ impl<A: WindowApp> Handler<'_, A> {
 }
 
 impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        // The wait requested after the last redraw is over: redraw now.
+        if let StartCause::ResumeTimeReached { .. } = cause {
+            event_loop.set_control_flow(ControlFlow::Poll);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -155,8 +174,14 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
             WindowEvent::Focused(false) => self.app.focus_lost(),
             WindowEvent::RedrawRequested => {
                 let control = self.app.redraw();
-                if let Some(window) = &self.window {
-                    window.request_redraw();
+                match self.app.wait_until() {
+                    Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+                    None => {
+                        event_loop.set_control_flow(ControlFlow::Poll);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
                 }
                 control
             }
