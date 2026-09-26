@@ -51,6 +51,12 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)
 
 读回时的已知坑：`copy_texture_to_buffer` 要求每行字节数按 `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`（256）对齐，读回后要去掉每行末尾的填充。
 
+**图形后端**（G1.5 起，用户决定）：
+- Windows 上只用 **Dx12**，窗口模式、无头模式和 `loom info` 都一样。其他平台用 wgpu 的默认后端。
+- 环境变量 `WGPU_BACKEND` 可以覆盖默认后端（例如 `WGPU_BACKEND=vulkan`），用于排查问题。报告里的 `adapter.backend` 是实际用上的后端。
+- 为什么不用 Vulkan：在本机（NVIDIA，远程桌面会话），Vulkan 下渲染器的创建和销毁偶尔会卡住约 2 分钟，或者以退出码 2173 崩溃。Dx12 在同样的测量里没出过问题，初始化也更快。测量数据见 TODO 的 G1.4。
+- 同一块 GPU 上，Dx12 和 Vulkan 的截图逐字节相同，所以换后端不改截图基准。
+
 ## 4. 时间与确定性
 
 参考 Godot 的 `MainTimerSync` 和 `--fixed-fps`（见 `docs/godot-reference.md`）。
@@ -123,7 +129,7 @@ loom info                  输出 GPU adapter 信息，不渲染
 
 `loom run` 成功：
 ```json
-{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":"out/e0.png","state":null,"record":null,"input":null,"adapter":{"name":"...","backend":"Vulkan","driver":"..."}}
+{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":"out/e0.png","state":null,"record":null,"input":null,"adapter":{"name":"...","backend":"Dx12","driver":"..."}}
 ```
 - `mode`：`"headless"` 或 `"window"`
 - `screenshot`：没有截图时为 `null`
@@ -138,7 +144,7 @@ loom info                  输出 GPU adapter 信息，不渲染
 
 `loom info` 成功：
 ```json
-{"status":"ok","adapter":{"name":"...","backend":"Vulkan","driver":"...","device_type":"DiscreteGpu"}}
+{"status":"ok","adapter":{"name":"...","backend":"Dx12","driver":"...","device_type":"DiscreteGpu"}}
 ```
 
 失败：
