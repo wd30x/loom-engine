@@ -4,16 +4,39 @@
 
 ## 角色分工
 
-- **架构师**：写 `docs/architecture.md`、`docs/roadmap.md` 和 `docs/tasks/` 下的任务文档，审查实现，**负责提交**。
-- **实现者**：按任务文档实现代码。
-  - 开始前完整读一遍对应任务文档、`docs/architecture.md` 和 `FEEDBACK.md`（里面可能有待处理的审查意见）。
-  - 规格有歧义或有错时，**不要自己重新设计**。选最保守的做法继续，并把问题写进 `FEEDBACK.md`。
-  - 不要改 `docs/architecture.md` 里的决策。有异议写进 `FEEDBACK.md`，由架构师决定。
-  - 不要做任务范围外的功能，「不做」列表里的内容尤其不要碰。
-  - 验收结果和实现说明写在任务文档末尾的「实现记录」里。
-  - **不要提交**。做完后保持改动未提交，由架构师审查后提交。
+两个角色，由用户在中间转交文件：
 
-`FEEDBACK.md` 是双方的沟通渠道：实现者写问题和建议，架构师在每条下面回复并改状态；架构师的审查意见也写在这里，编号带 `R`（如 `E0-R1`）。
+- **规划者**：写 PLAN、审查、维护长期文档、**负责提交**。不写业务代码。
+- **实现者**：按 PLAN 写代码和测试，写 FEEDBACK。**不提交**，做完后保持改动未提交。
+
+**一个文件只有一个作者**，另一方只读，不在对方的文件里批注或修改：
+
+| 文件 | 作者 | 另一方怎么回应 |
+|---|---|---|
+| `docs/PLAN.md` | 规划者 | 实现者有疑问或偏离 PLAN 时，写进 FEEDBACK |
+| `docs/FEEDBACK.md` | 实现者 | 规划者在 REVIEW（实现有错时）或下一份 PLAN 里回应 |
+| `docs/REVIEW.md` | 规划者 | 实现者修完后，在 FEEDBACK 里逐条回应 |
+| `docs/TODO.md`、`docs/architecture.md`、`docs/godot-reference.md`、本文件 | 规划者 | 实现者有异议写进 FEEDBACK |
+
+`PLAN.md`、`FEEDBACK.md`、`REVIEW.md` 都已 gitignore，一次性使用，每轮覆盖重写。需要长期保留的结论，由规划者审查时写进 TODO 或架构文档。
+
+### 实现者须知
+
+- 开工前读：`docs/PLAN.md`、`docs/REVIEW.md`（如果有）、`docs/architecture.md`。
+- PLAN 有歧义或有错时，**不要自己重新设计**。选最保守的做法继续，并写进 FEEDBACK。
+- 不做 PLAN 范围外的事，「不在本切片范围」里列出的尤其不要碰。
+- FEEDBACK 固定包含：验收命令及其输出、PLAN 要求汇报的数据、偏离 PLAN 的地方、需要规划者决定的问题。
+
+### 切片流程
+
+**规划**（PLAN）→ **实现**（代码 + FEEDBACK）→ **审查** → **提交**。一个切片一次提交。
+
+审查只有三种结论：
+1. 正确：直接提交，不影响正确性的小问题在回复里列出；
+2. 有错：写 REVIEW（现象、原因、修改步骤、测试、如何判定修好了），**不提交**；
+3. 修复后：只复查 REVIEW 里提到的点，然后提交。
+
+进度以 `docs/TODO.md` 为准，下一个任务就是按阶段顺序的第一个 `[ ]` 或 `[~]`。
 
 ## AI 优先原则（硬性规则）
 
@@ -51,9 +74,17 @@ $env:RUST_LOG = "debug"                                   # 打开详细日志
 - 库 crate 的错误用 `thiserror` 定义枚举，只有 `loom_engine` 用 `anyhow`。
 - 引擎代码里不用 `unwrap()`。确实不可能失败的地方用 `expect("为什么不会失败")`。
 - 往 stdout 输出 JSON 的那一个函数，用 `#[allow(clippy::print_stdout)]` 局部放行，别的地方不许放行。
-- 不写 `unsafe`（workspace 层面是 deny）。确实需要时先在「实现记录」里说明理由。
-- 注释和标识符用英文，文档用中文。
+- 不写 `unsafe`（workspace 层面是 deny）。确实需要时先在 FEEDBACK 里说明理由，由规划者决定。
+- **语言约定**：代码注释和标识符用英文；文档用中文；**提交说明一律用英文**（标题和正文都是）。
 - 坐标系、单位、颜色空间等约定见 `docs/architecture.md`，不要自己另定。
+
+## 测试约定
+
+- 单元测试和被测代码放在一起（`#[cfg(test)] mod tests`）；`tests/` 目录只放跨 crate 的集成测试。
+- **测试名用完整句子描述保证的行为**，例如 `long_frame_is_capped_and_excess_dropped`。
+- 测试名不要互相包含（`cargo test` 按子串过滤，`tick` 会选中 `tick_rate`）。
+- 和时序有关的测试要**连跑 10 次都通过**才算数，不许靠调大超时掩盖不稳定。
+- 每条行为要说明由什么判定对错：解析解（如「1 秒转 1 弧度」）、确定性自洽（跑两次结果相同）、状态导出、截图目测。都覆盖不到的，写进 TODO 末尾的「测试覆盖的已知薄弱处」。
 
 ## 参考源码
 
@@ -65,6 +96,6 @@ $env:RUST_LOG = "debug"                                   # 打开详细日志
 
 ## Git
 
-- 架构师审查通过后提交，一个任务一个或几个提交，每次提交前 `verify.ps1` 必须通过。
+- 规划者审查通过后提交，一个切片一次提交，每次提交前 `verify.ps1` 必须通过。
 - 提交信息格式：`<crate或范围>: <做了什么>`，例如 `loom_render: add offscreen target and readback`。
 - 大的二进制资源（`assets/` 下的图片、模型、音频）走 Git LFS，见 `.gitattributes`。

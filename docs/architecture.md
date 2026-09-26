@@ -1,6 +1,6 @@
 # loom-engine 架构
 
-本文档记录**已经定下来的决策**。实现者不要改这里的内容，有异议写到根目录的 `FEEDBACK.md` 里。
+本文档记录**已经定下来的决策**。实现者不要改这里的内容，有异议写进 `docs/FEEDBACK.md`，由规划者决定后更新这里。
 
 ## 1. crate 分层
 
@@ -83,6 +83,40 @@ loom_platform  loom_render   (彼此不知道对方)
 
 JSON 里的字段名一旦定下来就不要改名。要加新字段可以，旧字段不能删、不能改含义。
 
+### 命令
+
+```
+loom run [OPTIONS]
+    --headless             不创建窗口；每帧恰好 1 个 tick
+    --frames <N>           跑 N 帧（N ≥ 1）后退出。无头模式必须提供
+    --screenshot <PATH>    退出前把最后一帧存成 PNG，会自动创建父目录
+    --size <WxH>           渲染分辨率，默认 1280x720；窗口模式下只决定初始窗口尺寸（第 2 节）
+
+loom info                  输出 GPU adapter 信息，不渲染
+```
+
+无头模式下，第 k 帧（从 1 开始数）渲染前刚跑完第 k 个 tick，所以 `--frames 60` 截图时 `sim_time = 1.0`。
+
+### 输出格式
+
+`loom run` 成功：
+```json
+{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":"out/e0.png","adapter":{"name":"...","backend":"Vulkan","driver":"..."}}
+```
+- `mode`：`"headless"` 或 `"window"`
+- `screenshot`：没有截图时为 `null`
+- 窗口模式提前退出（Esc、关窗）时，`frames` 和 `ticks` 是实际跑到的数
+
+`loom info` 成功：
+```json
+{"status":"ok","adapter":{"name":"...","backend":"Vulkan","driver":"...","device_type":"DiscreteGpu"}}
+```
+
+失败：
+```json
+{"status":"error","error":"人能读懂的错误描述"}
+```
+
 ## 7. 错误处理
 
 - 库 crate：用 `thiserror` 定义各自的错误枚举。
@@ -91,9 +125,4 @@ JSON 里的字段名一旦定下来就不要改名。要加新字段可以，旧
 
 ## 8. 已知限制
 
-有意暂不处理的问题。要解决其中任何一条时，先更新这里。
-
-| 限制 | 影响 | 什么时候处理 |
-|---|---|---|
-| 创建 wgpu instance 时不传 display handle（E0-7） | Linux 上的 GL/Wayland 用不了；Windows 的 Vulkan/Dx12 不受影响 | 要支持 Linux 时。届时 `Renderer::new_with_surface` 会多一个 display handle 参数 |
-| 最小化时事件循环空转（E0-6） | 最小化期间 CPU 占用偏高 | E1 顺手修 |
+有意暂不处理的问题记在 `docs/TODO.md` 的「延后项」（`[>]`）里，每条都有理由和启用条件。

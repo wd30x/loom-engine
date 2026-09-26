@@ -4,8 +4,7 @@
 
 - 项目规则：[CLAUDE.md](CLAUDE.md)
 - 架构决策：[docs/architecture.md](docs/architecture.md)
-- 路线图：[docs/roadmap.md](docs/roadmap.md)
-- 当前任务：[docs/tasks/E0-see.md](docs/tasks/E0-see.md)
+- 任务清单和进度：[docs/TODO.md](docs/TODO.md)
 - Godot 参考：[docs/godot-reference.md](docs/godot-reference.md)
 
 ```powershell
