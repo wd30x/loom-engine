@@ -1,0 +1,2 @@
+[alias]
+loom = "run -p loom_engine --bin loom --"

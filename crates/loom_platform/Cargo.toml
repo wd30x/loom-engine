@@ -1,0 +1,17 @@
+[package]
+name = "loom_platform"
+description = "Window and OS integration via winit; translates OS events into loom_core input."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+loom_core.workspace = true
+winit.workspace = true
+log.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

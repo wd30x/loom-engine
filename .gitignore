@@ -1,0 +1,14 @@
+/target/
+
+# Runtime output: screenshots, state dumps, logs, recordings
+/out/
+
+# Read-only upstream source used as a design reference (see docs/godot-reference.md)
+/ref/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store

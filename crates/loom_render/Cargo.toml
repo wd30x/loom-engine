@@ -1,0 +1,19 @@
+[package]
+name = "loom_render"
+description = "wgpu renderer: always draws to an offscreen target; can present to a surface or read pixels back."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+log.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
