@@ -5,12 +5,14 @@
 ## 1. crate 分层
 
 ```
-            loom_engine  (bin: loom)
-           /     |      \
-loom_platform  loom_render   (彼此不知道对方)
+                  loom_engine  (bin: loom)
+           /          |            |         \
+loom_platform    loom_render   loom_scene     (彼此不知道对方)
        |
    loom_core
 ```
+
+- `loom_scene`：场景文件的解析和校验，以及运行时的节点树（第 10 节）。只依赖 glam、serde、ron、thiserror，不知道渲染和平台。
 
 - `loom_core`：纯逻辑。固定步长时钟、tick 计数、输入（按键、动作映射、采样、脚本、录制，见第 9 节）。不依赖 winit 和 wgpu，所以可以在任何环境下做单元测试。
 - `loom_platform`：只有它能碰 winit。它把 OS 事件翻译成 `loom_core` 的输入类型，并把窗口句柄交给调用方。
@@ -65,6 +67,7 @@ loom_platform  loom_render   (彼此不知道对方)
 - `+ - * /`、`sqrt`、`%`（取余）是 IEEE 754 规定精确舍入的，可以随便用。
 - 不许打开 `fast-math` 之类会改变浮点语义的选项。
 - 渲染端不受这条限制，因为图像本来就只保证本机一致。
+- **glam 从 E2 起打开 `libm` 特性**（workspace 依赖里）：场景的旋转是模拟状态，四元数要用 sin/cos。已查过 glam 0.33 源码（`src/f32/math.rs`）：打开 `libm` 后即使同时开着 `std`，也走 libm。这对渲染端同样生效，所以截图的哈希会随之变化一次。
 - 执行方式：等出现专门的模拟 crate（G1）时，给它加一个 crate 级别的 `clippy.toml`，用 `disallowed-methods` 禁掉这些函数（见 TODO G1.0）。
 
 **确定性的范围**（E0-4）：
@@ -76,7 +79,8 @@ loom_platform  loom_render   (彼此不知道对方)
 | 项目 | 约定 |
 |---|---|
 | 坐标系 | 右手系，**+Y 向上**，**-Z 向前**，+X 向右（与 glTF 一致） |
-| 单位 | 长度用米，角度用弧度，时间用秒 |
+| 单位 | 长度用米，角度用弧度，时间用秒。**例外**：场景文件里给人和 AI 手写的角度（欧拉角、视场角）用度 |
+| 欧拉角 | 场景文件的 `rotation: (x, y, z)`（度）按 **YXZ** 顺序组合，即 `Quat::from_euler(EulerRot::YXZ, y, x, z)`，和 Godot 默认一致：先偏航，再俯仰，再翻滚 |
 | 投影 | `glam::camera::rh::proj::directx::perspective` + `glam::camera::rh::view::look_at_mat4`（右手系、深度 0..1，与 wgpu 一致；即已弃用的 `Mat4::perspective_rh` / `look_at_rh`） |
 | 颜色 | 离屏目标是 sRGB 格式，shader 里按线性空间计算；PNG 保存的就是 sRGB 编码后的字节 |
 | 数学库 | 只用 `glam`，不引入别的数学库 |
@@ -104,6 +108,7 @@ loom run [OPTIONS]
     --dump-state <PATH>    退出前把模拟状态写成 JSON（见下文「状态导出」），会自动创建父目录
     --input <PATH>         回放输入脚本（第 9 节）；这时键盘不再驱动动作，Esc 仍然可以退出
     --record <PATH>        退出前把这次运行每个 tick 的动作变化写成输入脚本（第 9 节），会自动创建父目录
+    --scene <PATH>         加载场景文件（第 10 节）；不给时用内置的演示场景。窗口模式下文件变化会热重载
     --size <WxH>           渲染分辨率，默认 1280x720；窗口模式下只决定初始窗口尺寸（第 2 节）
 
 loom info                  输出 GPU adapter 信息，不渲染
@@ -123,6 +128,8 @@ loom info                  输出 GPU adapter 信息，不渲染
 - `record`：没有录制时为 `null`，否则是 `--record` 给的路径
 - `input`：没有回放时为 `null`，否则是 `{"path":…,"events":脚本里的事件数,"applied":实际生效的事件数}`。脚本比运行长时 `applied < events`
 - `adapter`：没有创建 GPU 设备时为 `null`（无头模式且没有 `--screenshot`）
+- `scene`：用内置演示场景时为 `null`，否则是 `--scene` 给的路径
+- `reloads`：窗口模式下成功热重载的次数；`reload_errors`：热重载时场景文件解析或校验失败的次数（失败时保持旧场景继续跑）。无头模式两者都是 0
 - 窗口模式提前退出（Esc、关窗）时，`frames` 和 `ticks` 是实际跑到的数
 
 `loom info` 成功：
@@ -145,23 +152,24 @@ loom info                  输出 GPU adapter 信息，不渲染
 - 游戏状态整个放在**一个**以游戏命名的字段下。现在是 E0 的旋转立方体，字段名是 `demo`。
 - 字段名的稳定性规则和 stdout 一样：可以加，不能删、不能改名、不能改含义。
 
+结构（省略了数组的展开）：
+
 ```json
 {
   "tick": 60,
   "sim_time": 1.0,
   "actions": [],
-  "demo": {
-    "yaw": 1.0,
-    "position": [
-      0.0,
-      0.0,
-      0.0
-    ]
-  }
+  "nodes": {
+    "cube":   { "position": [0.0, 0.5, 0.0], "rotation": [x, y, z, w], "scale": [1.0, 1.0, 1.0] },
+    "ground": { ... }
+  },
+  "demo": { "yaw": 1.0, "position": [0.0, 0.5, 0.0] }
 }
 ```
 
-`actions` 是最后一个 tick 生效的动作集合（按名字排序），见第 9 节。
+- `actions` 是最后一个 tick 生效的动作集合（按名字排序），见第 9 节。
+- `nodes`：场景里**每个节点**的**局部**变换，键是节点路径（第 10 节），按路径排序。旋转是四元数 `[x, y, z, w]`。
+- `demo.position` 是立方体节点的位置。E2 起立方体放在地面上，初始位置是 `(0, 0.5, 0)`，不再是原点。
 
 ## 7. 错误处理
 
@@ -247,3 +255,88 @@ RON 文件，是一个列表（**不用 map**：实测 ron 遇到重复的 map �
   - 不能按下已经按住的动作，也不能松开没按住的动作
 - **录制输出是规范形式**：事件按 `(tick, 动作名)` 排序；用 ron 的 `PrettyConfig`，`depth_limit(2)`（每个事件占一行）、`new_line("\n")`，末尾补一个换行。所以对任何合法脚本 S，「回放 S 并录制」得到的就是 S 排序后的规范形式。
 - 退出时还按住的动作，录制里不补松开事件。
+
+## 10. 场景
+
+参考 Godot 的节点树和 `.tscn`（见 `docs/godot-reference.md`）。决策（2026-09-26，用户确认）：**节点树加可选组件**，不做 ECS。
+
+### 模型
+
+- 场景是一棵**有名字的节点树**。每个节点有局部变换（位置、旋转、缩放），可以有子节点。
+- 节点身上可以挂几种**可选组件**，现在是：`mesh`（加 `color`）、`camera`、`light`。以后的 hitbox、耐力等也按这个方式加字段。
+- 用**路径**指代节点：从根开始的名字用 `/` 连接，比如 `arena/pillar_3`。路径是状态导出和以后远程控制的地址。
+- 游戏逻辑（Rust）按路径找到节点，每个 tick 读写它的局部变换。**节点树是模拟状态的一部分**，受第 4 节确定性规则约束。
+- 运行时的节点树用「数组加下标」存储（`NodeId` 是下标），不用对象之间互相引用。
+
+### 场景文件
+
+RON，所有结构体 `deny_unknown_fields`：
+
+```ron
+(
+    version: 1,
+    camera: "main_cam",               // 当前相机节点的路径
+    ambient: (0.2, 0.2, 0.25),        // 环境光，线性 RGB
+    nodes: [
+        (name: "ground", mesh: Plane, scale: (20.0, 1.0, 20.0), color: (0.35, 0.35, 0.38)),
+        (name: "cube", position: (0.0, 0.5, 0.0), mesh: Cube, color: (0.8, 0.25, 0.2)),
+        (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
+            light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
+        (name: "main_cam", position: (2.5, 2.0, 3.5), look_at: (0.0, 0.5, 0.0),
+            camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+    ],
+)
+```
+
+节点字段（除 `name` 外都可省略）：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `name` | 字符串 | 必填 | `^[a-z][a-z0-9_]*$`；同一父节点下不能重名 |
+| `position` | `(x, y, z)` | `(0, 0, 0)` | 在父节点空间里 |
+| `rotation` | `(x, y, z)` 度 | `(0, 0, 0)` | YXZ 欧拉角（第 5 节） |
+| `look_at` | `(x, y, z)` | 无 | 让节点的 -Z 指向父节点空间里的这个点，+Y 朝上。**不能和 `rotation` 同时写** |
+| `scale` | `(x, y, z)` | `(1, 1, 1)` | 每个分量必须 > 0 |
+| `mesh` | `Cube` / `Plane` / `Sphere` | 无 | 都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调 |
+| `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)` | 只有带 `mesh` 时才有意义；分量在 0 到 1 之间 |
+| `camera` | `(fov_y, near, far)` | 无 | `fov_y` 是垂直视场角（度）；相机看向自己的 -Z |
+| `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
+| `children` | 节点列表 | `[]` | |
+
+`look_at` 的算法**固定如下**（换一种等价算法，四元数的最后一位可能不同，状态导出就对不上了）：
+
+```text
+back  = normalize(position - target)
+right = normalize(Vec3::Y.cross(back))
+up    = back.cross(right)
+rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
+```
+
+校验（任何一条不满足都是运行时错误，退出码 1，错误信息带文件路径，结构错误带行列号，语义错误带节点路径）：
+- `version` 必须是 1
+- 名字格式、同级重名
+- `camera` 必须指向一个存在的、带 `camera` 组件的节点
+- 整个场景**最多一个** `light`（以后要多光源时再扩展）
+- `rotation` 和 `look_at` 不能同时出现；`look_at` 的目标不能等于 `position`，方向也不能和 Y 轴平行（`right` 会退化）
+- 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间；`fov_y` 在 (0, 180) 之间；`0 < near < far`
+
+### 演示游戏和场景的关系
+
+- 不给 `--scene` 时，用一个内置的演示场景（内容就是上面的例子），用 `include_str!` 嵌进程序。
+- 演示逻辑要求场景里有一个**根节点 `cube`**，并且带 `mesh`；没有就报错。每个 tick：位置按第 9 节的移动公式从场景里的初始位置累加；旋转设为 `Quat::from_rotation_y(yaw as f32) * Quat::from_rotation_x(0.3)`。
+- E0 那个六个面六种颜色的立方体不再保留：有了光照，单色立方体也能看出形状。
+
+### 渲染
+
+- `loom_render` 不知道场景的存在。`loom_engine` 每帧把场景转换成一份「帧描述」交给渲染器：相机（视图矩阵、投影参数）、环境光、可选的一个方向光、以及一串绘制项（网格种类、世界矩阵、颜色）。
+- 光照：`color * (ambient + max(0, dot(n, -light_dir)) * light_color * intensity)`，法线用世界矩阵的逆转置变换（支持非均匀缩放）。
+- 相机的视图矩阵就是相机节点世界矩阵的逆。
+
+### 热重载
+
+- 只在**窗口模式**、并且给了 `--scene` 时生效。无头模式从不重载。
+- 用墙钟每 0.5 秒检查一次文件的修改时间（不引入文件监听的新依赖）。这件事发生在模拟之外，不影响确定性。
+- 文件变了就重新解析和校验：
+  - **失败**：打一条 `warn` 日志说明原因，**保持旧场景继续跑**，`reload_errors` 加 1。
+  - **成功**：用新场景**从 tick 0 重新开始**（决策，2026-09-26）。时钟、动作状态、输入录制、脚本回放全部重来；窗口和渲染器保留。`reloads` 加 1。
+- 所以退出时写出的录制和状态导出，只覆盖最后一次重载之后的那段运行。它们配合当时的场景文件，照样能逐字节复现。
