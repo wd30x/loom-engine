@@ -7,13 +7,17 @@
 ```
                   loom_engine  (bin: loom)
            /          |            |         \
-loom_platform    loom_render   loom_scene     (彼此不知道对方)
-       |
+loom_platform    loom_render   loom_scene     (彼此不知道对方)      游戏：games/souls、games/rogue
+       |                                             （只依赖 loom_core、loom_scene）
    loom_core
 ```
 
 - `loom_scene`：场景文件的解析和校验，以及运行时的节点树（第 10 节）。只依赖 glam、serde、ron、thiserror，不知道渲染和平台。
-- `loom_sim`（G1 起）：游戏的模拟逻辑（现在是演示，以后是角色、相机、碰撞）。依赖 `loom_core`、`loom_scene`、glam、libm。它有**自己的 `clippy.toml`**，用 `disallowed-methods` 禁掉 std 的超越函数（第 4 节）。注意 crate 级的 `clippy.toml` 会整个替换 workspace 的那份，所以要把 workspace 里的设置也抄过来。
+- **游戏 crate 放在 `games/` 目录**（E4.3 起），和引擎 crate（`crates/`）从目录上就分开：
+  - `souls`：类魂原型的角色、相机和碰撞（第 11 节）。G1.0 到 E4.2 叫 `loom_sim`，放在 `crates/loom_sim`，E4.3 改名搬家。依赖 `loom_core`、`loom_scene`、glam、libm。
+  - `rogue`：2D roguelike 示例（第 15 节）。依赖 `loom_core`、`loom_scene`、glam。
+  - 每个游戏 crate 都有**自己的 `clippy.toml`**，用 `disallowed-methods` 禁掉 std 的超越函数（第 4 节）。注意 crate 级的 `clippy.toml` 会整个替换 workspace 的那份，所以要把 workspace 里的设置也抄过来。
+  - 游戏 crate 之间互不依赖，也不依赖 `loom_engine`、`loom_render`、`loom_platform`。
 
 - `loom_core`：纯逻辑。固定步长时钟、tick 计数、输入（按键、动作映射、采样、脚本、录制，见第 9 节）。不依赖 winit 和 wgpu，所以可以在任何环境下做单元测试。
 - `loom_platform`：只有它能碰 winit。它把 OS 事件翻译成 `loom_core` 的输入类型，并把窗口句柄交给调用方。
@@ -25,7 +29,13 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)
 
 **引擎和游戏分开**（2026-09-27，用户决定：做支持 2D 和 3D 的通用引擎，但功能仍由具体需求驱动）：
 - 引擎 crate（`loom_core`、`loom_platform`、`loom_render`、`loom_scene`，以及以后的远程控制等）里**不许出现具体游戏的概念**。例如 `loom_render` 只认网格、材质、相机、光，不认「角色」；`loom_scene` 的组件要是通用的，不能是某个游戏专用的。
-- 游戏逻辑放在游戏自己的 crate 里。现在只有 `loom_sim`，装的是类魂原型的角色、相机和碰撞。第二个游戏（E4 的 2D roguelike 示例，暂名 `rogue`）出现时，再决定 `loom_sim` 怎么拆分或改名、`loom` 命令行怎么选游戏。接口等有了两个使用者再定，不提前抽象。
+- 游戏逻辑放在游戏自己的 crate 里（`games/souls`、`games/rogue`）。
+- **选择游戏**（E4.3 起，用户决定 2026-09-27）：场景文件顶层写 `game: "souls"` 或 `game: "rogue"`（第 10 节），`loom run`、`loom serve` 和 serve 的 `load_scene` 都按它选游戏。AI 只要给一个场景路径就行，不用另外说是哪个游戏。`loom` 程序把所有游戏都编译进去。
+- **怎么接进引擎**（E4.3 规划者决定）：`loom_engine` 里用一个枚举 `AnyGame { Souls(souls::Game), Rogue(rogue::Game) }` 按变体分派，**不定 trait**。只有两个游戏，而且 `loom_engine` 本来就是唯一同时认识所有 crate 的组装层，枚举最简单，加游戏时编译器会指出每个要补的 `match`。等出现第三个游戏，或者游戏要从引擎外部加载时，再考虑 trait。每个游戏 crate 约定提供同样形状的接口：
+  - `Game::new(Scene) -> Result<Game, GameError>`：检查场景是否满足这个游戏的要求；
+  - `tick(&mut self, &ActionState)`、`clock() -> SimClock`、`scene() -> &Scene`；
+  - `state() -> GameState`：状态导出里 `game` 字段的内容，可以序列化；
+  - `bindings() -> ActionMap`：这个游戏的键位表，嵌在 crate 里。
 - 判断一个功能该不该进引擎：至少要有一个真实的使用者需要它；放进引擎的那一部分，另一个游戏也用得上。
 
 ## 2. 两种运行模式
@@ -123,7 +133,7 @@ loom run [OPTIONS]
     --dump-state <PATH>    退出前把模拟状态写成 JSON（见下文「状态导出」），会自动创建父目录
     --input <PATH>         回放输入脚本（第 9 节）；这时键盘不再驱动动作，Esc 仍然可以退出
     --record <PATH>        退出前把这次运行每个 tick 的动作变化写成输入脚本（第 9 节），会自动创建父目录
-    --scene <PATH>         加载场景文件（第 10 节）；不给时用内置的演示场景。窗口模式下文件变化会热重载
+    --scene <PATH>         加载场景文件（第 10 节），按它顶层的 game 选游戏；不给时用 souls 内置的演示场景。窗口模式下文件变化会热重载
     --no-capture           窗口模式下不抓鼠标（不锁定、不隐藏指针），也不读鼠标移动（轴只来自按键）。
                            smoke 测试用它：不占用桌面鼠标，有人动鼠标也不会污染录制。和 --headless 同时给是参数错误
     --size <WxH>           渲染分辨率，默认 1280x720；窗口模式下只决定初始窗口尺寸（第 2 节）
@@ -131,7 +141,7 @@ loom run [OPTIONS]
 loom info                  输出 GPU adapter 信息，不渲染
 
 loom view [OPTIONS]        只加载场景、画一帧，不跑任何游戏逻辑（E4.2 起，第 14 节）。只有无头
-    --scene <PATH>         同 run；不给时用内置演示场景
+    --scene <PATH>         必填（E4.3 起）。内置演示场景的相机要靠游戏逻辑摆位，不跑游戏画出来没有意义
     --screenshot <PATH>    必填
     --size <WxH>           默认 1280x720
 
@@ -156,6 +166,7 @@ loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
 - `adapter`：没有创建 GPU 设备时为 `null`（无头模式且没有 `--screenshot`）
 - `renderer_init_ms`（G1.4 起）：从进程启动到渲染器创建完成（设备、管线都建好，窗口模式还包括 surface）的毫秒数，整数；没有创建渲染器时为 `null`。用来区分「启动慢」和「运行中出错」。它是墙钟时间，只用于诊断，不进状态导出
 - `scene`：用内置演示场景时为 `null`，否则是 `--scene` 给的路径
+- `game`（E4.3 起，紧跟在 `scene` 后面）：跑的是哪个游戏，`"souls"` 或 `"rogue"`
 - `reloads`：窗口模式下成功热重载的次数；`reload_errors`：热重载时场景文件解析或校验失败的次数（失败时保持旧场景继续跑）。无头模式两者都是 0
 - 窗口模式提前退出（Esc、关窗）时，`frames` 和 `ticks` 是实际跑到的数
 
@@ -176,7 +187,7 @@ loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
 格式：
 - 用 `serde_json::to_string_pretty` 输出（2 空格缩进），**末尾补一个换行**。
 - 顶层字段属于引擎：`tick`、`sim_time`。以后加的引擎级状态（比如当前按下的动作）也放在顶层。
-- 游戏状态整个放在**一个**字段下：G1.2 起是 `game`（第 11 节），替换了 E0–G1.1 的旋转立方体 `demo`。
+- 游戏状态整个放在**一个**字段下：G1.2 起是 `game`（第 11 节），替换了 E0–G1.1 的旋转立方体 `demo`。E4.3 起 `game` 的内容由场景的游戏决定：`souls` 见第 11 节（和 E4.2 逐字节相同），`rogue` 见第 15 节。状态导出里不另写是哪个游戏，场景文件里已经有了。
 - 格式稳定性规则和 stdout 一样（见上文「格式稳定性」）。
 
 结构（省略了数组的展开）：
@@ -196,7 +207,7 @@ loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
 
 - `actions` 是最后一个 tick 生效的动作集合（按名字排序），见第 9 节。
 - `nodes`：场景里**每个节点**的**局部**变换，键是节点路径（第 10 节），按路径排序。旋转是四元数 `[x, y, z, w]`。
-- `game` 的字段见第 11 节。角度都是弧度。
+- `game` 的字段见第 11 节（`souls`）和第 15 节（`rogue`）。角度都是弧度。
 
 ## 7. 错误处理
 
@@ -225,7 +236,8 @@ OS 按键事件 --(loom_platform 翻译)--> Key --(InputCollector 按 tick 采�
 ### 按键 `Key`
 
 - `loom_core` 自己定义的枚举，变体名用 W3C `KeyboardEvent.code` 的名字（`KeyW`、`Digit1`、`ArrowUp`、`ShiftLeft`……），和 winit 的 `KeyCode` 同名。按的是**物理位置**，不受键盘布局影响。
-- 目前的范围：`KeyA`–`KeyZ`、`Digit0`–`Digit9`、四个方向键、`Space`、`Enter`、`Tab`、`Backspace`、左右 `Shift`/`Control`/`Alt`。其他按键平台层直接忽略。
+- 目前的范围：`KeyA`–`KeyZ`、`Digit0`–`Digit9`、四个方向键、`Space`、`Enter`、`Tab`、`Backspace`、左右 `Shift`/`Control`/`Alt`，以及 E4.3 为 `rogue` 加的小键盘 `Numpad1`–`Numpad9` 和 `Period`（句号键）。其他按键平台层直接忽略。
+- 小键盘按的也是物理位置：NumLock 关着时，Windows 把小键盘 8 当成「上」，但它的扫描码和方向键不同，winit 应当仍报 `Numpad8`（E4.3 要实测）。
 - **`Escape` 不是 `Key`**：它保留给引擎用来退出，不能绑定。
 - 鼠标的移动量作为轴的来源，见下文「模拟量（轴）」；鼠标按键和手柄以后再加。
 
@@ -308,6 +320,7 @@ RON 文件，里面是两个列表（**不用 map**：实测 ron 遇到重复的
 - `ActionState::axis(name) -> f32`：本 tick 的值；没有输入时是 0.0。
 
 **窗口模式抓鼠标**：窗口获得焦点时隐藏指针并锁定（`CursorGrabMode::Locked`，不支持时退回 `Confined`），失焦时释放。Esc 照常退出。`--input` 回放时鼠标和键盘一样被忽略。
+- E4.3 起，**只有键位表里有鼠标轴（带 `mouse` 的轴）时才抓**。`rogue` 只用键盘，抓住指针没有意义。判断放在引擎里（`ActionMap::uses_mouse()`），不需要游戏另外声明。
 
 **输入脚本**加一个可选的 `axes` 列表（缺省为空，`version` 仍是 1）：
 
@@ -364,7 +377,14 @@ RON，所有结构体 `deny_unknown_fields`：
 )
 ```
 
-顶层字段 `version`、`camera`、`ambient`、`nodes` **都必填**（E2 审查决定：场景文件多由 AI 手写，宁可显式）。可选字段不用写 `Some(...)`，解析时开了 ron 的 `IMPLICIT_SOME` 扩展。
+顶层字段 `version`、`camera`、`ambient`、`nodes` **都必填**（E2 审查决定：场景文件多由 AI 手写，宁可显式）。
+
+E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场景（第 1 节「选择游戏」）。`loom_scene` 不认识具体游戏，只检查写了的话不能是空串，`Scene::game()` 返回 `Option<&str>`。
+- `loom run`、`loom serve` 必须有 `game`，缺了或不认识就按「场景无效」报错：
+  - 缺：`the scene does not say which game runs it: add game: "rogue" or game: "souls" at the top level`
+  - 不认识：`unknown game "rouge": the games are "rogue" and "souls"`
+- `loom view` 不跑游戏，所以 `game` 可以不写（例如 `assets/scenes/tiles_preview.ron`）。
+- **热重载不能换游戏**（E4.3 规划者决定）：改过的场景写的 `game` 和正在跑的不同时，按重载失败处理（`reload_errors` 加 1，旧场景继续跑），日志写 `hot reload cannot switch games: the scene now says "rogue", but "souls" is running; restart loom to switch`。换游戏会连带换键位表，正在回放的 `--input` 脚本、抓鼠标的状态都要跟着变，不值得为这种用法处理。serve 的 `load_scene` 是显式换场景，可以换游戏（第 13 节）。可选字段不用写 `Some(...)`，解析时开了 ron 的 `IMPLICIT_SOME` 扩展。
 
 节点字段（除 `name` 外都可省略）：
 
@@ -413,7 +433,9 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 
 ### 游戏和场景的关系
 
-- 不给 `--scene` 时，用 `loom_sim` 里内置的演示场景，用 `include_str!` 嵌进程序。
+- 场景顶层的 `game` 决定用哪个游戏跑它（第 1 节「选择游戏」）。`loom view` 不跑游戏，不看 `game`。
+- 不给 `--scene` 时，用 `souls` 里内置的演示场景，用 `include_str!` 嵌进程序。`rogue` 没有内置场景，用 `assets/scenes/rogue.ron`。
+- `rogue` 对场景的要求见第 15 节。以下是 `souls` 的要求。
 - G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。G1.3 起，角色节点必须带 `mesh: Capsule(...)`（它同时是碰撞形状），`run_speed / 60` 必须小于胶囊体半径（否则一个 tick 可能穿过薄墙）；`collider` 不能在角色或相机节点的子树里（碰撞体必须是静态的）。G1.7 起，角色节点的 `scale` 必须不写或写 `(1, 1, 1)`（渲染会缩放胶囊体，碰撞不会）。不满足就报错。游戏逻辑见第 11 节。
 - E0–G1.1 的旋转立方体演示（根节点 `cube`）在 G1.2 被角色取代。
 
@@ -443,7 +465,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 
 决策（2026-09-26，用户确认）：黑魂 3 式自由环绕相机，角色**相对相机方向**移动，并**平滑快速地**转向移动方向。游戏参数写在场景文件的组件里（`character`、`orbit_camera`），所以可以用热重载在运行中调手感。
 
-实现在 `loom_sim`，受第 4 节确定性规则约束：三角函数一律用 `libm`，角度用 `f32` 弧度。
+实现在 `souls`（E4.3 之前叫 `loom_sim`），受第 4 节确定性规则约束：三角函数一律用 `libm`，角度用 `f32` 弧度。
 
 ### 每个 tick 的计算（顺序和公式固定）
 
@@ -682,8 +704,8 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 
 | 方法 | params | result |
 |---|---|---|
-| `describe` | 无 | `{"tick_hz":60,"tick":当前tick,"scene":路径或null,"actions":[...],"axes":[...]}`，动作和轴按名字排序 |
-| `load_scene` | `{"path":"..."}` 或 `{"source":"RON 文本"}`，都不给就是内置演示场景 | `{"tick":0,"scene":路径或null}`。成功后从 tick 0 重新开始，清空保持的输入和录制。失败时保留原来的场景和状态（和热重载一样） |
+| `describe` | 无 | `{"tick_hz":60,"tick":当前tick,"game":"souls"或"rogue","scene":路径或null,"actions":[...],"axes":[...]}`，动作和轴是**当前游戏**键位表里的，按名字排序（`game` 是 E4.3 加的） |
+| `load_scene` | `{"path":"..."}` 或 `{"source":"RON 文本"}`，都不给就是内置演示场景 | `{"tick":0,"game":…,"scene":路径或null}`。成功后从 tick 0 重新开始，清空保持的输入和录制。场景可以换成另一个游戏的，键位表跟着换（E4.3 起）。失败时保留原来的场景和状态（和热重载一样） |
 | `reset` | 无 | `{"tick":0}`。当前场景回到 tick 0，清空保持的输入和录制 |
 | `input` | `{"actions":{"名字":true/false},"axes":{"名字":数值}}`，两项都可以省略 | 设置**保持的输入**（电平语义，和输入脚本一样），从下一个 tick 起生效，直到再次修改。没提到的动作和轴不变。轴的值按 `canonical_axis_value` 规范化（`-0.0` 变成 `0.0`）。result 是修改后的完整输入：`{"actions":[按下的动作，排序],"axes":{非零的轴}}` |
 | `step` | `{"ticks":N}`，N ≥ 1，省略为 1 | 用保持的输入跑 N 个 tick。`{"tick":跑完之后的tick}` |
@@ -744,7 +766,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 用户决定（2026-09-27）：
 - 2D 和 3D 用**同一棵场景树、同一个渲染器**：相机可以是正交的，节点可以挂 `sprite` 和 `tilemap`。
 - 不做独立的 2D 子系统。
-- 纯 2D 场景没有游戏逻辑时，用 `loom view` 预览，不经过 `loom run`。怎么选择要跑的游戏，留到 E4.3 `rogue` 出现时再设计。
+- 纯 2D 场景没有游戏逻辑时，用 `loom view` 预览，不经过 `loom run`。有游戏逻辑的 2D 场景（`rogue`，第 15 节）用 `loom run`，按场景顶层的 `game` 选游戏（E4.3 起）。
 
 ### 约定
 
@@ -785,3 +807,73 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 
 - **`TextureId` 只是渲染器里的下标**，不认是哪个渲染器创建的。拿到别的渲染器上用，下标没越界时会静默画错贴图，越界才报错。现在每个 `Sim`（和它的 `Sheets`）只配一个渲染器，不会发生。要从机制上防住，可以给每个渲染器一个进程内唯一的序号，让 `TextureId` 带上并在 `render()` 时核对（约 10 行）。启用条件：出现一个进程里有多个渲染器、或 sheet 要在渲染器之间共享的需求。
 - **贴图不释放**：窗口热重载和 serve 的 `load_scene`、`reset` 每次都会重新上传场景用到的 sheet，旧贴图留在显存里，直到进程结束。现在只有一张 64×16 的 sheet。启用条件：sheet 变大、或出现长时间反复重载的用法时，按 sheet 路径复用贴图或给渲染器加删除接口。
+
+## 15. `rogue`：2D roguelike 示例（E4.3 起）
+
+用户决定（2026-09-27）：简化版的 Cataclysm: Dark Days Ahead，只借鉴玩法（TODO 的 E4 决策）；移动键用小键盘和 vi 键，和 CDDA 默认一样；**按一下走一步**，按住不连走。
+
+E4.3 只有地图、玩家、八方向移动、墙和原地等待。僵尸、攻击、血量、消息记录是 E4.4。
+
+### 场景要求
+
+- 场景顶层 `game: "rogue"`。
+- 根节点 `map`，带 `tilemap`。**`#` 是墙**，挡路；legend 里的其他字符都是能走的地面。
+- 根节点 `player`，带 `sprite`。
+- `map` 和 `player` 都**只能平移**：`rotation` 不写或全 0，`scale` 不写或 `(1, 1, 1)`，不能用 `look_at`。
+- 玩家所在的格子：`c = player.x - map.x`，`r = map.y - player.y`（第 14 节：格子 `(c, r)` 的中心在地图局部的 `(c, -r)`）。两者都必须是整数，并且在地图范围内（`0 ≤ c < 宽`，`0 ≤ r < 高`），格子不能是墙。
+- `player.z > map.z`，玩家画在地图前面。
+- 相机是场景里写的，游戏不动它。E4.3 的地图一屏放得下，跟随相机以后需要时再加。
+- 报错（`rogue::GameError`，按「场景无效」报出）：
+  - `the scene needs a root node named "map" with a tilemap`
+  - `the scene needs a root node named "player" with a sprite`
+  - `"<路径>" must only be translated: no rotation or look_at, scale (1, 1, 1)`
+  - `the player at (x, y) is not on a map cell: x - map.x and map.y - y must be whole numbers inside the WxH map`
+  - `the player starts on a wall at column c, row r`
+  - `the player must be in front of the map: its z (pz) must be greater than the map's (mz)`
+
+### 键位（`games/rogue/src/bindings.ron`）
+
+| 动作 | 方向 `(dc, dr)` | 小键盘 | vi 键 |
+|---|---|---|---|
+| `move_n` | (0, -1) | `Numpad8` | `KeyK` |
+| `move_ne` | (1, -1) | `Numpad9` | `KeyU` |
+| `move_e` | (1, 0) | `Numpad6` | `KeyL` |
+| `move_se` | (1, 1) | `Numpad3` | `KeyN` |
+| `move_s` | (0, 1) | `Numpad2` | `KeyJ` |
+| `move_sw` | (-1, 1) | `Numpad1` | `KeyB` |
+| `move_w` | (-1, 0) | `Numpad4` | `KeyH` |
+| `move_nw` | (-1, -1) | `Numpad7` | `KeyY` |
+| `wait` | 原地 | `Numpad5` | `Period` |
+
+没有轴。行号向下增大，所以「北」是 `dr = -1`。
+
+### 每个 tick
+
+回合只由按键推进，和 tick 数无关（tick 照常以 60 Hz 计数，状态导出的 `tick` 照常增加）：
+
+```text
+action = 上表顺序里第一个 just_pressed 的动作（move_n, move_ne, …, move_nw, wait）
+if 没有: return                                   // 按住不连走：只看这个 tick 刚按下的
+if action == wait: turn += 1; return
+(c2, r2) = (c + dc, r + dr)
+if (c2, r2) 在地图外，或者是墙: return            // 撞墙不算一回合
+(c, r) = (c2, r2); turn += 1
+player 节点的位置 = (map.x + c, map.y - r, player.z)   // 整数运算后转 f32，结果精确
+```
+
+- **同一个 tick 刚按下好几个方向**时，只取上表顺序里的第一个，其余的丢掉（不排队）。
+- **撞墙不消耗回合**，和 CDDA 一样。
+- **斜着走可以穿过两堵墙的夹角**（比如往东北走，北边和东边都是墙，东北那格是地面），和 CDDA 一样。
+- 没有浮点运算上的不确定性：格子是整数，写回节点位置时只做整数到 f32 的转换和加减，地图不大时都是精确的。
+
+### 状态导出
+
+```json
+"game": {
+  "turn": 0,
+  "player": { "cell": [3, 2] }
+}
+```
+
+- `turn`：已经过去的回合数（成功的移动加原地等待）。
+- `player.cell`：`[c, r]`，列在前。

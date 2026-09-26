@@ -66,7 +66,10 @@ $env:RUST_LOG = "debug"                                   # 打开详细日志
 | `loom_core` | 固定步长时钟、tick、输入状态 | winit、wgpu |
 | `loom_platform` | winit 事件循环和窗口，把 OS 事件翻译成 core 的输入 | wgpu、loom_render |
 | `loom_render` | wgpu 渲染，永远先画到离屏目标 | winit、loom_platform |
-| `loom_engine` | 门面 crate 和 `loom` 命令行程序，负责把上面几个组装起来 | — |
+| `loom_engine` | 门面 crate 和 `loom` 命令行程序，负责把上面几个组装起来，按场景的 `game` 选游戏 | — |
+| `loom_scene` | 场景文件解析和节点树 | winit、wgpu |
+| `loom_mcp` | MCP 适配程序，只通过 `loom serve` 的 stdio 和引擎说话 | 任何引擎 crate |
+| `games/souls`、`games/rogue` | 游戏逻辑（类魂原型、2D roguelike），各有 `clippy.toml` 禁 std 超越函数 | 引擎的 render、platform、engine，以及彼此 |
 
 详见 `docs/architecture.md`。
 
