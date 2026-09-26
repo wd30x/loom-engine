@@ -130,6 +130,11 @@ loom run [OPTIONS]
 
 loom info                  输出 GPU adapter 信息，不渲染
 
+loom view [OPTIONS]        只加载场景、画一帧，不跑任何游戏逻辑（E4.2 起，第 14 节）。只有无头
+    --scene <PATH>         同 run；不给时用内置演示场景
+    --screenshot <PATH>    必填
+    --size <WxH>           默认 1280x720
+
 loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
     --scene <PATH>         同 run；不给时用内置演示场景
     --size <WxH>           截图的默认尺寸，默认 1280x720
@@ -372,7 +377,9 @@ RON，所有结构体 `deny_unknown_fields`：
 | `scale` | `(x, y, z)` | `(1, 1, 1)` | 每个分量必须 > 0 |
 | `mesh` | `Cube` / `Plane` / `Sphere` / `Capsule(radius, height)` | 无 | 前三种都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调。`Capsule` 带参数（非均匀缩放会把半球压扁）：`height` 是含两端半球的总高，**原点在底部**（占 y ∈ [0, height]），方便角色站在地面上 |
 | `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)` | 只有带 `mesh` 时才有意义；分量在 0 到 1 之间 |
-| `camera` | `(fov_y, near, far)` | 无 | `fov_y` 是垂直视场角（度）；相机看向自己的 -Z |
+| `camera` | `(fov_y, near, far)` 或 `(ortho: (height), near, far)` | 无 | 相机看向自己的 -Z。`fov_y` 是透视相机的垂直视场角（度）。`ortho` 是正交相机（E4.2 起），`height` 是画面竖直方向覆盖的世界长度，宽度按画面比例算。`fov_y` 和 `ortho` 必须**恰好写一个** |
+| `sprite` | `(sheet, tag)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名 |
+| `tilemap` | `(sheet, legend, rows)` | 无 | 瓦片地图（E4.2 起，第 14 节）：`legend` 是 `[(字符, tag)]` 列表，`rows` 是字符串列表，一个字符一个格子 |
 | `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
 | `character` | `(run_speed, turn_speed)` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒 |
 | `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max, collision_radius, return_speed)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度。`collision_radius`（米）、`return_speed`（米/秒）是 G1.7 起的相机碰撞参数，必填 |
@@ -398,7 +405,11 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - `orbit_camera`：节点上必须也有 `camera`；`target` 必须指向带 `character` 的节点；`pivot_height`、`distance` 有限且 `distance > 0`；`-90 < pitch_min < pitch_max < 90`；`pitch` 在 `[pitch_min, pitch_max]` 里；`collision_radius` 有限且 `0 < collision_radius < pivot_height`（相机球从地面以上出发）；`return_speed` 有限且 `> 0`
 - `collider`（G1.3）：自己的旋转只能绕 Y 轴（`rotation` 的 x、z 分量必须是 0，不能用 `look_at`）；**所有祖先节点**只能平移（`rotation` 不写或写 `(0, 0, 0)`，没有 `look_at`，`scale` 不写或写 `(1, 1, 1)`）；不能和 `character` 在同一个节点上
 - `rotation` 和 `look_at` 不能同时出现；`look_at` 的目标不能等于 `position`，方向也不能和 Y 轴平行（`right` 会退化）
-- 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间（节点 `color`、`light.color`、`ambient` 都是）；`light.intensity` ≥ 0；`fov_y` 在 (0, 180) 之间；`0 < near < far`
+- 所有数字必须是有限值；`scale` 分量 > 0；颜色分量在 0 到 1 之间（节点 `color`、`light.color`、`ambient` 都是）；`light.intensity` ≥ 0；`fov_y` 在 (0, 180) 之间；`ortho.height` > 0；`0 < near < far`
+- `sprite`、`tilemap`（E4.2）：
+  - 不能和 `mesh` 挂在同一个节点上，两者也不能同时挂；
+  - `tilemap` 的 `rows` 至少一行，每行字符数相同且至少 1；每个字符都要在 `legend` 里；`legend` 里的字符不能重复；
+  - 这些是 `loom_scene` 能查的。`sheet` 文件存不存在、`tag` 在不在 sheet 里，要读文件才知道，由 `loom_engine` 在加载场景时检查（第 14 节）
 
 ### 游戏和场景的关系
 
@@ -727,3 +738,45 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
   5. 顺手删掉 `target/mcp-run/` 下没在用的旧目录。**先单独删目录里的 `loom-mcp.exe`**，删不掉说明那个会话还在，整个目录跳过。原因是会话启动后、第一次调用工具之前，它的 `loom.exe` 还没运行，也没被锁住，直接整个目录递归删除会把它删掉（E3.2 实现者发现）。
 - 所以每次启动都用最新代码，而且不会锁住 `target/debug/`。
 - 工具里的相对路径（截图、场景、录制）都相对**仓库根目录**。
+
+## 14. 2D：精灵和瓦片地图（E4.2 起）
+
+用户决定（2026-09-27）：
+- 2D 和 3D 用**同一棵场景树、同一个渲染器**：相机可以是正交的，节点可以挂 `sprite` 和 `tilemap`。
+- 不做独立的 2D 子系统。
+- 纯 2D 场景没有游戏逻辑时，用 `loom view` 预览，不经过 `loom run`。怎么选择要跑的游戏，留到 E4.3 `rogue` 出现时再设计。
+
+### 约定
+
+- 2D 画在世界的 **XY 平面**上，+X 向右，+Y 向上；z 决定前后，z 大的在前面。
+- 正交相机放在 +Z 一侧，不旋转，就是看向 -Z，也就是俯视这个平面。
+- **1 个格子 = 1 个世界单位**。
+  - `sprite` 是一个 1×1 的四边形，中心在节点原点，用节点的 `scale` 改大小。帧不是正方形时，要自己用 `scale` 配比例。
+  - `tilemap` 的第 `r` 行第 `c` 列（都从 0 数）这个格子，中心在节点局部坐标 `(c, -r, 0)`。**第 0 行在最上面**，和文本里看到的一样。所以格子坐标是整数时，站在格子上的精灵位置也是整数。
+- 精灵和瓦片**不受光照影响**，颜色就是贴图的颜色。
+
+### sprite sheet 的读取（`loom_engine`）
+
+- `sheet` 路径和命令行路径一样，相对**当前工作目录**（通常是仓库根目录）。
+- JSON 是 Aseprite 的 `json-array` 导出。只读用得到的字段：`frames[].frame`、`meta.image`、`meta.size`、`meta.frameTags[].name/from/to`，其他字段忽略。这是外部格式，所以**不**加 `deny_unknown_fields`，也不依赖换行符。
+- PNG 路径是 JSON 所在目录加上 `meta.image`。用 workspace 已有的 `image` crate 解码成 RGBA8，索引色、灰度都会被展开。
+- 精灵和瓦片取 tag 的**第一帧**（`from`）。动画还没做（延后项 X.3）。
+- 加载场景时就读所有用到的 sheet，同一个路径只读一次，**不论之后会不会渲染**。这样 tag 写错、文件缺失，在无头不截图的运行里也会报错。报错要写出节点路径、sheet 路径和原因，例如 `node map: tilemap: sheet assets/art/tiles.json has no tag "flor"`。检查这几项：
+  - JSON 能解析；
+  - PNG 存在，并且尺寸等于 `meta.size`；
+  - 每一帧都在图片范围内；
+  - tag 名不重复，`from ≤ to <` 帧数；
+  - 场景用到的 tag 都存在。
+
+### 渲染
+
+- 渲染器新增贴图，引擎按 sheet 上传，每个 sheet 一张，格式 `Rgba8UnormSrgb`。
+- 帧描述里新增一串精灵绘制项。每项有：
+  - 贴图；
+  - 世界矩阵（单位四边形，XY 平面，中心在原点）；
+  - 帧在贴图里的像素矩形。
+- `tilemap` 在引擎里展开成一格一个绘制项。
+- **不采样，直接取像素**：片元着色器用四边形的 uv 算出整数像素坐标，`frame.xy + min(floor(uv * frame.wh), frame.wh - 1)`，再用 `textureLoad` 读。不经过采样器，就不会有过滤和相邻帧渗色，天然是最近邻。
+- **透明用 alpha 裁剪，不用混合**：alpha < 0.5 的片元丢掉，其余照常写深度。像素画的透明度只有全透明和不透明两种，所以前后关系完全由深度决定，和绘制顺序无关，结果也是确定的。代价是半透明像素不支持。
+- 精灵和网格在**同一个 render pass** 里、共用深度缓冲，所以 3D 场景里也能放精灵。
+- **像素对齐**：想让每个贴图像素正好落在整数个屏幕像素上，就要选 `ortho.height`，使 `画面高度 / height` 是 16 的整数倍（16×16 的瓦片），并且相机坐标是 1/(每单位像素数) 的整数倍。例如 720 像素高、每格 64 像素（放大 4 倍），`height` 就是 11.25。引擎不强制做到。
