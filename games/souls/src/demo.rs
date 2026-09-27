@@ -25,7 +25,9 @@ mod tests {
     use loom_core::input::Key;
 
     use super::*;
-    use crate::{ATTACK, Game, HEAVY, LOCK, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL};
+    use crate::{
+        ATTACK, Condition, Game, HEAVY, HealthState, LOCK, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL,
+    };
 
     #[test]
     fn demo_bindings_define_the_game_axes_roll_both_attacks_and_lock() {
@@ -93,5 +95,23 @@ mod tests {
             hurtboxes,
             ["dummy_a", "dummy_b", "dummy_c"].map(|n| (n.to_owned(), 0, None))
         );
+    }
+
+    #[test]
+    fn built_in_scene_dummies_stand_at_full_hp_under_their_hp_bars() {
+        let game = Game::new(demo_scene()).unwrap();
+        let full = HealthState {
+            hp: 100.0,
+            state: Condition::Ok,
+            state_ticks: 0,
+            impact: 0.0,
+            impact_wait: 0,
+        };
+        for h in game.state().hurtboxes {
+            assert_eq!(h.health, Some(full), "{}", h.node);
+            let scene = game.scene();
+            let bar = scene.find(&format!("{}/hp_bar", h.node)).unwrap();
+            assert!(scene.node(bar).mesh.is_some() && scene.is_drawn(bar));
+        }
     }
 }

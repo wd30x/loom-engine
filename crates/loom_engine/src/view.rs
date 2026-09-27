@@ -10,7 +10,7 @@ use glam::{Mat4, Vec3};
 use loom_render::{
     DirectionalLight, DrawItem, Frame, Projection, RenderError, Renderer, SpriteDraw,
 };
-use loom_scene::Scene;
+use loom_scene::{NodeId, Scene};
 
 use crate::ViewArgs;
 use crate::report::ViewReport;
@@ -25,17 +25,7 @@ pub(crate) fn render_scene(
     scene: &Scene,
     sheets: &mut Sheets,
 ) -> Result<bool, RenderError> {
-    let draws: Vec<DrawItem> = scene
-        .ids()
-        .filter_map(|id| {
-            let mesh = scene.node(id).mesh?;
-            Some(DrawItem {
-                mesh: mesh_kind(mesh.kind),
-                model: scene.world_matrix(id),
-                color: mesh.color,
-            })
-        })
-        .collect();
+    let draws = mesh_draws(scene);
     let sprites = sprite_draws(renderer, scene, sheets)?;
 
     let camera_id = scene.camera();
@@ -70,15 +60,43 @@ pub(crate) fn render_scene(
     })
 }
 
-/// One draw per sprite node, and one per cell of each tilemap node (row by
-/// row, each row left to right), in scene pre-order.
+/// One draw per drawn node with a mesh ([`Scene::is_drawn`]), in scene
+/// pre-order.
+fn mesh_draws(scene: &Scene) -> Vec<DrawItem> {
+    scene
+        .ids()
+        .filter(|&id| scene.is_drawn(id))
+        .filter_map(|id| {
+            let mesh = scene.node(id).mesh?;
+            Some(DrawItem {
+                mesh: mesh_kind(mesh.kind),
+                model: scene.world_matrix(id),
+                color: mesh.color,
+            })
+        })
+        .collect()
+}
+
+/// The sprite and tilemap nodes to draw ([`Scene::is_drawn`]), in scene
+/// pre-order.
+fn drawn_sprite_nodes(scene: &Scene) -> Vec<NodeId> {
+    scene
+        .sprite_nodes()
+        .iter()
+        .copied()
+        .filter(|&id| scene.is_drawn(id))
+        .collect()
+}
+
+/// One draw per drawn sprite node, and one per cell of each drawn tilemap
+/// node (row by row, each row left to right), in scene pre-order.
 fn sprite_draws(
     renderer: &mut Renderer,
     scene: &Scene,
     sheets: &mut Sheets,
 ) -> Result<Vec<SpriteDraw>, RenderError> {
     let mut sprites = Vec::new();
-    for &id in scene.sprite_nodes() {
+    for id in drawn_sprite_nodes(scene) {
         let node = scene.node(id);
         let world = scene.world_matrix(id);
         if let Some(sprite) = &node.sprite {
@@ -157,4 +175,52 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
         adapter: adapter.into(),
         renderer_init_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_mesh_nodes_and_their_subtrees_are_not_drawn() {
+        let mut scene = Scene::parse(
+            r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+                (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+                (name: "a", mesh: Cube, color: (1.0, 0.0, 0.0), children: [
+                    (name: "b", mesh: Cube, color: (0.0, 1.0, 0.0)),
+                ]),
+                (name: "c", mesh: Cube, color: (0.0, 0.0, 1.0)),
+            ])"#,
+        )
+        .unwrap();
+        let colors = |scene: &Scene| {
+            mesh_draws(scene)
+                .iter()
+                .map(|d| d.color)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(colors(&scene), [Vec3::X, Vec3::Y, Vec3::Z]);
+        let a = scene.find("a").unwrap();
+        scene.set_visible(a, false);
+        assert_eq!(colors(&scene), [Vec3::Z]);
+        scene.set_visible(a, true);
+        assert_eq!(colors(&scene), [Vec3::X, Vec3::Y, Vec3::Z]);
+    }
+
+    #[test]
+    fn hidden_sprite_and_tilemap_nodes_are_not_drawn() {
+        let mut scene = Scene::parse(include_str!("../../../assets/scenes/rogue.ron")).unwrap();
+        let names = |scene: &Scene| {
+            drawn_sprite_nodes(scene)
+                .into_iter()
+                .map(|id| scene.path(id))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&scene), ["map", "player", "zombie", "zombie_2"]);
+        for hidden in ["map", "zombie"] {
+            let id = scene.find(hidden).unwrap();
+            scene.set_visible(id, false);
+        }
+        assert_eq!(names(&scene), ["player", "zombie_2"]);
+    }
 }

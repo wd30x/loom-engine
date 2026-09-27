@@ -1,6 +1,6 @@
-//! Stamina, roll, sprint, backstep, attacks, lock-on and hits: the parameters,
-//! read from the character node's props with defaults, and the action state
-//! (`docs/architecture.md` section 11, "耐力、翻滚、冲刺", "攻击" and "锁定").
+//! Stamina, roll, sprint, backstep, attacks, lock-on, hits and damage: the
+//! parameters, read from the character node's props with defaults, and the
+//! action state (`docs/architecture.md` section 11).
 
 use loom_scene::{NodeId, Scene};
 use serde::Serialize;
@@ -61,7 +61,7 @@ enum Rule {
 /// Every prop the character understands, with its default and rule, in
 /// the order they are checked. Reading, checking and rejecting unknown
 /// names all go through this one table.
-const PARAMS: [(&str, f64, Rule); 41] = [
+const PARAMS: [(&str, f64, Rule); 45] = [
     ("stamina_max", 100.0, Rule::Positive),
     ("stamina_regen", 45.0, Rule::Positive),
     ("stamina_delay_ticks", 30.0, Rule::AtLeast(0)),
@@ -103,6 +103,10 @@ const PARAMS: [(&str, f64, Rule); 41] = [
     ("heavy_arc", 90.0, Rule::Arc),
     ("swing_low", 0.3, Rule::NotNegative),
     ("swing_high", 1.6, Rule::Any),
+    ("attack_damage", 20.0, Rule::Positive),
+    ("heavy_damage", 35.0, Rule::Positive),
+    ("attack_impact", 10.0, Rule::NotNegative),
+    ("heavy_impact", 30.0, Rule::NotNegative),
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -132,6 +136,10 @@ pub(crate) struct Attack {
     pub arc: f32,
     /// Radians swept per active tick: `arc / active`.
     pub slice: f32,
+    /// Health a hit takes off.
+    pub damage: f32,
+    /// What a hit adds up against the poise.
+    pub impact: f32,
 }
 
 /// The parameters in per-tick units.
@@ -271,6 +279,8 @@ impl Params {
                 reach: get(&format!("{action}_reach")) as f32,
                 arc,
                 slice: arc / active as f32,
+                damage: get(&format!("{action}_damage")) as f32,
+                impact: get(&format!("{action}_impact")) as f32,
             }
         };
         let params = Self {
@@ -353,13 +363,13 @@ impl Params {
 
 #[cfg(test)]
 mod tests {
-    use glam::Vec3;
+    use glam::{Quat, Vec3};
     use loom_core::input::{ActionState, TickInput};
 
     use super::*;
     use crate::{
-        ATTACK, Game, GameState, HEAVY, HurtboxState, LOCK, LOOK_X, LOOK_Y, LastHit, MOVE_X,
-        MOVE_Y, ROLL,
+        ATTACK, Condition, Game, GameState, HEAVY, HealthState, HurtboxState, LOCK, LOOK_X, LOOK_Y,
+        LastHit, MOVE_X, MOVE_Y, ROLL,
     };
     use std::f32::consts::FRAC_PI_2;
 
@@ -1744,15 +1754,18 @@ mod tests {
     fn lock_target_nodes_are_checked() {
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_heigth", 1.0)]),"#),
-            "the node \"t\": unknown prop \"lock_heigth\" (known: lock_height, hurt_radius, hurt_height)"
+            "the node \"t\": unknown prop \"lock_heigth\" (known: lock_height, hurt_radius, \
+             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)"
         );
-        // Any node but the character, target or not.
+        // Any node but the character, target or not. (Until G3.2 this used
+        // "hp", which G3.3 made a known prop.)
         assert_eq!(
             error_with(
                 "",
-                r#"(name: "g", children: [(name: "t", props: [("hp", 3)])]),"#
+                r#"(name: "g", children: [(name: "t", props: [("armor", 3)])]),"#
             ),
-            "the node \"g/t\": unknown prop \"hp\" (known: lock_height, hurt_radius, hurt_height)"
+            "the node \"g/t\": unknown prop \"armor\" (known: lock_height, hurt_radius, \
+             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)"
         );
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_height", 0)]),"#),
@@ -1883,8 +1896,8 @@ mod tests {
             ),
             (
                 r#"(name: "t", props: [("hurt_radius", 0.4), ("hurt_heigth", 1.8)]),"#,
-                "the node \"t\": unknown prop \"hurt_heigth\" \
-                 (known: lock_height, hurt_radius, hurt_height)",
+                "the node \"t\": unknown prop \"hurt_heigth\" (known: lock_height, hurt_radius, \
+                 hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)",
             ),
         ] {
             assert_eq!(error_with("", nodes), message);
@@ -1939,6 +1952,628 @@ mod tests {
         assert!(
             child(r#"("lock_height", 1), ("hurt_radius", 0.4), ("hurt_height", 1.8)"#)
                 .starts_with("the lock target \"g/t\"")
+        );
+    }
+
+    // ---------------------------------------------------- health, poise, death
+
+    /// [`PROPS`] plus attacks one tick per phase (startup, active,
+    /// recovery), costing 1 stamina and sliding 1/16 m: pressed on tick
+    /// `t`, one hits on `t + 1`, and a press on `t + 3` starts the next.
+    /// Light: 3 damage, impact 1. Heavy: 5 damage, impact 0.
+    fn health_props() -> String {
+        format!(
+            r#"{PROPS}, ("attack_startup_ticks", 1), ("attack_active_ticks", 1),
+            ("attack_recovery_ticks", 1), ("attack_distance", 0.0625), ("attack_cost", 1),
+            ("heavy_startup_ticks", 1), ("heavy_active_ticks", 1),
+            ("heavy_recovery_ticks", 1), ("heavy_distance", 0.0625), ("heavy_cost", 1),
+            ("attack_damage", 3), ("attack_impact", 1), ("heavy_damage", 5), ("heavy_impact", 0)"#
+        )
+    }
+
+    /// A root lock-on target and hurtbox `name` on the ground at `(x, z)`,
+    /// turned 30° (so its pose has a base rotation), with the props
+    /// `health`, a mesh `body` and an `hp_bar` 1 m wide centered at x = 0.5:
+    /// its left end at x = 0, and at half health 0.5 wide at x = 0.25, all
+    /// exact.
+    fn dummy(name: &str, (x, z): (f32, f32), health: &str) -> String {
+        format!(
+            r#"(name: "{name}", position: ({x:?}, 0.0, {z:?}), rotation: (0.0, 30.0, 0.0),
+                props: [("lock_height", 1.5), ("hurt_radius", 0.25), ("hurt_height", 1.8),
+                    {health}],
+                children: [
+                    (name: "body", mesh: Cube, color: (0.2, 0.4, 0.6)),
+                    (name: "hp_bar", position: (0.5, 2.0, 0.0), scale: (1.0, 0.125, 0.125),
+                        mesh: Cube, color: (0.8, 0.1, 0.1)),
+                ]),"#
+        )
+    }
+
+    const BODY: Vec3 = Vec3::new(0.2, 0.4, 0.6);
+    const BAR: Vec3 = Vec3::new(0.8, 0.1, 0.1);
+
+    /// A run with one [`dummy`] "d" 1.5 m straight ahead.
+    fn dummy_run(health: &str) -> Run {
+        Run::on(&scene_with(
+            &health_props(),
+            &dummy("d", (0.0, -1.5), health),
+        ))
+    }
+
+    fn health_of(s: &GameState, name: &str) -> HealthState {
+        hurtbox_state(s, name).health.expect("the hurtbox has hp")
+    }
+
+    #[test]
+    fn hp_drops_by_each_hit_to_zero_then_comes_back_full_after_revive_ticks() {
+        // hp 10, 3 a hit on ticks 2, 5, 8 and 11: 7, 4, 1, then 0, not -2.
+        // Dead from tick 11 for 6 ticks: the 7th, tick 17, is back at full.
+        let mut run = dummy_run(r#"("hp", 10), ("poise", 100), ("revive_ticks", 6)"#);
+        let states = press_on(&mut run, ATTACK, &[1, 4, 7, 10], 18, &NONE);
+        for (t, hp) in [(2, 7.0), (5, 4.0), (8, 1.0), (10, 1.0)] {
+            let h = health_of(&states[t - 1], "d");
+            assert_eq!((h.hp, h.state), (hp, Condition::Ok), "tick {t}");
+        }
+        for t in 11..=16 {
+            let h = health_of(&states[t - 1], "d");
+            assert_eq!(
+                (h.hp, h.state, h.state_ticks),
+                (0.0, Condition::Dead, 17 - t as u32),
+                "tick {t}"
+            );
+        }
+        for t in 17..=18 {
+            let h = health_of(&states[t - 1], "d");
+            assert_eq!(
+                (h.hp, h.state, h.state_ticks),
+                (10.0, Condition::Ok, 0),
+                "tick {t}"
+            );
+        }
+        assert_eq!(hurtbox_state(&states[17], "d").hits, 4);
+    }
+
+    #[test]
+    fn hit_of_exactly_the_hp_left_kills() {
+        // Two heavy hits of 5 on hp 10 (poise 0, but heavy impact 0).
+        let mut run = dummy_run(r#"("hp", 10)"#);
+        let states = press_on(&mut run, HEAVY, &[1, 4], 5, &NONE);
+        assert_eq!(health_of(&states[1], "d").hp, 5.0);
+        assert_eq!(health_of(&states[3], "d").state, Condition::Ok);
+        let h = health_of(&states[4], "d");
+        assert_eq!((h.hp, h.state, h.state_ticks), (0.0, Condition::Dead, 180));
+    }
+
+    #[test]
+    fn impacts_up_to_the_poise_do_not_stagger_and_past_it_stagger_for_stagger_ticks() {
+        // Poise 2, impact 1 on ticks 2, 5 and 8: 1, 2 (equal: no stagger),
+        // then 3 > 2: staggered on ticks 8..=12, the impact emptied.
+        let mut run = dummy_run(r#"("hp", 100), ("poise", 2), ("stagger_ticks", 5)"#);
+        let states = press_on(&mut run, ATTACK, &[1, 4, 7], 13, &NONE);
+        for (t, impact) in [(2, 1.0), (5, 2.0), (7, 2.0)] {
+            let h = health_of(&states[t - 1], "d");
+            assert_eq!((h.state, h.impact), (Condition::Ok, impact), "tick {t}");
+        }
+        assert_eq!(
+            health_of(&states[7], "d"),
+            HealthState {
+                hp: 91.0,
+                state: Condition::Stagger,
+                state_ticks: 5,
+                impact: 0.0,
+                impact_wait: 60
+            }
+        );
+        for t in 8..=12 {
+            let h = health_of(&states[t - 1], "d");
+            assert_eq!(
+                (h.state, h.state_ticks),
+                (Condition::Stagger, 13 - t as u32),
+                "tick {t}"
+            );
+        }
+        let h = health_of(&states[12], "d");
+        assert_eq!((h.state, h.state_ticks), (Condition::Ok, 0));
+    }
+
+    #[test]
+    fn stagger_starts_over_when_impacts_add_up_past_the_poise_again() {
+        // Poise 1: staggered on tick 5 for 8 ticks. The hit on tick 8 adds
+        // up to 1 (no new stagger, 5 ticks left); the one on tick 11 to 2:
+        // staggered again, on ticks 11..=18.
+        let mut run = dummy_run(r#"("hp", 100), ("poise", 1), ("stagger_ticks", 8)"#);
+        let states = press_on(&mut run, ATTACK, &[1, 4, 7, 10], 19, &NONE);
+        assert_eq!(
+            health_of(&states[7], "d"),
+            HealthState {
+                hp: 91.0,
+                state: Condition::Stagger,
+                state_ticks: 5,
+                impact: 1.0,
+                impact_wait: 60
+            }
+        );
+        for t in 11..=18 {
+            let h = health_of(&states[t - 1], "d");
+            assert_eq!(
+                (h.state, h.state_ticks, h.impact),
+                (Condition::Stagger, 19 - t as u32, 0.0),
+                "tick {t}"
+            );
+        }
+        assert_eq!(health_of(&states[18], "d").state, Condition::Ok);
+    }
+
+    #[test]
+    fn zero_poise_staggers_on_every_impact_but_never_on_zero_impact() {
+        // Poise 0 (the default), stagger_ticks 30 (the default).
+        let mut run = dummy_run(r#"("hp", 100)"#);
+        let states = press_on(&mut run, ATTACK, &[1, 4], 5, &NONE);
+        for t in [2, 5] {
+            let h = health_of(&states[t - 1], "d");
+            assert_eq!(
+                (h.state, h.state_ticks),
+                (Condition::Stagger, 30),
+                "tick {t}"
+            );
+        }
+        let mut run = dummy_run(r#"("hp", 100)"#);
+        let states = press_on(&mut run, HEAVY, &[1, 4, 7], 9, &NONE);
+        for (i, s) in states.iter().enumerate() {
+            let h = health_of(s, "d");
+            assert_eq!((h.state, h.impact), (Condition::Ok, 0.0), "tick {}", i + 1);
+        }
+        assert_eq!(health_of(&states[8], "d").hp, 85.0);
+    }
+
+    #[test]
+    fn added_up_impact_is_forgotten_poise_reset_ticks_after_the_last_hit() {
+        // Hits on ticks 2 and 5, poise_reset_ticks 8: still 2 on tick 12,
+        // 0 on tick 13.
+        let mut run = dummy_run(r#"("hp", 100), ("poise", 100), ("poise_reset_ticks", 8)"#);
+        let states = press_on(&mut run, ATTACK, &[1, 4], 14, &NONE);
+        let h = health_of(&states[3], "d");
+        assert_eq!((h.impact, h.impact_wait), (1.0, 6));
+        let h = health_of(&states[11], "d");
+        assert_eq!((h.impact, h.impact_wait), (2.0, 1));
+        for s in &states[12..] {
+            let h = health_of(s, "d");
+            assert_eq!((h.impact, h.impact_wait), (0.0, 0));
+        }
+    }
+
+    #[test]
+    fn killing_hit_adds_no_impact_and_empties_it() {
+        let mut run = dummy_run(r#"("hp", 6), ("poise", 100)"#);
+        let states = press_on(&mut run, ATTACK, &[1, 4], 5, &NONE);
+        let h = health_of(&states[1], "d");
+        assert_eq!((h.hp, h.impact, h.impact_wait), (3.0, 1.0, 60));
+        assert_eq!(
+            health_of(&states[4], "d"),
+            HealthState {
+                hp: 0.0,
+                state: Condition::Dead,
+                state_ticks: 180,
+                impact: 0.0,
+                impact_wait: 0
+            }
+        );
+    }
+
+    #[test]
+    fn dead_hurtbox_is_not_hit_nor_flashes_until_it_revives() {
+        // Killed on tick 2, dead on ticks 2..=11; the swing on tick 5 goes
+        // through it. Back on tick 12, hit and killed again on tick 14.
+        let mut run = dummy_run(r#"("hp", 3), ("revive_ticks", 10)"#);
+        for t in 1..=14_u32 {
+            let actions: &[&str] = if [1, 4, 13].contains(&t) {
+                &[ATTACK]
+            } else {
+                &[]
+            };
+            let s = run.hold(actions, &NONE);
+            let h = hurtbox_state(&s, "d");
+            let (hits, last, color) = match t {
+                1 => (0, None, BODY),
+                2..=11 => (1, Some(2), BODY * 0.4),
+                12..=13 => (1, Some(2), BODY),
+                _ => (2, Some(14), BODY * 0.4),
+            };
+            assert_eq!(h.hits, hits, "tick {t}");
+            assert_eq!(h.last_hit.map(|h| h.tick), last, "tick {t}");
+            assert_eq!(color_of(&run, "d/body"), color, "tick {t}");
+            if (2..=11).contains(&t) {
+                assert_eq!(health_of(&s, "d").hp, 0.0, "tick {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn killing_the_locked_target_lets_go_of_it_on_that_tick() {
+        let mut run = dummy_run(r#"("hp", 3)"#);
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some("d"));
+        assert_eq!(lock_of(&run.hold(&[ATTACK], &NONE)), Some("d")); // startup
+        let s = run.hold(&[], &NONE); // the hit
+        assert_eq!(health_of(&s, "d").state, Condition::Dead);
+        assert_eq!(lock_of(&s), None);
+    }
+
+    #[test]
+    fn dead_target_cannot_be_locked_on_until_it_revives() {
+        // Killed on tick 2, dead on ticks 2..=11, nothing else to lock on
+        // to; it revives in step 0b of tick 12, before the lock key is read.
+        let mut run = dummy_run(r#"("hp", 3), ("revive_ticks", 10)"#);
+        run.hold(&[ATTACK], &NONE);
+        run.hold(&[], &NONE);
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), None); // tick 3
+        run.ticks(6, false, &NONE); // ticks 4..=9
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), None); // tick 10
+        let s = run.hold(&[], &NONE); // tick 11
+        assert_eq!(health_of(&s, "d").state, Condition::Dead);
+        let s = run.hold(&[LOCK], &NONE); // tick 12
+        assert_eq!(
+            (lock_of(&s), health_of(&s, "d").state),
+            (Some("d"), Condition::Ok)
+        );
+        // With another target in range, that one instead.
+        let nodes = format!(
+            "{}{}",
+            dummy("d", (0.0, -1.5), r#"("hp", 3)"#),
+            target("far", 3.0, -10.0)
+        );
+        let mut run = Run::on(&scene_with(&health_props(), &nodes));
+        run.hold(&[ATTACK], &NONE);
+        run.hold(&[], &NONE);
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some("far"));
+    }
+
+    #[test]
+    fn switching_targets_skips_dead_ones() {
+        // Locked on "mid" straight ahead, a flick to the right goes to "d"
+        // (30° right), the nearest in direction, or past it once it is dead
+        // to "far" (45° right).
+        let (x, _, z) = at(-30.0, 1.5);
+        let nodes = format!(
+            "{}{}{}",
+            target("mid", 0.0, -10.0),
+            dummy("d", (x, z), r#"("hp", 3)"#),
+            target("far", 5.0, -5.0)
+        );
+        for (kill, next) in [(false, "d"), (true, "far")] {
+            let mut run = Run::on(&scene_with(&health_props(), &nodes));
+            let first: &[&str] = if kill { &[ATTACK] } else { &[] };
+            run.hold(first, &NONE);
+            let s = run.hold(&[], &NONE);
+            assert_eq!(health_of(&s, "d").state == Condition::Dead, kill);
+            assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some("mid"));
+            let s = run.hold(&[], &[(LOOK_X, 0.12)]);
+            assert_eq!(lock_of(&s), Some(next), "kill {kill}");
+        }
+    }
+
+    #[test]
+    fn hurtbox_without_hp_has_no_health_and_keeps_its_pose() {
+        let mut run = Run::on(&scene_with(
+            &health_props(),
+            &hurtbox("h", (0.0, 0.0, -1.5), 0.25, 1.8),
+        ));
+        let states = press_on(&mut run, ATTACK, &[1, 4, 7], 9, &NONE);
+        let h = hurtbox_state(&states[8], "h");
+        assert_eq!((h.hits, h.health), (3, None));
+        assert_eq!(node_rotation(&run, "h"), Quat::IDENTITY);
+    }
+
+    fn node_rotation(run: &Run, path: &str) -> Quat {
+        let scene = run.game.scene();
+        scene.transform(scene.find(path).unwrap()).rotation
+    }
+
+    fn bar_of(run: &Run, path: &str) -> (loom_scene::Transform, bool) {
+        let scene = run.game.scene();
+        let id = scene.find(&format!("{path}/hp_bar")).unwrap();
+        (*scene.transform(id), scene.is_drawn(id))
+    }
+
+    fn quat_bits(q: Quat) -> [u32; 4] {
+        q.to_array().map(f32::to_bits)
+    }
+
+    /// Where the top of the node at `path` points: its rotation applied to
+    /// +Y.
+    fn up_of(run: &Run, path: &str) -> Vec3 {
+        node_rotation(run, path) * Vec3::Y
+    }
+
+    fn assert_near(actual: Vec3, expected: Vec3, what: &str) {
+        assert!(
+            actual.abs_diff_eq(expected, 1e-5),
+            "{what}: {actual} != {expected}"
+        );
+    }
+
+    /// `actual` and `expected` turn every vector the same way (up to
+    /// rounding; `q` and `-q` are the same rotation).
+    fn assert_same_rotation(actual: Quat, expected: Quat) {
+        assert!(
+            actual.dot(expected).abs() > 1.0 - 1e-6,
+            "{actual} != {expected}"
+        );
+    }
+
+    #[test]
+    fn staggered_hurtbox_tips_away_from_the_character_then_stands_up_again() {
+        // Hit from +Z (the dummy straight ahead of the character, facing 0),
+        // staggered on ticks 2..=6: its top tips 20° towards -Z, away.
+        let mut run = dummy_run(r#"("hp", 100), ("stagger_ticks", 5)"#);
+        let base = node_rotation(&run, "d");
+        assert!(base.abs_diff_eq(Quat::from_rotation_y(30.0_f32.to_radians()), 1e-6));
+        let (sin, cos) = (
+            libm::sinf(20.0_f32.to_radians()),
+            libm::cosf(20.0_f32.to_radians()),
+        );
+        for t in 1..=8_u32 {
+            let actions: &[&str] = if t == 1 { &[ATTACK] } else { &[] };
+            run.hold(actions, &NONE);
+            if (2..=6).contains(&t) {
+                assert_near(
+                    up_of(&run, "d"),
+                    Vec3::new(0.0, cos, -sin),
+                    &format!("tick {t}"),
+                );
+            } else {
+                // Standing: the scene rotation, bit for bit.
+                assert_eq!(
+                    quat_bits(node_rotation(&run, "d")),
+                    quat_bits(base),
+                    "tick {t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dead_hurtbox_lies_flat_away_from_the_character_dimmed_without_its_bar() {
+        // Killed on tick 2 (dimmed at once, not white), dead on ticks
+        // 2..=11, lying towards -Z, away from the character; back on tick 12
+        // with the scene's colors, pose and bar.
+        let mut run = dummy_run(r#"("hp", 3), ("revive_ticks", 10)"#);
+        let base = node_rotation(&run, "d");
+        let (full_bar, _) = bar_of(&run, "d");
+        for t in 1..=13_u32 {
+            let actions: &[&str] = if t == 1 { &[ATTACK] } else { &[] };
+            run.hold(actions, &NONE);
+            let dead = (2..=11).contains(&t);
+            if dead {
+                assert_near(up_of(&run, "d"), Vec3::NEG_Z, &format!("tick {t}"));
+            } else {
+                assert_eq!(
+                    quat_bits(node_rotation(&run, "d")),
+                    quat_bits(base),
+                    "tick {t}"
+                );
+            }
+            let color = if dead { BODY * 0.4 } else { BODY };
+            assert_eq!(color_of(&run, "d/body"), color, "tick {t}");
+            let (bar, drawn) = bar_of(&run, "d");
+            assert_eq!(drawn, !dead, "tick {t}");
+            if !dead {
+                assert_eq!(bar, full_bar, "tick {t}");
+                assert_eq!(color_of(&run, "d/hp_bar"), BAR, "tick {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn hurtbox_hit_from_the_side_falls_to_the_far_side() {
+        // The character turned to face -X (facing 90°), the dummy 1.5 m
+        // that way: killed on tick 2, it lies towards -X.
+        let src = scene_with(&health_props(), &dummy("d", (-1.5, 0.0), r#"("hp", 3)"#)).replace(
+            r#"(name: "player","#,
+            r#"(name: "player", rotation: (0.0, 90.0, 0.0),"#,
+        );
+        let mut run = Run::on(&src);
+        let base = node_rotation(&run, "d");
+        let states = press_on(&mut run, ATTACK, &[1], 2, &NONE);
+        assert_eq!(health_of(&states[1], "d").state, Condition::Dead);
+        assert_near(up_of(&run, "d"), Vec3::NEG_X, "lying");
+        // Tipped over about -Z, which turns +Y to -X, and not turned about
+        // its own Y: the scene rotation, then only the tilt.
+        assert_same_rotation(
+            node_rotation(&run, "d"),
+            Quat::from_rotation_z(FRAC_PI_2) * base,
+        );
+    }
+
+    #[test]
+    fn fall_direction_does_not_depend_on_how_the_hurtbox_faces() {
+        // The same kill from +Z, the dummy turned 0°, 30° or 90°: it lies
+        // towards -Z each time.
+        for yaw in ["0.0", "30.0", "90.0"] {
+            let nodes = dummy("d", (0.0, -1.5), r#"("hp", 3)"#).replace(
+                "rotation: (0.0, 30.0, 0.0)",
+                &format!("rotation: (0.0, {yaw}, 0.0)"),
+            );
+            let mut run = Run::on(&scene_with(&health_props(), &nodes));
+            press_on(&mut run, ATTACK, &[1], 2, &NONE);
+            assert_near(up_of(&run, "d"), Vec3::NEG_Z, &format!("turned {yaw}°"));
+            let yaw: f32 = yaw.parse().unwrap();
+            assert_same_rotation(
+                node_rotation(&run, "d"),
+                Quat::from_rotation_x(-FRAC_PI_2) * Quat::from_rotation_y(yaw.to_radians()),
+            );
+        }
+    }
+
+    #[test]
+    fn hurtbox_killed_where_the_character_stands_falls_towards_minus_z() {
+        // After the slide the character stands at z = -0.0625, right on the
+        // dummy: no direction from it, so -Z (not +Z, from atan2(-0, -0)).
+        let nodes = dummy("d", (0.0, -0.0625), r#"("hp", 3)"#);
+        let mut run = Run::on(&scene_with(&health_props(), &nodes));
+        let states = press_on(&mut run, ATTACK, &[1], 2, &NONE);
+        assert_eq!(states[1].player.position, Vec3::new(0.0, 0.0, -0.0625));
+        assert_eq!(health_of(&states[1], "d").state, Condition::Dead);
+        assert_near(up_of(&run, "d"), Vec3::NEG_Z, "lying");
+    }
+
+    #[test]
+    fn hp_bar_shrinks_from_the_right_and_does_not_flash() {
+        let mut run = dummy_run(r#"("hp", 10)"#);
+        // Before any hit: as loaded.
+        let (loaded, _) = bar_of(&run, "d");
+        assert_eq!(loaded.position, Vec3::new(0.5, 2.0, 0.0));
+        assert_eq!(loaded.scale, Vec3::new(1.0, 0.125, 0.125));
+        run.hold(&[HEAVY], &NONE);
+        assert_eq!(bar_of(&run, "d"), (loaded, true));
+        // A heavy hit of 5 on tick 2: half the hp, half the width, the left
+        // end still at 0.5 - 1 / 2 = 0.
+        run.hold(&[], &NONE);
+        let (bar, drawn) = bar_of(&run, "d");
+        assert!(drawn);
+        assert_eq!(bar.scale, Vec3::new(0.5, 0.125, 0.125));
+        assert_eq!(bar.position, Vec3::new(0.25, 2.0, 0.0));
+        assert_eq!(bar.position.x - bar.scale.x / 2.0, 0.0);
+        assert_eq!(bar.rotation, loaded.rotation);
+        assert_eq!(color_of(&run, "d/body"), Vec3::ONE);
+        assert_eq!(color_of(&run, "d/hp_bar"), BAR);
+    }
+
+    #[test]
+    fn damage_and_impact_props_are_checked_with_exact_messages() {
+        for (props, problem) in [
+            (
+                r#"("attack_damage", 0)"#,
+                "prop \"attack_damage\" must be greater than 0, got 0",
+            ),
+            (
+                r#"("heavy_damage", -1)"#,
+                "prop \"heavy_damage\" must be greater than 0, got -1",
+            ),
+            (
+                r#"("attack_impact", -1)"#,
+                "prop \"attack_impact\" must be at least 0, got -1",
+            ),
+            (
+                r#"("heavy_impact", -0.5)"#,
+                "prop \"heavy_impact\" must be at least 0, got -0.5",
+            ),
+        ] {
+            assert_eq!(
+                error_of(props),
+                format!("the character \"player\": {problem}")
+            );
+        }
+        for props in [
+            r#"("attack_damage", 0.5)"#,
+            r#"("heavy_damage", 0.5)"#,
+            r#"("attack_impact", 0)"#,
+            r#"("heavy_impact", 0)"#,
+        ] {
+            assert!(Game::from_source(&scene(props)).is_ok(), "{props}");
+        }
+    }
+
+    const HURT: &str = r#"("hurt_radius", 0.4), ("hurt_height", 1.8)"#;
+
+    /// The error for a root node "t" with the hurt props and `props`.
+    fn hurtbox_error(props: &str) -> String {
+        error_with("", &format!(r#"(name: "t", props: [{HURT}, {props}]),"#))
+    }
+
+    #[test]
+    fn health_props_are_checked_with_exact_messages() {
+        let whole = "must be a whole number of at least 1";
+        for (props, problem) in [
+            (
+                r#"("hp", 0)"#,
+                "prop \"hp\" must be greater than 0, got 0".to_owned(),
+            ),
+            (
+                r#"("hp", 10), ("poise", -0.5)"#,
+                "prop \"poise\" must be at least 0, got -0.5".to_owned(),
+            ),
+            (
+                r#"("hp", 10), ("stagger_ticks", 0)"#,
+                format!("prop \"stagger_ticks\" {whole}, got 0"),
+            ),
+            (
+                r#"("hp", 10), ("poise_reset_ticks", 1.5)"#,
+                format!("prop \"poise_reset_ticks\" {whole}, got 1.5"),
+            ),
+            (
+                r#"("hp", 10), ("revive_ticks", 0.5)"#,
+                format!("prop \"revive_ticks\" {whole}, got 0.5"),
+            ),
+        ] {
+            assert_eq!(hurtbox_error(props), format!("the node \"t\": {problem}"));
+        }
+        let accepted = r#"("hp", 0.5), ("poise", 0), ("stagger_ticks", 1),
+            ("poise_reset_ticks", 1), ("revive_ticks", 1)"#;
+        let nodes = format!(r#"(name: "t", props: [{HURT}, {accepted}]),"#);
+        assert!(Game::from_source(&scene_with("", &nodes)).is_ok());
+    }
+
+    #[test]
+    fn health_nodes_are_checked_with_exact_messages() {
+        for (nodes, message) in [
+            (
+                r#"(name: "t", props: [("hp", 10)]),"#.to_owned(),
+                "the node \"t\": hp needs hurt_radius and hurt_height",
+            ),
+            (
+                r#"(name: "t", props: [("lock_height", 1), ("poise", 5)]),"#.to_owned(),
+                "the node \"t\": prop \"poise\" needs hp",
+            ),
+            (
+                // The first of the four in list order, not in the node's.
+                format!(
+                    r#"(name: "t", props: [{HURT}, ("revive_ticks", 5), ("stagger_ticks", 5)]),"#
+                ),
+                "the node \"t\": prop \"stagger_ticks\" needs hp",
+            ),
+            (
+                format!(
+                    r#"(name: "t", props: [{HURT}, ("hp", 10)], children: [(name: "hp_bar")]),"#
+                ),
+                "the node \"t\": its hp_bar needs a mesh",
+            ),
+        ] {
+            assert_eq!(error_with("", &nodes), message);
+        }
+        // "hp_bar" means nothing on a node without hp.
+        let nodes = format!(
+            r#"(name: "t", props: [{HURT}], children: [(name: "hp_bar")]),
+            (name: "u", children: [(name: "hp_bar")]),"#
+        );
+        assert!(Game::from_source(&scene_with("", &nodes)).is_ok());
+    }
+
+    #[test]
+    fn health_checks_run_in_the_documented_order() {
+        let node = |props: &str| error_with("", &format!(r#"(name: "t", props: [{props}]),"#));
+        let child = |props: &str, children: &str| {
+            error_with(
+                "",
+                &format!(
+                    r#"(name: "g", children: [(name: "t", props: [{props}],
+                        children: [{children}])]),"#
+                ),
+            )
+        };
+        // Unknown names, then the values in list order.
+        assert!(node(r#"("hp", 0), ("hq", 1)"#).contains("unknown prop \"hq\""));
+        assert!(node(r#"("revive_ticks", 0), ("hp", 0)"#).contains("\"hp\" must be greater"));
+        assert!(node(r#"("stagger_ticks", 0), ("poise", -1)"#).contains("\"poise\" must be at"));
+        // Values, then the hurt pair, then hp needing a hurtbox.
+        assert!(node(r#"("hurt_radius", 0.4), ("hp", 0)"#).contains("\"hp\" must be greater"));
+        assert!(node(r#"("hurt_radius", 0.4), ("hp", 10)"#).contains("needs both"));
+        // Then hp and the last four props, then the root rule.
+        assert!(child(r#"("hp", 10)"#, "").contains("hp needs hurt_radius"));
+        assert!(child(&format!("{HURT}, (\"poise\", 1)"), "").contains("needs hp"));
+        // The root rule, then the hp bar.
+        assert!(
+            child(&format!("{HURT}, (\"hp\", 10)"), r#"(name: "hp_bar")"#)
+                .starts_with("the hurtbox \"g/t\" must be a root node")
         );
     }
 }

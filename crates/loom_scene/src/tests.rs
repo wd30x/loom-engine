@@ -48,12 +48,15 @@ fn demo_scene_parses_into_the_character_scene_tree() {
             "dummy_a",
             "dummy_a/body",
             "dummy_a/block",
+            "dummy_a/hp_bar",
             "dummy_b",
             "dummy_b/body",
             "dummy_b/block",
+            "dummy_b/hp_bar",
             "dummy_c",
             "dummy_c/body",
             "dummy_c/block",
+            "dummy_c/hp_bar",
             "sun",
             "main_cam"
         ]
@@ -1098,4 +1101,23 @@ fn set_mesh_color_outside_zero_to_one_is_an_error_and_changes_nothing() {
         );
         assert_eq!(scene.node(b).mesh.unwrap().color, before);
     }
+}
+
+#[test]
+fn hidden_parent_hides_its_subtree_from_drawing_until_shown_again() {
+    let mut scene = colored_box();
+    let (g, b) = (scene.find("g").unwrap(), scene.find("g/box").unwrap());
+    assert!(scene.is_drawn(g) && scene.is_drawn(b));
+    scene.set_visible(g, false);
+    assert!(!scene.is_drawn(g) && !scene.is_drawn(b));
+    // The child itself is still visible: only its parent is hidden.
+    assert!(scene.node(b).visible);
+    assert!(!scene.node(g).visible);
+    // The camera is not under `g`.
+    assert!(scene.is_drawn(scene.camera()));
+    scene.set_visible(g, true);
+    assert!(scene.is_drawn(g) && scene.is_drawn(b));
+    // Hiding the child alone leaves the parent drawn.
+    scene.set_visible(b, false);
+    assert!(scene.is_drawn(g) && !scene.is_drawn(b));
 }

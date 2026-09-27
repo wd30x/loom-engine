@@ -11,6 +11,7 @@ use loom_core::input::ActionState;
 use loom_scene::{MeshKind, NodeId, Scene, SceneError};
 use serde::Serialize;
 
+use crate::health::{Condition, Health, HealthState, HpBar};
 use crate::moves::{Action, Attack, AttackPhase, Buffered, Params};
 
 /// Sideways movement in `[-1, 1]`; positive is to the camera's right.
@@ -31,17 +32,48 @@ pub const HEAVY: &str = "heavy";
 /// Locks on to a target, or lets go of it, on the tick it is pressed.
 pub const LOCK: &str = "lock";
 
+/// How a node prop's value is checked.
+#[derive(Debug, Clone, Copy)]
+enum NodeRule {
+    /// Greater than 0.
+    Positive,
+    /// At least 0.
+    NotNegative,
+    /// A whole number of at least 1.
+    Ticks,
+}
+
 /// The props a node other than the character may have, in the order they
-/// are checked: `lock_height` makes it a lock-on target (locked on this
-/// many meters above its position); `hurt_radius` and `hurt_height`
-/// together make it a hurtbox.
-const NODE_PROPS: [&str; 3] = ["lock_height", "hurt_radius", "hurt_height"];
+/// are checked, with the default of those that have one:
+/// - `lock_height` makes it a lock-on target (locked on this many meters
+///   above its position);
+/// - `hurt_radius` and `hurt_height` together make it a hurtbox;
+/// - `hp` makes a hurtbox take damage; the last four go with `hp`.
+const NODE_PROPS: [(&str, Option<f64>, NodeRule); 8] = [
+    ("lock_height", None, NodeRule::Positive),
+    ("hurt_radius", None, NodeRule::Positive),
+    ("hurt_height", None, NodeRule::Positive),
+    ("hp", None, NodeRule::Positive),
+    ("poise", Some(0.0), NodeRule::NotNegative),
+    ("stagger_ticks", Some(30.0), NodeRule::Ticks),
+    ("poise_reset_ticks", Some(60.0), NodeRule::Ticks),
+    ("revive_ticks", Some(180.0), NodeRule::Ticks),
+];
+
+/// The name of the child of a hurtbox with `hp` that shows its health.
+const HP_BAR: &str = "hp_bar";
 
 /// How long a hurtbox flashes after a hit, in ticks, counting the tick of
-/// the hit. A stand-in for real hit feedback until G3.3 (hit stun).
+/// the hit. A stand-in for real hit feedback, like the constants below.
 const FLASH_TICKS: u64 = 8;
-/// The color a hurtbox's meshes flash in; a stand-in like [`FLASH_TICKS`].
+/// The color a hurtbox's meshes flash in.
 const FLASH_COLOR: Vec3 = Vec3::ONE;
+/// A dead hurtbox's meshes are their scene colors times this.
+const DEAD_DIM: f32 = 0.4;
+/// How far a staggered hurtbox tips over, away from its attacker, in degrees.
+const STAGGER_TILT_DEGREES: f32 = 20.0;
+/// How far a dead hurtbox tips over: flat on the ground.
+const DEAD_TILT_DEGREES: f32 = 90.0;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GameError {
@@ -131,7 +163,8 @@ pub enum GameError {
         radius: f32,
     },
     #[error(
-        "the node {node:?}: unknown prop {prop:?} (known: lock_height, hurt_radius, hurt_height)"
+        "the node {node:?}: unknown prop {prop:?} (known: lock_height, hurt_radius, hurt_height, \
+         hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)"
     )]
     UnknownNodeProp { node: String, prop: String },
     #[error("the node {node:?}: prop {prop:?} must be greater than 0, got {value}")]
@@ -140,8 +173,26 @@ pub enum GameError {
         prop: &'static str,
         value: f64,
     },
+    #[error("the node {node:?}: prop {prop:?} must be at least 0, got {value}")]
+    NodePropNegative {
+        node: String,
+        prop: &'static str,
+        value: f64,
+    },
+    #[error("the node {node:?}: prop {prop:?} must be a whole number of at least 1, got {value}")]
+    NodePropNotWhole {
+        node: String,
+        prop: &'static str,
+        value: f64,
+    },
     #[error("the node {0:?}: needs both hurt_radius and hurt_height, or neither")]
     HurtPropsUnpaired(String),
+    #[error("the node {0:?}: hp needs hurt_radius and hurt_height")]
+    HpWithoutHurtbox(String),
+    #[error("the node {node:?}: prop {prop:?} needs hp")]
+    NeedsHp { node: String, prop: &'static str },
+    #[error("the node {0:?}: its hp_bar needs a mesh")]
+    HpBarWithoutMesh(String),
     #[error("the lock target {0:?} must be a root node, and not the camera")]
     LockTargetNotRoot(String),
     #[error("the hurtbox {0:?} must be a root node, and not the camera")]
@@ -244,6 +295,9 @@ struct Target {
     path: String,
     /// The lock point is this far above the node's position.
     height: f32,
+    /// The index in `Game::hurtboxes` of the same node, if it is one: a
+    /// dead one cannot be locked on to.
+    hurtbox: Option<usize>,
 }
 
 /// A node with `hurt_radius` and `hurt_height`: something attacks hit. A
@@ -255,11 +309,16 @@ struct Hurtbox {
     path: String,
     radius: f32,
     height: f32,
-    /// Every node with a mesh in the subtree (the node itself included), in
-    /// pre-order, with its color in the scene file: what flashes.
+    /// Every node with a mesh in the subtree (the node itself included)
+    /// but the hp bar, in pre-order, with its color in the scene file: what
+    /// flashes and darkens.
     meshes: Vec<(NodeId, Vec3)>,
+    /// The node's rotation in the scene file: its pose standing.
+    base: Quat,
     hits: u32,
     last_hit: Option<LastHit>,
+    /// With an `hp` prop: health, poise and death.
+    health: Option<Health>,
 }
 
 /// A hurtbox in the state dump (`game.hurtboxes`).
@@ -271,6 +330,8 @@ pub struct HurtboxState {
     pub hits: u32,
     /// The latest hit; `None` before the first.
     pub last_hit: Option<LastHit>,
+    /// `None` without an `hp` prop.
+    pub health: Option<HealthState>,
 }
 
 /// One hit on a hurtbox.
@@ -478,6 +539,11 @@ impl Game {
             tap
         };
 
+        // 0b. Staggers and deaths run out; added-up impacts are forgotten.
+        for health in self.hurtboxes.iter_mut().filter_map(|h| h.health.as_mut()) {
+            health.count_down();
+        }
+
         let mut player = self.state.player;
         let mut camera = self.state.camera;
 
@@ -646,7 +712,7 @@ impl Game {
         transform.position = player.position;
         transform.rotation = Quat::from_rotation_y(player.facing);
         self.place_camera(false);
-        self.flash();
+        self.show_hurtboxes();
     }
 
     /// Starts a roll the way the input points, or a backstep without a
@@ -764,8 +830,9 @@ impl Game {
 
     /// The hit check of active tick `action_tick - startup` of the attack
     /// `a`, after the slide: the tick sweeps its slice of the sector, right
-    /// to left, and hits every hurtbox it touches that this attack has not
-    /// hit yet.
+    /// to left, and hits every hurtbox it touches that is not dead and this
+    /// attack has not hit yet. A hurtbox with health takes the damage; one
+    /// killed while locked on is let go of.
     fn hit(&mut self, player: &PlayerState, a: Attack) {
         let k = player.action_tick - a.startup;
         let half = a.arc * 0.5;
@@ -780,6 +847,9 @@ impl Game {
         };
         let tick = self.clock.tick();
         for (i, h) in self.hurtboxes.iter_mut().enumerate() {
+            if h.health.is_some_and(|health| health.is_dead()) {
+                continue;
+            }
             // Hurtboxes are root nodes: the local position is the world one.
             let at = self.scene.transform(h.id).position;
             if !self.struck.contains(&i) && sweep.touches(at, h.radius, h.height) {
@@ -790,21 +860,86 @@ impl Game {
                     combo: player.combo,
                 });
                 self.struck.push(i);
+                // Away from the character; -Z when they stand on one spot,
+                // where `bearing` would give -π.
+                let fall = if hdist(sweep.p, at) > 0.0 {
+                    bearing(sweep.p, at)
+                } else {
+                    0.0
+                };
+                if let Some(health) = &mut h.health
+                    && health.take(a.damage, a.impact, fall)
+                    && self
+                        .lock
+                        .is_some_and(|t| self.targets[t].hurtbox == Some(i))
+                {
+                    self.lock = None;
+                }
             }
         }
     }
 
-    /// After step 6: every hurtbox hit within the last [`FLASH_TICKS`]
-    /// ticks (this one included) shows its meshes in [`FLASH_COLOR`], every
-    /// other one in the scene file's colors. Set every tick, flashing or not.
-    fn flash(&mut self) {
+    /// Whether lock-on target `t` is a hurtbox lying dead.
+    fn target_dead(&self, t: usize) -> bool {
+        self.targets[t]
+            .hurtbox
+            .and_then(|h| self.hurtboxes[h].health)
+            .is_some_and(|health| health.is_dead())
+    }
+
+    /// After step 6, every hurtbox shows its state; everything is set every
+    /// tick, whether it changed or not:
+    /// - its meshes (but the hp bar): the scene colors times [`DEAD_DIM`]
+    ///   when dead, else [`FLASH_COLOR`] within [`FLASH_TICKS`] ticks of a
+    ///   hit (this one included), else the scene colors;
+    /// - with health, its pose: the scene rotation, or when staggered or dead
+    ///   tipped over by [`STAGGER_TILT_DEGREES`] or [`DEAD_TILT_DEGREES`]
+    ///   towards its `fall`, away from the character;
+    /// - its hp bar: as long as the health left, the left end in place,
+    ///   hidden when dead.
+    fn show_hurtboxes(&mut self) {
         let tick = self.clock.tick();
         for h in &self.hurtboxes {
+            let condition = h.health.map(|health| health.now.state);
+            let dead = condition == Some(Condition::Dead);
             let flashing = h.last_hit.is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
             for &(id, color) in &h.meshes {
+                let shown = if dead {
+                    color * DEAD_DIM
+                } else if flashing {
+                    FLASH_COLOR
+                } else {
+                    color
+                };
                 self.scene
-                    .set_mesh_color(id, if flashing { FLASH_COLOR } else { color })
-                    .expect("meshes were picked for having a mesh, and both colors are valid");
+                    .set_mesh_color(id, shown)
+                    .expect("meshes were picked for having a mesh, and every color is valid");
+            }
+            let Some(health) = h.health else {
+                continue;
+            };
+            let tilt = match health.now.state {
+                Condition::Ok => None,
+                Condition::Stagger => Some(STAGGER_TILT_DEGREES),
+                Condition::Dead => Some(DEAD_TILT_DEGREES),
+            };
+            self.scene.transform_mut(h.id).rotation = match tilt {
+                None => h.base,
+                // The top tips over towards `fall`, however the node faces.
+                Some(degrees) => {
+                    Quat::from_rotation_y(health.fall)
+                        * Quat::from_rotation_x(-degrees.to_radians())
+                        * Quat::from_rotation_y(-health.fall)
+                        * h.base
+                }
+            };
+            if let Some(bar) = health.bar {
+                let frac = health.now.hp / health.hp_max;
+                let t = self.scene.transform_mut(bar.id);
+                t.scale.x = bar.width * frac;
+                t.position.x = bar.x0 - bar.width * (1.0 - frac) / 2.0;
+                // A bar scaled to nothing cannot be drawn properly: hide it.
+                self.scene.set_visible(bar.id, !dead);
             }
         }
     }
@@ -891,6 +1026,7 @@ impl Game {
                     node: h.path.clone(),
                     hits: h.hits,
                     last_hit: h.last_hit,
+                    health: h.health.map(|health| health.now),
                 })
                 .collect(),
         }
@@ -908,13 +1044,13 @@ impl Game {
         self.scene.transform(self.targets[t].id).position
     }
 
-    /// `acquire()` of step 1a: the target within `lock_range` and
+    /// `acquire()` of step 1a: the living target within `lock_range` and
     /// `lock_angle` closest to where the camera looks (`yaw`), the first
     /// in pre-order on a tie.
     fn acquire(&self, position: Vec3, yaw: f32) -> Option<usize> {
         let lock = self.params.lock;
         let mut best: Option<(usize, f32)> = None;
-        for t in 0..self.targets.len() {
+        for t in (0..self.targets.len()).filter(|&t| !self.target_dead(t)) {
             let to = self.target_position(t);
             let d = hdist(position, to);
             if d == 0.0 || d > lock.range {
@@ -931,14 +1067,14 @@ impl Game {
         best.map(|(t, _)| t)
     }
 
-    /// `switch_target(side)` of step 1b: of the targets within
+    /// `switch_target(side)` of step 1b: of the living targets within
     /// `lock_range` on the right (or left) of `current` as seen from
     /// `position`, the one closest in direction; the first in pre-order on
     /// a tie.
     fn switch_target(&self, position: Vec3, current: usize, right: bool) -> Option<usize> {
         let cur = bearing(position, self.target_position(current));
         let mut best: Option<(usize, f32)> = None;
-        for t in (0..self.targets.len()).filter(|&t| t != current) {
+        for t in (0..self.targets.len()).filter(|&t| t != current && !self.target_dead(t)) {
             let to = self.target_position(t);
             let d = hdist(position, to);
             if d == 0.0 || d > self.params.lock.range {
@@ -960,10 +1096,10 @@ impl Game {
 }
 
 /// Every lock-on target and every hurtbox of `scene`, in pre-order, checked
-/// node by node (every node but the character): no props but
-/// `lock_height`, `hurt_radius` and `hurt_height`; each of those positive;
-/// the two hurt props together or not at all; and only on root nodes other
-/// than the camera.
+/// node by node (every node but the character), in this order: no props
+/// but [`NODE_PROPS`]; each value by its rule; the two hurt props together
+/// or not at all; `hp` only on a hurtbox; the last four props only with
+/// `hp`; only on root nodes other than the camera; an `hp_bar` with a mesh.
 fn targets(
     scene: &Scene,
     player: NodeId,
@@ -973,61 +1109,124 @@ fn targets(
     let mut hurtboxes = Vec::new();
     for id in scene.ids().filter(|&id| id != player) {
         let node = scene.node(id);
-        if let Some((prop, _)) = node.props().find(|&(p, _)| !NODE_PROPS.contains(&p)) {
+        let path = || scene.path(id);
+        if let Some((prop, _)) = node
+            .props()
+            .find(|&(p, _)| !NODE_PROPS.iter().any(|&(name, ..)| name == p))
+        {
             return Err(GameError::UnknownNodeProp {
-                node: scene.path(id),
+                node: path(),
                 prop: prop.to_owned(),
             });
         }
-        let [lock_height, hurt_radius, hurt_height] = NODE_PROPS.map(|prop| node.prop(prop));
-        for (prop, value) in NODE_PROPS
-            .into_iter()
-            .zip([lock_height, hurt_radius, hurt_height])
-        {
-            if let Some(value) = value
-                && value <= 0.0
-            {
-                return Err(GameError::NodePropNotPositive {
-                    node: scene.path(id),
-                    prop,
-                    value,
-                });
+        for (prop, _, rule) in NODE_PROPS {
+            let Some(value) = node.prop(prop) else {
+                continue;
+            };
+            let node = path();
+            match rule {
+                NodeRule::Positive if value <= 0.0 => {
+                    return Err(GameError::NodePropNotPositive { node, prop, value });
+                }
+                NodeRule::NotNegative if value < 0.0 => {
+                    return Err(GameError::NodePropNegative { node, prop, value });
+                }
+                NodeRule::Ticks if value.fract() != 0.0 || value < 1.0 => {
+                    return Err(GameError::NodePropNotWhole { node, prop, value });
+                }
+                _ => {}
             }
         }
-        let hurt = match (hurt_radius, hurt_height) {
+        // Present, or the default; `None` only for a missing prop without one.
+        let get = |name: &str| {
+            let &(_, default, _) = NODE_PROPS
+                .iter()
+                .find(|&&(n, ..)| n == name)
+                .expect("only names from NODE_PROPS are asked for");
+            node.prop(name).or(default)
+        };
+        let lock_height = node.prop("lock_height");
+        let hurt = match (node.prop("hurt_radius"), node.prop("hurt_height")) {
             (Some(radius), Some(height)) => Some((radius as f32, height as f32)),
             (None, None) => None,
-            _ => return Err(GameError::HurtPropsUnpaired(scene.path(id))),
+            _ => return Err(GameError::HurtPropsUnpaired(path())),
         };
+        let hp = node.prop("hp");
+        if hp.is_some() && hurt.is_none() {
+            return Err(GameError::HpWithoutHurtbox(path()));
+        }
+        if hp.is_none()
+            && let Some(&(prop, ..)) = NODE_PROPS[4..]
+                .iter()
+                .find(|&&(p, ..)| node.prop(p).is_some())
+        {
+            return Err(GameError::NeedsHp { node: path(), prop });
+        }
         if (lock_height.is_some() || hurt.is_some()) && (node.parent.is_some() || id == camera) {
             return Err(if lock_height.is_some() {
-                GameError::LockTargetNotRoot(scene.path(id))
+                GameError::LockTargetNotRoot(path())
             } else {
-                GameError::HurtboxNotRoot(scene.path(id))
+                GameError::HurtboxNotRoot(path())
             });
         }
-        if let Some(height) = lock_height {
-            targets.push(Target {
-                id,
-                path: scene.path(id),
-                height: height as f32,
-            });
+        // Only a hurtbox with hp has an hp bar; anywhere else the name means
+        // nothing.
+        let bar = match hp {
+            Some(_) => node
+                .children
+                .iter()
+                .copied()
+                .find(|&c| scene.node(c).name == HP_BAR),
+            None => None,
+        };
+        if let Some(bar) = bar
+            && scene.node(bar).mesh.is_none()
+        {
+            return Err(GameError::HpBarWithoutMesh(path()));
         }
-        if let Some((radius, height)) = hurt {
-            hurtboxes.push(Hurtbox {
+        let hurtbox = hurt.map(|(radius, height)| {
+            // Checked above: whole numbers of at least 1; `as` saturates.
+            let ticks = |name: &str| get(name).expect("every tick prop has a default") as u32;
+            let health = hp.map(|hp| {
+                Health::new(
+                    hp as f32,
+                    get("poise").expect("poise has a default") as f32,
+                    ["stagger_ticks", "poise_reset_ticks", "revive_ticks"].map(ticks),
+                    bar.map(|bar| {
+                        let t = scene.transform(bar);
+                        HpBar {
+                            id: bar,
+                            x0: t.position.x,
+                            width: t.scale.x,
+                        }
+                    }),
+                )
+            });
+            Hurtbox {
                 id,
-                path: scene.path(id),
+                path: path(),
                 radius,
                 height,
                 meshes: scene
                     .ids()
-                    .filter(|&n| is_in_subtree(scene, n, id))
+                    .filter(|&n| is_in_subtree(scene, n, id) && Some(n) != bar)
                     .filter_map(|n| scene.node(n).mesh.map(|m| (n, m.color)))
                     .collect(),
+                base: scene.transform(id).rotation,
                 hits: 0,
                 last_hit: None,
+                health,
+            }
+        });
+        if let Some(height) = lock_height {
+            targets.push(Target {
+                id,
+                path: path(),
+                height: height as f32,
+                hurtbox: hurtbox.as_ref().map(|_| hurtboxes.len()),
             });
         }
+        hurtboxes.extend(hurtbox);
     }
     Ok((targets, hurtboxes))
 }

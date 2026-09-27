@@ -313,6 +313,9 @@ pub struct Node {
     pub tilemap: Option<Tilemap>,
     /// Game-defined numbers, in file order; names are unique.
     props: Vec<(String, f64)>,
+    /// Runtime only, not in the scene file: a hidden node and its subtree
+    /// are not drawn ([`Scene::set_visible`]). `true` at load time.
+    pub visible: bool,
 }
 
 impl Node {
@@ -509,6 +512,24 @@ impl Scene {
             mesh.color = color;
         }
         Ok(())
+    }
+
+    /// Hides `id` and its whole subtree from drawing, or shows it again.
+    /// Only drawing changes: transforms, components and colliders stay.
+    pub fn set_visible(&mut self, id: NodeId, visible: bool) {
+        self.nodes[id.0].visible = visible;
+    }
+
+    /// Whether `id` is drawn: it and every ancestor are visible.
+    pub fn is_drawn(&self, id: NodeId) -> bool {
+        let mut at = Some(id);
+        while let Some(n) = at {
+            if !self.nodes[n.0].visible {
+                return false;
+            }
+            at = self.nodes[n.0].parent;
+        }
+        true
     }
 
     /// `parent world matrix * local matrix`, computed along the parent chain.
@@ -789,6 +810,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         sprite,
         tilemap,
         props,
+        visible: true,
     })
 }
 
