@@ -14,6 +14,7 @@ use loom_scene::{MeshKind, NodeId, Scene, SceneError};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::enemy::{EnemyCondition, EnemyParams, EnemyState, MoveKind, MoveParams, SplitMix64};
 use crate::events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
 use crate::health::{Condition, Health, HealthState, HpBar};
 use crate::moves::{Action, Attack, AttackPhase, Buffered, Params};
@@ -36,15 +37,154 @@ pub const HEAVY: &str = "heavy";
 /// Locks on to a target, or lets go of it, on the tick it is pressed.
 pub const LOCK: &str = "lock";
 
+/// The eleven props of the move whose names start with `$m`, with its
+/// defaults in the order damage, impact, startup, active, recovery,
+/// reach, arc, min_range, max_range, weight, track_speed.
+macro_rules! move_props {
+    ($m:literal, $what:literal, [$damage:expr, $impact:expr, $startup:expr, $active:expr,
+        $recovery:expr, $reach:expr, $arc:expr, $min:expr, $max:expr, $weight:expr,
+        $track:expr]) => {
+        [
+            PropSpec {
+                name: concat!($m, "damage"),
+                default: Some($damage),
+                rule: PropRule::Positive,
+                unit: "hp",
+                description: concat!($what, ": health each hit takes off the character."),
+            },
+            PropSpec {
+                name: concat!($m, "impact"),
+                default: Some($impact),
+                rule: PropRule::AtLeast { min: 0.0 },
+                unit: "impact",
+                description: concat!($what, ": what each hit adds up against the character's poise."),
+            },
+            PropSpec {
+                name: concat!($m, "startup_ticks"),
+                default: Some($startup),
+                rule: PropRule::Whole { min: 1, max: None },
+                unit: "ticks",
+                description: concat!($what, ": the warning before the swing, turning to the character at track_speed."),
+            },
+            PropSpec {
+                name: concat!($m, "active_ticks"),
+                default: Some($active),
+                rule: PropRule::Whole { min: 1, max: None },
+                unit: "ticks",
+                description: concat!($what, ": the swing (for a combo, each cut's)."),
+            },
+            PropSpec {
+                name: concat!($m, "recovery_ticks"),
+                default: Some($recovery),
+                rule: PropRule::Whole { min: 1, max: None },
+                unit: "ticks",
+                description: concat!($what, ": after the swing (for a combo, the last cut's)."),
+            },
+            PropSpec {
+                name: concat!($m, "reach"),
+                default: Some($reach),
+                rule: PropRule::Positive,
+                unit: "meters",
+                description: concat!($what, ": radius of the swept sector."),
+            },
+            PropSpec {
+                name: concat!($m, "arc"),
+                default: Some($arc),
+                rule: PropRule::Arc,
+                unit: "degrees",
+                description: concat!($what, ": angle swept, right to left, centered on the facing."),
+            },
+            PropSpec {
+                name: concat!($m, "min_range"),
+                default: Some($min),
+                rule: PropRule::AtLeast { min: 0.0 },
+                unit: "meters",
+                description: concat!($what, ": chosen only with the character at least this far, horizontally."),
+            },
+            PropSpec {
+                name: concat!($m, "max_range"),
+                default: Some($max),
+                rule: PropRule::Positive,
+                unit: "meters",
+                description: concat!($what, ": chosen only with the character at most this far; at least min_range."),
+            },
+            PropSpec {
+                name: concat!($m, "weight"),
+                default: Some($weight),
+                rule: PropRule::Whole { min: 0, max: None },
+                unit: "weight",
+                description: concat!($what, ": how likely it is chosen, against the weights of the other moves in range; 0: never."),
+            },
+            PropSpec {
+                name: concat!($m, "track_speed"),
+                default: Some($track),
+                rule: PropRule::AtLeast { min: 0.0 },
+                unit: "degrees per second",
+                description: concat!($what, ": how fast the enemy turns to the character during the startup."),
+            },
+        ]
+    };
+}
+
 /// The props a node other than the character may have, in the order they
 /// are checked, with the default of those that have one:
 /// - `lock_height` makes it a lock-on target (locked on this many meters
 ///   above its position);
 /// - `hurt_radius` and `hurt_height` together make it a hurtbox;
 /// - `hp` makes a hurtbox take damage; the four after it go with `hp`;
-/// - `swing_damage` makes it a swinger, hitting the character; the last
-///   eight go with `swing_damage`.
-pub(crate) const NODE_PROPS: [PropSpec; 17] = [
+/// - `swing_damage` makes it a swinger, hitting the character; the eight
+///   after it go with `swing_damage`;
+/// - `enemy_speed` makes it an enemy; all the others go with it: the rest
+///   of [`ENEMY_PROPS`], eleven for each move, then [`ENEMY_TAIL`].
+pub(crate) const NODE_PROPS: [PropSpec; 72] = join(&[
+    &BASE_PROPS,
+    &ENEMY_PROPS,
+    &move_props!(
+        "sweep_",
+        "Sweep, a wide swing",
+        [25.0, 20.0, 30.0, 8.0, 30.0, 3.0, 160.0, 0.0, 3.0, 3.0, 90.0]
+    ),
+    &move_props!(
+        "cleave_",
+        "Cleave, a narrow far-reaching swing",
+        [45.0, 40.0, 45.0, 4.0, 40.0, 4.0, 20.0, 0.0, 4.0, 2.0, 150.0]
+    ),
+    &move_props!(
+        "lunge_",
+        "Lunge, a charge forward",
+        [
+            30.0, 30.0, 35.0, 10.0, 35.0, 2.5, 90.0, 4.0, 9.0, 2.0, 180.0
+        ]
+    ),
+    &move_props!(
+        "combo_",
+        "Combo, cuts in a row",
+        [20.0, 15.0, 25.0, 5.0, 45.0, 2.8, 140.0, 0.0, 2.8, 2.0, 90.0]
+    ),
+    &ENEMY_TAIL,
+]);
+
+/// `parts` one after the other, which must be `N` in all.
+const fn join<const N: usize>(parts: &[&[PropSpec]]) -> [PropSpec; N] {
+    let mut out = [BASE_PROPS[0]; N];
+    let mut i = 0;
+    let mut p = 0;
+    while p < parts.len() {
+        let mut j = 0;
+        while j < parts[p].len() {
+            out[i] = parts[p][j];
+            i += 1;
+            j += 1;
+        }
+        p += 1;
+    }
+    assert!(i == N, "the parts add up to N");
+    out
+}
+
+/// The props a node could always have: targets, hurtboxes, health and
+/// swingers.
+const BASE_PROPS: [PropSpec; 17] = [
     PropSpec {
         name: "lock_height",
         default: None,
@@ -166,10 +306,99 @@ pub(crate) const NODE_PROPS: [PropSpec; 17] = [
     },
 ];
 
-/// Where the props that go with `hp` and with `swing_damage` are in
-/// [`NODE_PROPS`].
+/// An enemy's own props, `enemy_speed` first.
+const ENEMY_PROPS: [PropSpec; 8] = [
+    PropSpec {
+        name: "enemy_speed",
+        default: None,
+        rule: PropRule::Positive,
+        unit: "meters per second",
+        description: "Makes the node an enemy: how fast it walks up to the character. Per tick, \
+                      less than hurt_radius.",
+    },
+    PropSpec {
+        name: "enemy_turn_speed",
+        default: Some(180.0),
+        rule: PropRule::Positive,
+        unit: "degrees per second",
+        description: "How fast it turns to the character walking, resting and before a move.",
+    },
+    PropSpec {
+        name: "enemy_face_angle",
+        default: Some(30.0),
+        rule: PropRule::PositiveAtMost { max: 180.0 },
+        unit: "degrees",
+        description: "A move starts only with the character at most this far off its facing.",
+    },
+    PropSpec {
+        name: "enemy_rest_ticks",
+        default: Some(40.0),
+        rule: PropRule::Whole { min: 0, max: None },
+        unit: "ticks",
+        description: "The rest after each move: the character's window to hit back.",
+    },
+    PropSpec {
+        name: "enemy_aggro_range",
+        default: Some(15.0),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "With the character farther than this, horizontally, it stands still.",
+    },
+    PropSpec {
+        name: "enemy_seed",
+        default: Some(1.0),
+        rule: PropRule::Whole { min: 0, max: None },
+        unit: "seed",
+        description: "The seed of its random numbers, which choose its moves.",
+    },
+    PropSpec {
+        name: "enemy_swing_low",
+        default: Some(0.3),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "meters",
+        description: "Above its feet: the bottom of the band every move sweeps.",
+    },
+    PropSpec {
+        name: "enemy_swing_high",
+        default: Some(2.4),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Above its feet: the top of the band every move sweeps; above \
+                      enemy_swing_low.",
+    },
+];
+
+/// The enemy props after the moves'.
+const ENEMY_TAIL: [PropSpec; 3] = [
+    PropSpec {
+        name: "lunge_distance",
+        default: Some(5.0),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "How far the lunge charges, evenly over its active ticks; per tick, less \
+                      than hurt_radius.",
+    },
+    PropSpec {
+        name: "combo_hits",
+        default: Some(3.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "cuts",
+        description: "How many cuts the combo has.",
+    },
+    PropSpec {
+        name: "combo_gap_ticks",
+        default: Some(12.0),
+        rule: PropRule::Whole { min: 0, max: None },
+        unit: "ticks",
+        description: "The wait before each cut of the combo after the first, a startup again.",
+    },
+];
+
+/// Where the props that go with `hp`, with `swing_damage` and with
+/// `enemy_speed` are in [`NODE_PROPS`].
 const HP_PROPS: std::ops::Range<usize> = 4..8;
 const SWING_PROPS: std::ops::Range<usize> = 9..17;
+const ENEMY_OTHER_PROPS: std::ops::Range<usize> = 18..72;
 
 /// The name of the child of a hurtbox with `hp` that shows its health.
 const HP_BAR: &str = "hp_bar";
@@ -266,12 +495,7 @@ pub enum GameError {
         step: f32,
         radius: f32,
     },
-    #[error(
-        "the node {node:?}: unknown prop {prop:?} (known: lock_height, hurt_radius, hurt_height, \
-         hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, swing_impact, \
-         swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, \
-         swing_low, swing_high)"
-    )]
+    #[error("the node {node:?}: unknown prop {prop:?} (see loom schema: games.souls.props.node)")]
     UnknownNodeProp { node: String, prop: String },
     #[error("the node {node:?}: prop {prop:?} must be {rule}, got {value}")]
     NodeBadProp {
@@ -300,6 +524,30 @@ pub enum GameError {
     HurtboxNotRoot(String),
     #[error("the swinger {0:?} must be a root node, and not the camera")]
     SwingerNotRoot(String),
+    #[error("the node {node:?}: prop {prop:?} needs enemy_speed")]
+    NeedsEnemySpeed { node: String, prop: &'static str },
+    #[error("the node {node:?}: needs {m}_min_range <= {m}_max_range")]
+    EnemyRanges { node: String, m: &'static str },
+    #[error("the node {0:?}: needs enemy_swing_low < enemy_swing_high")]
+    EnemySwingBand(String),
+    #[error("the enemy {0:?} needs hurt_radius, hurt_height, hp and lock_height")]
+    EnemyIncomplete(String),
+    #[error("the enemy {0:?} cannot also be a swinger")]
+    EnemySwinger(String),
+    #[error("the enemy {0:?} must be a root node, and not the camera")]
+    EnemyNotRoot(String),
+    #[error(
+        "the enemy {enemy:?}: {what} moves {step} m per tick, which must be less than hurt_radius \
+         {radius}"
+    )]
+    EnemyStepTooLong {
+        enemy: String,
+        what: &'static str,
+        step: f32,
+        radius: f32,
+    },
+    #[error("the enemy {0:?} must not have a collider in its subtree: colliders are static")]
+    EnemyCollider(String),
 }
 
 /// The game state in the state dump (`game`).
@@ -313,6 +561,8 @@ pub struct GameState {
     pub hurtboxes: Vec<HurtboxState>,
     /// Every swinger, in pre-order.
     pub swingers: Vec<SwingerState>,
+    /// Every enemy, in pre-order.
+    pub enemies: Vec<EnemyState>,
 }
 
 /// The character (`game.player`).
@@ -504,6 +754,51 @@ struct Arm {
     color: Vec3,
 }
 
+/// A node with `enemy_speed`: it walks up to the character, turns to it
+/// and does moves chosen at random by distance (`docs/architecture.md`
+/// section 11, "敌人和 Boss"). Always a hurtbox with health and a lock-on
+/// target too.
+#[derive(Debug, Clone)]
+struct Enemy {
+    id: NodeId,
+    /// The path, for the state dump and events.
+    path: String,
+    params: EnemyParams,
+    /// Its index in `Game::hurtboxes`.
+    hurtbox: usize,
+    /// Its hurtbox's cylinder, also what it collides with.
+    radius: f32,
+    height: f32,
+    arm: Option<Arm>,
+    state: EnemyCondition,
+    /// The move being done, while `Attack`.
+    current: Option<MoveKind>,
+    /// Which tick of the move, from 1; 0 without one.
+    move_tick: u32,
+    facing: f32,
+    rest: u32,
+    rng: SplitMix64,
+    /// The cut of the move (1 for the moves that have one) that has hit
+    /// the character already; 0 for none.
+    struck: u32,
+}
+
+impl Enemy {
+    /// Where the move is on this tick; `None` outside a move.
+    fn moment(&self) -> Option<(MoveKind, crate::enemy::Moment)> {
+        let kind = self.current?;
+        Some((kind, self.params.moment(kind, self.move_tick)))
+    }
+
+    /// `(lo, hi)` of the move `kind`'s active tick `k`, left to right when
+    /// `reversed`.
+    fn slice(&self, kind: MoveKind, k: u32, reversed: bool) -> (f32, f32) {
+        let m = self.params.of(kind);
+        let (lo, hi) = slice_of(m.arc, m.slice, k);
+        if reversed { (-hi, -lo) } else { (lo, hi) }
+    }
+}
+
 impl Swinger {
     /// The part of the round `swing_tick` is in; `None` at 0.
     fn phase(&self) -> Option<AttackPhase> {
@@ -601,6 +896,8 @@ pub struct Game {
     struck: Vec<usize>,
     /// Every swinger, in pre-order.
     swingers: Vec<Swinger>,
+    /// Every enemy, in pre-order.
+    enemies: Vec<Enemy>,
     /// The character's own health, poise and death (without an hp bar).
     health: Health,
     /// Every node with a mesh in the character's subtree (the character
@@ -701,6 +998,7 @@ impl Game {
             targets,
             hurtboxes,
             swingers,
+            enemies,
         } = roles(&scene, player, camera)?;
         let health = Health::new(
             params.hp,
@@ -780,6 +1078,7 @@ impl Game {
             hurtboxes,
             struck: Vec::new(),
             swingers,
+            enemies,
             health,
             player_meshes,
             spawn,
@@ -949,6 +1248,7 @@ impl Game {
                 self.radius,
                 self.height,
                 player.position + self.action_dir * m.step,
+                &self.enemy_circles(),
             );
             // The last tick still moves.
             if player.action_tick == m.ticks {
@@ -992,6 +1292,7 @@ impl Game {
                 self.radius,
                 self.height,
                 player.position + dir * step,
+                &self.enemy_circles(),
             );
             let was_sprinting = player.action == Action::Sprint;
             if sprinting {
@@ -1050,7 +1351,8 @@ impl Game {
             Action::Idle | Action::Sprint | Action::Attack | Action::Heavy => false,
         };
 
-        // 5c. The swingers swing, and may hit the character.
+        // 5c. The enemies, then the swingers, act, and may hit the character.
+        self.run_enemies(&mut player);
         self.swing(&mut player);
         player.health = self.health.now;
         self.state = Motion { player, camera };
@@ -1058,6 +1360,10 @@ impl Game {
         // 6. Write the nodes.
         self.show_player();
         self.place_camera(false);
+        // An enemy stands turned to its facing.
+        for e in &self.enemies {
+            self.hurtboxes[e.hurtbox].base = Quat::from_rotation_y(e.facing);
+        }
         self.show_hurtboxes();
         self.show_arms();
     }
@@ -1110,8 +1416,213 @@ impl Game {
             }
             s.struck = true;
             let (by, damage, impact) = (s.path.clone(), s.damage, s.impact);
-            self.player_hit(player, at, by, damage, impact);
+            self.player_hit(player, at, by, damage, impact, HitAttack::Swing);
         }
+    }
+
+    /// Step 5c for the enemies (pre-order), before the swingers: each one
+    /// follows its hurtbox into a stagger or death, breaking off its move,
+    /// else goes on with its move or rest, or chooses a move, or turns to
+    /// the character and walks up to it.
+    fn run_enemies(&mut self, player: &mut PlayerState) {
+        for i in 0..self.enemies.len() {
+            let h = self.enemies[i].hurtbox;
+            let condition = self.hurtboxes[h]
+                .health
+                .expect("an enemy has hp (checked at load)")
+                .now
+                .state;
+            let player_dead = self.health.is_dead();
+            let at = self.scene.transform(self.enemies[i].id).position;
+            let d = hdist(at, player.position);
+            let e = &mut self.enemies[i];
+            if condition != Condition::Ok {
+                e.state = match condition {
+                    Condition::Dead => EnemyCondition::Dead,
+                    Condition::Stagger | Condition::Ok => EnemyCondition::Stagger,
+                };
+                e.current = None;
+                e.move_tick = 0;
+                e.rest = 0;
+                e.struck = 0;
+                continue;
+            }
+            if matches!(e.state, EnemyCondition::Stagger | EnemyCondition::Dead) {
+                e.state = EnemyCondition::Idle;
+            }
+            if (player_dead || d > e.params.aggro_range) && e.state != EnemyCondition::Attack {
+                e.state = EnemyCondition::Idle;
+                continue;
+            }
+            match e.state {
+                EnemyCondition::Attack => {
+                    e.move_tick += 1;
+                    self.enemy_move_tick(i, player);
+                }
+                EnemyCondition::Rest => {
+                    if d > 0.0 {
+                        e.facing = turn(e.facing, bearing(at, player.position), e.params.turn);
+                    }
+                    e.rest = e.rest.saturating_sub(1);
+                    if e.rest == 0 {
+                        e.state = EnemyCondition::Idle;
+                    }
+                }
+                EnemyCondition::Idle | EnemyCondition::Chase => self.enemy_choose(i, player),
+                EnemyCondition::Stagger | EnemyCondition::Dead => {
+                    unreachable!("a stagger or death was left above")
+                }
+            }
+        }
+    }
+
+    /// An idle or chasing enemy `i`: starts a move chosen at random among
+    /// those in range when it faces the character closely enough, and
+    /// otherwise turns to it, walking up while no move is in range.
+    fn enemy_choose(&mut self, i: usize, player: &mut PlayerState) {
+        let at = self.scene.transform(self.enemies[i].id).position;
+        let d = hdist(at, player.position);
+        let e = &mut self.enemies[i];
+        let p = e.params;
+        let candidates: Vec<MoveKind> = MoveKind::ALL
+            .into_iter()
+            .filter(|&kind| {
+                let m = p.of(kind);
+                m.weight > 0 && m.min_range <= d && d <= m.max_range
+            })
+            .collect();
+        let off = wrap(bearing(at, player.position) - e.facing).abs();
+        if !candidates.is_empty() && off <= p.face_angle {
+            let total: u64 = candidates.iter().map(|&k| u64::from(p.of(k).weight)).sum();
+            let r = e.rng.next() % total;
+            let mut sum = 0;
+            let chosen = candidates
+                .iter()
+                .copied()
+                .find(|&k| {
+                    sum += u64::from(p.of(k).weight);
+                    sum > r
+                })
+                .expect("r is less than the total of the weights");
+            self.events.push(Event::EnemyMove {
+                by: e.path.clone(),
+                r#move: chosen,
+                distance: d,
+                candidates,
+            });
+            e.state = EnemyCondition::Attack;
+            e.current = Some(chosen);
+            e.move_tick = 1;
+            e.struck = 0;
+            self.enemy_move_tick(i, player);
+            return;
+        }
+        if d > 0.0 {
+            e.facing = turn(e.facing, bearing(at, player.position), p.turn);
+        }
+        if candidates.is_empty() {
+            e.state = EnemyCondition::Chase;
+            if d > 0.0 {
+                let to = Vec3::new(player.position.x - at.x, 0.0, player.position.z - at.z) / d;
+                let moved = self.enemy_resolve(i, at + to * p.step, player.position);
+                self.scene.transform_mut(self.enemies[i].id).position = moved;
+            }
+        } else {
+            e.state = EnemyCondition::Idle;
+        }
+    }
+
+    /// Tick `move_tick` of enemy `i`'s move: turning to the character
+    /// during startup; while active, the lunge's step forward, then the
+    /// hit check of this tick's slice; after the last tick, the rest.
+    fn enemy_move_tick(&mut self, i: usize, player: &mut PlayerState) {
+        let e = &self.enemies[i];
+        let (kind, moment) = e.moment().expect("only called during a move");
+        let m: MoveParams = *e.params.of(kind);
+        let mut at = self.scene.transform(e.id).position;
+        match moment.phase {
+            AttackPhase::Startup => {
+                if hdist(at, player.position) > 0.0 {
+                    let e = &mut self.enemies[i];
+                    e.facing = turn(e.facing, bearing(at, player.position), m.track);
+                }
+            }
+            AttackPhase::Active => {
+                if kind == MoveKind::Lunge {
+                    let f = e.facing;
+                    let forward = Vec3::new(-libm::sinf(f), 0.0, -libm::cosf(f));
+                    at = self.enemy_resolve(i, at + forward * e.params.lunge_step, player.position);
+                    self.scene.transform_mut(e.id).position = at;
+                }
+                let e = &self.enemies[i];
+                let k = moment.active.expect("an active tick has its number");
+                let (lo, hi) = e.slice(kind, k, moment.reversed);
+                let cut = moment.hit.max(1);
+                let sweep = Sweep {
+                    p: at,
+                    facing: e.facing,
+                    reach: m.reach,
+                    lo,
+                    hi,
+                    low: e.params.low,
+                    high: e.params.high,
+                };
+                if e.struck != cut
+                    && !self.health.is_dead()
+                    && sweep.touches(player.position, self.radius, self.height)
+                {
+                    let by = e.path.clone();
+                    if player.invulnerable {
+                        self.events.push(Event::Dodged {
+                            by,
+                            action: player.action,
+                            action_tick: player.action_tick,
+                        });
+                    } else {
+                        self.enemies[i].struck = cut;
+                        self.player_hit(player, at, by, m.damage, m.impact, kind.into());
+                    }
+                }
+            }
+            AttackPhase::Recovery => {}
+        }
+        if moment.last {
+            let e = &mut self.enemies[i];
+            e.current = None;
+            e.move_tick = 0;
+            e.struck = 0;
+            if e.params.rest_ticks > 0 {
+                e.state = EnemyCondition::Rest;
+                e.rest = e.params.rest_ticks;
+            } else {
+                e.state = EnemyCondition::Idle;
+            }
+        }
+    }
+
+    /// Enemy `i`'s feet moved to `p`, pushed out of the colliders (its
+    /// hurtbox as the capsule) and of the character's circle.
+    fn enemy_resolve(&self, i: usize, p: Vec3, player: Vec3) -> Vec3 {
+        let e = &self.enemies[i];
+        let circle = (Vec2::new(player.x, player.z), self.radius + e.radius);
+        resolve(&self.boxes, e.radius, e.height, p, &[circle])
+    }
+
+    /// The circles the character is pushed out of: every living enemy's,
+    /// grown by the character's radius.
+    fn enemy_circles(&self) -> Vec<(Vec2, f32)> {
+        self.enemies
+            .iter()
+            .filter(|e| {
+                !self.hurtboxes[e.hurtbox]
+                    .health
+                    .is_some_and(|health| health.is_dead())
+            })
+            .map(|e| {
+                let at = self.scene.transform(e.id).position;
+                (Vec2::new(at.x, at.z), self.radius + e.radius)
+            })
+            .collect()
     }
 
     /// `player_hit` of step 5c: the swinger `by`, standing at `from`, hits
@@ -1125,6 +1636,7 @@ impl Game {
         by: String,
         damage: f32,
         impact: f32,
+        attack: HitAttack,
     ) {
         player.hits += 1;
         player.last_hit = Some(PlayerHit {
@@ -1141,7 +1653,7 @@ impl Game {
         self.events.push(Event::Hit {
             by,
             target: self.player_path.clone(),
-            attack: HitAttack::Swing,
+            attack,
             combo: 0,
             damage: Some(damage),
             hp: Some(self.health.now.hp),
@@ -1239,6 +1751,50 @@ impl Game {
                 .set_mesh_color(arm.id, color)
                 .expect("an arm has a mesh (checked at load), and every color is valid");
         }
+        // An enemy's arm: the same, by its move; at the other end of the
+        // sector for an even cut of a combo.
+        for e in &self.enemies {
+            let Some(arm) = e.arm else {
+                continue;
+            };
+            let moment = e.moment();
+            let phase = moment.map(|(_, m)| m.phase);
+            let angle = moment.and_then(|(kind, m)| {
+                let half = e.params.of(kind).arc * 0.5;
+                match m.phase {
+                    AttackPhase::Startup => Some(if m.reversed { half } else { -half }),
+                    AttackPhase::Active => {
+                        let k = m.active.expect("an active tick has its number");
+                        let (lo, hi) = e.slice(kind, k, m.reversed);
+                        Some(if m.reversed { lo } else { hi })
+                    }
+                    AttackPhase::Recovery => None,
+                }
+            });
+            let t = self.scene.transform_mut(arm.id);
+            match angle {
+                None => {
+                    t.position = arm.p0;
+                    t.rotation = arm.r0;
+                }
+                Some(angle) => {
+                    let q = Quat::from_rotation_y(angle);
+                    t.position = q * arm.p0;
+                    t.rotation = q * arm.r0;
+                }
+            }
+            let h = &self.hurtboxes[e.hurtbox];
+            let dead = h.health.is_some_and(|health| health.is_dead());
+            let flashing = h.last_hit.is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
+            let color = if !dead && !flashing && phase == Some(AttackPhase::Startup) {
+                WARN_COLOR
+            } else {
+                shown(arm.color, dead, flashing)
+            };
+            self.scene
+                .set_mesh_color(arm.id, color)
+                .expect("an arm has a mesh (checked at load), and every color is valid");
+        }
     }
 
     /// Starts a roll the way the input points, or a backstep without a
@@ -1269,6 +1825,7 @@ impl Game {
             self.radius,
             self.height,
             player.position + self.action_dir * m.step,
+            &self.enemy_circles(),
         );
         if m.ticks == 1 {
             self.end_action(player, 0);
@@ -1340,6 +1897,7 @@ impl Game {
                 self.radius,
                 self.height,
                 player.position + forward * a.step,
+                &self.enemy_circles(),
             );
             self.hit(player, a);
             AttackPhase::Active
@@ -1613,6 +2171,22 @@ impl Game {
             let sweep = (player.position, player.facing, a.reach, a.arc);
             debug_sweep(draw, sweep, band, phase, slice);
         }
+        for e in &self.enemies {
+            let Some((kind, m)) = e.moment() else {
+                continue;
+            };
+            let slice = m.active.map(|k| e.slice(kind, k, m.reversed));
+            // Enemies are root nodes: the local position is the world one.
+            let at = self.scene.transform(e.id).position;
+            let mv = e.params.of(kind);
+            debug_sweep(
+                draw,
+                (at, e.facing, mv.reach, mv.arc),
+                (e.params.low, e.params.high),
+                m.phase,
+                slice,
+            );
+        }
         for s in &self.swingers {
             let Some(phase) = s.phase() else {
                 continue;
@@ -1754,6 +2328,24 @@ impl Game {
                     phase: s.phase(),
                 })
                 .collect(),
+            enemies: self
+                .enemies
+                .iter()
+                .map(|e| {
+                    let moment = e.moment();
+                    EnemyState {
+                        node: e.path.clone(),
+                        state: e.state,
+                        r#move: e.current,
+                        move_tick: e.move_tick,
+                        phase: moment.map(|(_, m)| m.phase),
+                        hit: moment.map_or(0, |(_, m)| m.hit),
+                        facing: e.facing,
+                        rest: e.rest,
+                        rng: e.rng.0,
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -1825,37 +2417,52 @@ struct Roles {
     targets: Vec<Target>,
     hurtboxes: Vec<Hurtbox>,
     swingers: Vec<Swinger>,
+    enemies: Vec<Enemy>,
 }
 
 /// Which node props only go with another one, as [`roles`] checks them
 /// (`loom schema` writes them out).
-pub(crate) const NODE_REQUIRES: [&str; 4] = [
+pub(crate) const NODE_REQUIRES: [&str; 5] = [
     "hurt_radius and hurt_height: both or neither",
     "hp: needs hurt_radius and hurt_height",
     "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
     "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, \
      swing_arc, swing_low, swing_high: need swing_damage",
+    "every enemy_*, sweep_*, cleave_*, lunge_* and combo_* prop but enemy_speed: needs \
+     enemy_speed",
 ];
 
 /// The other rules [`roles`] checks on a node's props.
-pub(crate) const NODE_CONSTRAINTS: [&str; 4] = [
+pub(crate) const NODE_CONSTRAINTS: [&str; 9] = [
     "a swinger: swing_low < swing_high",
     "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
     "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
-    "a swinger: its child named arm, if any, needs a mesh",
+    "a swinger or an enemy: its child named arm, if any, needs a mesh",
+    "an enemy (a node with enemy_speed): <move>_min_range <= <move>_max_range for sweep, cleave, \
+     lunge and combo",
+    "an enemy: enemy_swing_low < enemy_swing_high",
+    "an enemy needs hurt_radius, hurt_height, hp and lock_height, is not a swinger, and is a \
+     root node other than the camera",
+    "an enemy: enemy_speed / 60 and lunge_distance / lunge_active_ticks are less than \
+     hurt_radius",
+    "an enemy has no collider in its subtree",
 ];
 
-/// Every lock-on target, hurtbox and swinger of `scene`, in pre-order,
-/// checked node by node (every node but the character), in this order: no
-/// props but [`NODE_PROPS`]; each value by its rule; the two hurt props
-/// together or not at all; `hp` only on a hurtbox; the four props after it
-/// only with `hp`; the last eight only with `swing_damage`; a swinger's
-/// `swing_low < swing_high`; only on root nodes other than the camera; an
-/// `hp_bar` with a mesh; an `arm` with a mesh.
+/// Every lock-on target, hurtbox, swinger and enemy of `scene`, in
+/// pre-order, checked node by node (every node but the character), in this
+/// order: no props but [`NODE_PROPS`]; each value by its rule; the two hurt
+/// props together or not at all; `hp` only on a hurtbox; the four props
+/// after it only with `hp`; the eight swing props only with `swing_damage`;
+/// a swinger's `swing_low < swing_high`; only on root nodes other than the
+/// camera; an `hp_bar` with a mesh; an `arm` with a mesh; the enemy props
+/// only with `enemy_speed`; then, for an enemy, each move's ranges, its
+/// swing band, the props it needs, not a swinger, a root node, its steps
+/// shorter than `hurt_radius` and no collider in its subtree.
 fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameError> {
     let mut targets = Vec::new();
     let mut hurtboxes = Vec::new();
     let mut swingers = Vec::new();
+    let mut enemies = Vec::new();
     for id in scene.ids().filter(|&id| id != player) {
         let node = scene.node(id);
         let path = || scene.path(id);
@@ -1952,13 +2559,111 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
         {
             return Err(GameError::HpBarWithoutMesh(path()));
         }
-        let arm = swing_damage.and_then(|_| child(ARM));
+        let enemy_speed = node.prop("enemy_speed");
+        let arm = swing_damage.or(enemy_speed).and_then(|_| child(ARM));
         if let Some(arm) = arm
             && scene.node(arm).mesh.is_none()
         {
             return Err(GameError::ArmWithoutMesh(path()));
         }
-        let hurtbox = hurt.map(|(radius, height)| {
+        if enemy_speed.is_none()
+            && let Some(spec) = NODE_PROPS[ENEMY_OTHER_PROPS]
+                .iter()
+                .find(|spec| node.prop(spec.name).is_some())
+        {
+            return Err(GameError::NeedsEnemySpeed {
+                node: path(),
+                prop: spec.name,
+            });
+        }
+        // Checked on, in order, only for an enemy; its parameters.
+        let enemy = match enemy_speed {
+            None => None,
+            Some(speed) => {
+                let range = |kind: MoveKind, end: &str| {
+                    value(&format!("{}_{end}_range", kind.name())) as f32
+                };
+                for kind in MoveKind::ALL {
+                    if range(kind, "min") > range(kind, "max") {
+                        return Err(GameError::EnemyRanges {
+                            node: path(),
+                            m: kind.name(),
+                        });
+                    }
+                }
+                let (low, high) = (
+                    value("enemy_swing_low") as f32,
+                    value("enemy_swing_high") as f32,
+                );
+                if low >= high {
+                    return Err(GameError::EnemySwingBand(path()));
+                }
+                let (Some((radius, height)), Some(_), Some(_)) = (hurt, hp, lock_height) else {
+                    return Err(GameError::EnemyIncomplete(path()));
+                };
+                if swing_damage.is_some() {
+                    return Err(GameError::EnemySwinger(path()));
+                }
+                if node.parent.is_some() || id == camera {
+                    return Err(GameError::EnemyNotRoot(path()));
+                }
+                let moves = MoveKind::ALL.map(|kind| {
+                    let v = |suffix: &str| value(&format!("{}_{suffix}", kind.name()));
+                    let active = v("active_ticks") as u32;
+                    let arc = (v("arc") as f32).to_radians();
+                    MoveParams {
+                        damage: v("damage") as f32,
+                        impact: v("impact") as f32,
+                        startup: v("startup_ticks") as u32,
+                        active,
+                        recovery: v("recovery_ticks") as u32,
+                        reach: v("reach") as f32,
+                        arc,
+                        slice: arc / active as f32,
+                        min_range: v("min_range") as f32,
+                        max_range: v("max_range") as f32,
+                        weight: v("weight") as u32,
+                        track: (v("track_speed") as f32).to_radians() / 60.0,
+                    }
+                });
+                let lunge_active = moves[MoveKind::Lunge as usize].active;
+                let params = EnemyParams {
+                    step: speed as f32 / 60.0,
+                    turn: (value("enemy_turn_speed") as f32).to_radians() / 60.0,
+                    face_angle: (value("enemy_face_angle") as f32).to_radians(),
+                    rest_ticks: ticks("enemy_rest_ticks"),
+                    aggro_range: value("enemy_aggro_range") as f32,
+                    // Checked above: a whole number of at least 0; `as`
+                    // saturates.
+                    seed: value("enemy_seed") as u64,
+                    low,
+                    high,
+                    moves,
+                    lunge_step: value("lunge_distance") as f32 / lunge_active as f32,
+                    combo_hits: ticks("combo_hits"),
+                    combo_gap: ticks("combo_gap_ticks"),
+                };
+                for (what, step) in [("enemy", params.step), ("lunge", params.lunge_step)] {
+                    if step >= radius {
+                        return Err(GameError::EnemyStepTooLong {
+                            enemy: path(),
+                            what,
+                            step,
+                            radius,
+                        });
+                    }
+                }
+                if scene
+                    .colliders()
+                    .iter()
+                    .any(|&c| is_in_subtree(scene, c, id))
+                {
+                    return Err(GameError::EnemyCollider(path()));
+                }
+                Some((params, radius, height))
+            }
+        };
+        let mut hurtbox = hurt.map(|(radius, height)| {
             let health = hp.map(|hp| {
                 Health::new(
                     hp as f32,
@@ -2041,12 +2746,50 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 struck: false,
             });
         }
+        if let Some((params, radius, height)) = enemy {
+            // As the character's facing at load.
+            let f = scene.transform(id).rotation * Vec3::NEG_Z;
+            let facing = positive_zero(wrap(libm::atan2f(-f.x, -f.z)));
+            let hurtbox = hurtbox
+                .as_mut()
+                .expect("checked above: an enemy is a hurtbox");
+            hurtbox.base = Quat::from_rotation_y(facing);
+            enemies.push(Enemy {
+                id,
+                path: path(),
+                params,
+                hurtbox: hurtboxes.len(),
+                radius,
+                height,
+                arm: arm.map(|arm| {
+                    let t = scene.transform(arm);
+                    Arm {
+                        id: arm,
+                        p0: t.position,
+                        r0: t.rotation,
+                        color: scene
+                            .node(arm)
+                            .mesh
+                            .expect("checked above: the arm has a mesh")
+                            .color,
+                    }
+                }),
+                state: EnemyCondition::Idle,
+                current: None,
+                move_tick: 0,
+                facing,
+                rest: 0,
+                rng: SplitMix64(params.seed),
+                struck: 0,
+            });
+        }
         hurtboxes.extend(hurtbox);
     }
     Ok(Roles {
         targets,
         hurtboxes,
         swingers,
+        enemies,
     })
 }
 
@@ -2193,7 +2936,7 @@ fn turn(facing: f32, target: f32, max: f32) -> f32 {
 /// slides along walls. Exactly the steps of `docs/architecture.md` section
 /// 11 (collision): a fixed 4 rounds over the boxes in pre-order, no early
 /// exit, only exactly rounded operations.
-fn resolve(boxes: &[BoxCollider], r: f32, h: f32, mut p: Vec3) -> Vec3 {
+fn resolve(boxes: &[BoxCollider], r: f32, h: f32, mut p: Vec3, circles: &[(Vec2, f32)]) -> Vec3 {
     for _ in 0..4 {
         for bx in boxes {
             if bx.y_max <= p.y || bx.y_min >= p.y + h {
@@ -2228,6 +2971,23 @@ fn resolve(boxes: &[BoxCollider], r: f32, h: f32, mut p: Vec3) -> Vec3 {
             p.x += push.x;
             p.z += push.y;
         }
+        // Then out of each circle `(center, reach)` on the XZ plane: along
+        // the line from its center, or +X from on top of it.
+        for &(c, reach) in circles {
+            let d = Vec2::new(p.x - c.x, p.z - c.y);
+            let d2 = d.length_squared();
+            if d2 >= reach * reach {
+                continue; // not touching
+            }
+            if d2 == 0.0 {
+                p.x = c.x + reach;
+                p.z = c.y;
+            } else {
+                let n = d * (reach / d2.sqrt());
+                p.x = c.x + n.x;
+                p.z = c.y + n.y;
+            }
+        }
     }
     p
 }
@@ -2252,6 +3012,10 @@ fn wrap(a: f32) -> f32 {
 fn positive_zero(a: f32) -> f32 {
     if a == 0.0 { 0.0 } else { a }
 }
+
+#[cfg(test)]
+#[path = "enemy_tests.rs"]
+mod enemy_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2492,6 +3256,7 @@ mod tests {
             game.radius,
             game.height,
             *position + dir * game.step,
+            &[],
         );
         if v.length_squared() > 0.0 {
             let target = libm::atan2f(-dir.x, -dir.z);

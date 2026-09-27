@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(character["props"].as_array().unwrap().len(), 50);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
-            17
+            72
         );
         assert_eq!(
             prop("souls", "character", "stamina_max"),
@@ -199,6 +199,21 @@ mod tests {
         let node = names("souls", "node");
         assert_eq!(node[..3], ["lock_height", "hurt_radius", "hurt_height"]);
         assert_eq!(node[16], "swing_high");
+        assert_eq!(node[17], "enemy_speed");
+        assert_eq!(
+            node[25..28],
+            ["sweep_damage", "sweep_impact", "sweep_startup_ticks"]
+        );
+        assert_eq!(node[68], "combo_track_speed");
+        assert_eq!(
+            node[69..],
+            ["lunge_distance", "combo_hits", "combo_gap_ticks"]
+        );
+        assert_eq!(
+            prop("souls", "node", "enemy_face_angle")["rule"],
+            json!({"kind": "positive_at_most", "max": 180.0})
+        );
+        assert_eq!(prop("souls", "node", "cleave_arc")["default"], 20.0);
         let character_names = names("souls", "character");
         assert_eq!(character_names[..2], ["stamina_max", "stamina_regen"]);
         assert_eq!(character_names[49], "respawn_ticks");
@@ -210,6 +225,10 @@ mod tests {
         assert_eq!(
             group("souls", "node")["requires"][2],
             "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp"
+        );
+        assert_eq!(
+            group("souls", "node")["constraints"][8],
+            "an enemy has no collider in its subtree"
         );
         assert_eq!(group("rogue", "player")["requires"], json!([]));
     }
@@ -236,7 +255,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (50 + 17 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (50 + 72 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),
@@ -245,7 +264,8 @@ mod tests {
         }
     }
 
-    /// One souls event of each type (a hit twice: with and without health);
+    /// One souls event of each type (hits by the character, a swinger and an
+    /// enemy's move, with and without health);
     /// the match stops compiling when a type is added without one here.
     fn every_souls_event() -> Vec<souls::Event> {
         use souls::{
@@ -303,6 +323,21 @@ mod tests {
             Event::Respawn {
                 position: Vec3::new(0.0, 0.0, -1.5),
             },
+            Event::EnemyMove {
+                by: "boss".to_owned(),
+                r#move: souls::MoveKind::Lunge,
+                distance: 6.5,
+                candidates: vec![souls::MoveKind::Lunge],
+            },
+            Event::Hit {
+                by: "boss".to_owned(),
+                target: "player".to_owned(),
+                attack: HitAttack::Combo,
+                combo: 0,
+                damage: Some(20.0),
+                hp: Some(80.0),
+                result: Outcome::Hit,
+            },
         ];
         for e in &events {
             match e {
@@ -314,7 +349,8 @@ mod tests {
                 | Event::ActionEnd { .. }
                 | Event::Lock { .. }
                 | Event::Revive { .. }
-                | Event::Respawn { .. } => {}
+                | Event::Respawn { .. }
+                | Event::EnemyMove { .. } => {}
             }
         }
         events
@@ -331,9 +367,10 @@ mod tests {
             assert_fits(souls, &e);
             types.push(e["type"].as_str().unwrap().to_owned());
         }
+        types.sort();
         types.dedup();
-        assert_eq!(types.len(), 9);
-        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 9);
+        assert_eq!(types.len(), 10);
+        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 10);
 
         let rogue = &schema["games"]["rogue"]["event"];
         let e = rogue::Event::Hit {

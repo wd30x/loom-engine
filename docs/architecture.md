@@ -1526,7 +1526,7 @@ player_hit(s):
 | `combo_gap_ticks` | 12 | 整数 ≥ 0。连击两刀之间的准备时间（下一刀的前摇） |
 
 - 换算：角度转弧度；`slice = arc / active_ticks`；速度、距离换成每 tick 的步长。和前面一样，先 `as f32` 再算。
-- 节点 props 从 17 个变成 70 个。`unknown prop` 的报错不再列出全部名字，改成 `the node "<路径>": unknown prop "<p>" (see loom schema: games.souls.props.node)`（G4.1 起；原来列名单的文案作废）。
+- 节点 props 从 17 个变成 72 个（新增 55 个：敌人 8 个、招式 4 × 11 个、另外 3 个；原来写的 70 是算错了，G4.1 实现者指出）。`unknown prop` 的报错不再列出全部名字，改成 `the node "<路径>": unknown prop "<p>" (see loom schema: games.souls.props.node)`（G4.1 起；原来列名单的文案作废）。
 - 新的报错：
   - `the node "<路径>": prop "<p>" needs enemy_speed`
   - `the node "<路径>": needs <m>_min_range <= <m>_max_range`
@@ -1664,6 +1664,10 @@ match state:
 - 下劈的扇形也是水平的，只是很窄、很远，没有竖直方向的判定。
 - 敌人不检查视线，也不寻路：隔着柱子也会直线走过来，被柱子挡住就沿着柱子滑。
 - 招式没有动画，只有手臂的转动和预警色。
+- 敌人和角色互相推开只看 XZ 平面，不看高度。平地场景里没有影响（G4.1 审查时记）。
+- 突进的默认步长是每 tick 0.5 米，`hurt_radius` 不超过 0.5 的小敌人必须改小 `lunge_distance` 或加长 `lunge_active_ticks`，否则报步长过大。
+- 敌人的 `hit` 事件的 `combo` 恒为 0，连击的第几刀要看状态里的 `hit`。
+- 一招的最后一个 tick，状态导出里已经是 `rest`（或 `idle`），`move` 为 `null`。
 
 ### 碰撞（G1.3 起）
 

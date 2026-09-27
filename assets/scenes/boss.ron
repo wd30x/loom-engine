@@ -1,0 +1,169 @@
+// The souls boss arena (docs/architecture.md section 11, "敌人和 Boss"): the character faces a
+// boss that walks up, turns to it and picks one of four moves at random by distance, resting after
+// each. Every prop is written out, most at their defaults.
+(
+    version: 1,
+    game: "souls",
+    camera: "main_cam",
+    ambient: (0.2, 0.2, 0.25),
+    nodes: [
+        (name: "ground", mesh: Plane, scale: (40.0, 1.0, 40.0), color: (0.35, 0.35, 0.38)),
+        (name: "player", position: (0.0, 0.0, 8.0),
+            mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2),
+            character: (run_speed: 4.0, turn_speed: 720.0),
+            // Stamina, roll, sprint and backstep (docs/architecture.md section 11). Every value
+            // here is the default: leaving a prop out gives the same game.
+            props: [
+                ("stamina_max", 100),            // stamina points
+                ("stamina_regen", 45),           // stamina points per second
+                ("stamina_delay_ticks", 30),     // ticks after using stamina before it comes back
+                ("tap_ticks", 15),               // releasing roll within this many ticks is a tap
+                ("sprint_speed", 6),             // meters per second
+                ("sprint_cost", 15),             // stamina points per second
+                ("roll_cost", 20),               // stamina points
+                ("roll_ticks", 32),              // how long a roll lasts
+                ("roll_distance", 3.2),          // meters
+                ("roll_invuln_from", 1),         // invulnerable from this tick of the roll (1-based)
+                ("roll_invuln_to", 20),          // ... to this one, inclusive
+                ("backstep_cost", 12),           // stamina points
+                ("backstep_ticks", 20),          // how long a backstep lasts
+                ("backstep_distance", 1.5),      // meters
+                ("backstep_invuln_from", 1),     // as for the roll
+                ("backstep_invuln_to", 8),
+                ("attack_cost", 15),             // light attack: stamina points
+                ("attack_startup_ticks", 10),    // before the swing; can still turn
+                ("attack_active_ticks", 4),      // the swing, sliding forward
+                ("attack_recovery_ticks", 16),   // after the swing; the next action can be buffered
+                ("attack_distance", 0.3),        // meters slid during the swing
+                ("heavy_cost", 25),              // heavy attack: as for the light one
+                ("heavy_startup_ticks", 22),
+                ("heavy_active_ticks", 5),
+                ("heavy_recovery_ticks", 23),
+                ("heavy_distance", 0.6),
+                ("attack_turn_speed", 180),      // degrees per second, during startup
+                ("combo_max", 3),                // most light attacks in a row
+                ("lock_range", 15),              // meters: targets this close can be locked on to
+                ("lock_break_range", 20),        // meters: farther than this lets go of the target
+                ("lock_angle", 60),              // degrees from where the camera looks
+                ("lock_camera_speed", 360),      // degrees per second the camera follows the target
+                ("lock_pitch_down", 15),         // degrees below the lock point the camera looks
+                ("switch_threshold", 0.1),       // look_x (radians) flicked to switch targets
+                ("switch_cooldown_ticks", 20),   // ticks after a switch before the next one
+                ("attack_reach", 2),             // meters: radius of the light attack's sweep
+                ("attack_arc", 120),             // degrees swept, right to left, centered on facing
+                ("heavy_reach", 2.4),            // heavy attack: as for the light one
+                ("heavy_arc", 90),
+                ("swing_low", 0.3),              // meters above the feet: the band the swing sweeps
+                ("swing_high", 1.6),
+                ("attack_damage", 20),           // hp a light hit takes off
+                ("heavy_damage", 35),
+                ("attack_impact", 10),           // added up against the target's poise
+                ("heavy_impact", 30),
+                ("hp", 100),                     // the character's own health
+                ("poise", 0),                    // 0: every hit with any impact staggers
+                ("stagger_ticks", 30),           // how long a stagger lasts
+                ("poise_reset_ticks", 60),       // ticks without a hit before impacts are forgotten
+                ("respawn_ticks", 120),          // ticks lying dead before coming back at the start
+            ],
+            children: [
+                // Marks the facing: the capsule looks the same from every side.
+                (name: "visor", position: (0.0, 1.5, -0.3), scale: (0.4, 0.15, 0.3),
+                    mesh: Cube, color: (0.9, 0.85, 0.3)),
+            ]),
+        (name: "pillars", children: [
+            (name: "a", position: (-7.0, 1.5, -8.0), scale: (1.0, 3.0, 1.0), mesh: Cube,
+                color: (0.6, 0.58, 0.52), collider: Box),
+            (name: "b", position: (7.0, 1.5, -8.0), scale: (1.0, 3.0, 1.0), mesh: Cube,
+                color: (0.6, 0.58, 0.52), collider: Box),
+            (name: "c", position: (-7.0, 1.5, 4.0), scale: (1.0, 3.0, 1.0), mesh: Cube,
+                color: (0.6, 0.58, 0.52), collider: Box),
+            (name: "d", position: (7.0, 1.5, 4.0), scale: (1.0, 3.0, 1.0), mesh: Cube,
+                color: (0.6, 0.58, 0.52), collider: Box),
+        ]),
+        // Faces +Z, looking at the character.
+        (name: "boss", position: (0.0, 0.0, -4.0), rotation: (0.0, 180.0, 0.0),
+            props: [
+                ("lock_height", 2.0),            // meters above the feet: the lock point
+                ("hurt_radius", 0.7),            // meters: the hurtbox, also what it collides with
+                ("hurt_height", 3.0),            // meters, from the feet up
+                ("hp", 600),                     // full health
+                ("poise", 80),                   // impacts added up past this stagger it
+                ("stagger_ticks", 40),           // how long a stagger lasts
+                ("poise_reset_ticks", 60),       // ticks without a hit before impacts are forgotten
+                ("revive_ticks", 300),           // ticks lying dead before coming back with full health
+                ("enemy_speed", 2.5),            // meters per second walking up to the character
+                ("enemy_turn_speed", 180),       // degrees per second turning to it
+                ("enemy_face_angle", 30),        // degrees: moves start with the character this close ahead
+                ("enemy_rest_ticks", 40),        // the rest after each move: the window to hit back
+                ("enemy_aggro_range", 15),       // meters: farther than this, it stands still
+                ("enemy_seed", 7),               // the seed of the random numbers that choose its moves
+                ("enemy_swing_low", 0.3),        // meters above its feet: the band every move sweeps
+                ("enemy_swing_high", 2.4),
+                // Sweep: a wide swing.
+                ("sweep_damage", 25),            // hp each hit takes off the character
+                ("sweep_impact", 20),            // added up against the character's poise
+                ("sweep_startup_ticks", 30),     // the warning before the swing, the arm out in orange
+                ("sweep_active_ticks", 8),       // the swing
+                ("sweep_recovery_ticks", 30),    // after the swing
+                ("sweep_reach", 3.0),            // meters: radius of the swept sector
+                ("sweep_arc", 160),              // degrees swept, right to left, centered on the facing
+                ("sweep_min_range", 0),          // meters: chosen only with the character at least this far
+                ("sweep_max_range", 3.0),        // meters: ... and at most this far
+                ("sweep_weight", 3),             // how likely it is chosen among the moves in range
+                ("sweep_track_speed", 90),       // degrees per second it turns to the character during startup
+                // Cleave: a narrow, far-reaching swing.
+                ("cleave_damage", 45),           // hp each hit takes off the character
+                ("cleave_impact", 40),           // added up against the character's poise
+                ("cleave_startup_ticks", 45),    // the warning before the swing, the arm out in orange
+                ("cleave_active_ticks", 4),      // the swing
+                ("cleave_recovery_ticks", 40),   // after the swing
+                ("cleave_reach", 4.0),           // meters: radius of the swept sector
+                ("cleave_arc", 20),              // degrees swept, right to left, centered on the facing
+                ("cleave_min_range", 0),         // meters: chosen only with the character at least this far
+                ("cleave_max_range", 4.0),       // meters: ... and at most this far
+                ("cleave_weight", 2),            // how likely it is chosen among the moves in range
+                ("cleave_track_speed", 150),     // degrees per second it turns to the character during startup
+                // Lunge: a charge forward, swinging on the way.
+                ("lunge_damage", 30),            // hp each hit takes off the character
+                ("lunge_impact", 30),            // added up against the character's poise
+                ("lunge_startup_ticks", 35),     // the warning before the swing, the arm out in orange
+                ("lunge_active_ticks", 10),      // the swing
+                ("lunge_recovery_ticks", 35),    // after the swing
+                ("lunge_reach", 2.5),            // meters: radius of the swept sector
+                ("lunge_arc", 90),               // degrees swept, right to left, centered on the facing
+                ("lunge_min_range", 4),          // meters: chosen only with the character at least this far
+                ("lunge_max_range", 9.0),        // meters: ... and at most this far
+                ("lunge_weight", 2),             // how likely it is chosen among the moves in range
+                ("lunge_track_speed", 180),      // degrees per second it turns to the character during startup
+                // Combo: cuts in a row, every other one left to right.
+                ("combo_damage", 20),            // hp each hit takes off the character
+                ("combo_impact", 15),            // added up against the character's poise
+                ("combo_startup_ticks", 25),     // the warning before the swing, the arm out in orange
+                ("combo_active_ticks", 5),       // each cut's swing
+                ("combo_recovery_ticks", 45),    // after the last cut
+                ("combo_reach", 2.8),            // meters: radius of the swept sector
+                ("combo_arc", 140),              // degrees swept, right to left, centered on the facing
+                ("combo_min_range", 0),          // meters: chosen only with the character at least this far
+                ("combo_max_range", 2.8),        // meters: ... and at most this far
+                ("combo_weight", 2),             // how likely it is chosen among the moves in range
+                ("combo_track_speed", 90),       // degrees per second it turns to the character during startup
+                ("lunge_distance", 5),           // meters the lunge charges, evenly over its active ticks
+                ("combo_hits", 3),               // cuts in the combo
+                ("combo_gap_ticks", 12),         // the wait before each cut after the first
+            ],
+            children: [
+                (name: "body", mesh: Capsule(radius: 0.7, height: 3.0), color: (0.28, 0.24, 0.3)),
+                // On the center line, out to 3.3 m; turned to show each move.
+                (name: "arm", position: (0.0, 1.8, -1.9), scale: (0.15, 0.15, 2.8), mesh: Cube,
+                    color: (0.4, 0.35, 0.35)),
+                (name: "hp_bar", position: (0.0, 3.4, 0.0), scale: (1.6, 0.1, 0.1), mesh: Cube,
+                    color: (0.8, 0.1, 0.1)),
+            ]),
+        (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
+            light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
+        (name: "main_cam", camera: (fov_y: 60.0, near: 0.1, far: 200.0),
+            orbit_camera: (target: "player", pivot_height: 1.5, distance: 4.0,
+                yaw: 0.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 60.0,
+                collision_radius: 0.2, return_speed: 4.0)),
+    ],
+)

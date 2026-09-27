@@ -2043,10 +2043,7 @@ mod tests {
     fn lock_target_nodes_are_checked() {
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_heigth", 1.0)]),"#),
-            "the node \"t\": unknown prop \"lock_heigth\" (known: lock_height, hurt_radius, \
-             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, \
-             swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, \
-             swing_reach, swing_arc, swing_low, swing_high)"
+            "the node \"t\": unknown prop \"lock_heigth\" (see loom schema: games.souls.props.node)"
         );
         // Any node but the character, target or not. (Until G3.2 this used
         // "hp", which G3.3 made a known prop.)
@@ -2055,10 +2052,7 @@ mod tests {
                 "",
                 r#"(name: "g", children: [(name: "t", props: [("armor", 3)])]),"#
             ),
-            "the node \"g/t\": unknown prop \"armor\" (known: lock_height, hurt_radius, \
-             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, \
-             swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, \
-             swing_reach, swing_arc, swing_low, swing_high)"
+            "the node \"g/t\": unknown prop \"armor\" (see loom schema: games.souls.props.node)"
         );
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_height", 0)]),"#),
@@ -2189,10 +2183,7 @@ mod tests {
             ),
             (
                 r#"(name: "t", props: [("hurt_radius", 0.4), ("hurt_heigth", 1.8)]),"#,
-                "the node \"t\": unknown prop \"hurt_heigth\" (known: lock_height, hurt_radius, \
-                 hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, \
-                 swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, \
-                 swing_reach, swing_arc, swing_low, swing_high)",
+                "the node \"t\": unknown prop \"hurt_heigth\" (see loom schema: games.souls.props.node)",
             ),
         ] {
             assert_eq!(error_with("", nodes), message);
@@ -3789,11 +3780,7 @@ mod tests {
             ),
             (
                 format!(r#"{d}, ("swing_dammage", 3)"#),
-                "the node \"t\": unknown prop \"swing_dammage\" (known: lock_height, \
-                 hurt_radius, hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, \
-                 revive_ticks, swing_damage, swing_impact, swing_startup_ticks, \
-                 swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, \
-                 swing_high)",
+                "the node \"t\": unknown prop \"swing_dammage\" (see loom schema: games.souls.props.node)",
             ),
         ] {
             assert_eq!(node_error(&props), message);

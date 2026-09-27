@@ -1906,19 +1906,554 @@
               },
               "unit": "meters",
               "description": "Above the character's feet: the top of the band the swing sweeps."
+            },
+            {
+              "name": "enemy_speed",
+              "default": null,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters per second",
+              "description": "Makes the node an enemy: how fast it walks up to the character. Per tick, less than hurt_radius."
+            },
+            {
+              "name": "enemy_turn_speed",
+              "default": 180.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "degrees per second",
+              "description": "How fast it turns to the character walking, resting and before a move."
+            },
+            {
+              "name": "enemy_face_angle",
+              "default": 30.0,
+              "rule": {
+                "kind": "positive_at_most",
+                "max": 180.0
+              },
+              "unit": "degrees",
+              "description": "A move starts only with the character at most this far off its facing."
+            },
+            {
+              "name": "enemy_rest_ticks",
+              "default": 40.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "ticks",
+              "description": "The rest after each move: the character's window to hit back."
+            },
+            {
+              "name": "enemy_aggro_range",
+              "default": 15.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "With the character farther than this, horizontally, it stands still."
+            },
+            {
+              "name": "enemy_seed",
+              "default": 1.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "seed",
+              "description": "The seed of its random numbers, which choose its moves."
+            },
+            {
+              "name": "enemy_swing_low",
+              "default": 0.3,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Above its feet: the bottom of the band every move sweeps."
+            },
+            {
+              "name": "enemy_swing_high",
+              "default": 2.4,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Above its feet: the top of the band every move sweeps; above enemy_swing_low."
+            },
+            {
+              "name": "sweep_damage",
+              "default": 25.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Sweep, a wide swing: health each hit takes off the character."
+            },
+            {
+              "name": "sweep_impact",
+              "default": 20.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "Sweep, a wide swing: what each hit adds up against the character's poise."
+            },
+            {
+              "name": "sweep_startup_ticks",
+              "default": 30.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Sweep, a wide swing: the warning before the swing, turning to the character at track_speed."
+            },
+            {
+              "name": "sweep_active_ticks",
+              "default": 8.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Sweep, a wide swing: the swing (for a combo, each cut's)."
+            },
+            {
+              "name": "sweep_recovery_ticks",
+              "default": 30.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Sweep, a wide swing: after the swing (for a combo, the last cut's)."
+            },
+            {
+              "name": "sweep_reach",
+              "default": 3.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Sweep, a wide swing: radius of the swept sector."
+            },
+            {
+              "name": "sweep_arc",
+              "default": 160.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Sweep, a wide swing: angle swept, right to left, centered on the facing."
+            },
+            {
+              "name": "sweep_min_range",
+              "default": 0.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Sweep, a wide swing: chosen only with the character at least this far, horizontally."
+            },
+            {
+              "name": "sweep_max_range",
+              "default": 3.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Sweep, a wide swing: chosen only with the character at most this far; at least min_range."
+            },
+            {
+              "name": "sweep_weight",
+              "default": 3.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "weight",
+              "description": "Sweep, a wide swing: how likely it is chosen, against the weights of the other moves in range; 0: never."
+            },
+            {
+              "name": "sweep_track_speed",
+              "default": 90.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "degrees per second",
+              "description": "Sweep, a wide swing: how fast the enemy turns to the character during the startup."
+            },
+            {
+              "name": "cleave_damage",
+              "default": 45.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Cleave, a narrow far-reaching swing: health each hit takes off the character."
+            },
+            {
+              "name": "cleave_impact",
+              "default": 40.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "Cleave, a narrow far-reaching swing: what each hit adds up against the character's poise."
+            },
+            {
+              "name": "cleave_startup_ticks",
+              "default": 45.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Cleave, a narrow far-reaching swing: the warning before the swing, turning to the character at track_speed."
+            },
+            {
+              "name": "cleave_active_ticks",
+              "default": 4.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Cleave, a narrow far-reaching swing: the swing (for a combo, each cut's)."
+            },
+            {
+              "name": "cleave_recovery_ticks",
+              "default": 40.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Cleave, a narrow far-reaching swing: after the swing (for a combo, the last cut's)."
+            },
+            {
+              "name": "cleave_reach",
+              "default": 4.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Cleave, a narrow far-reaching swing: radius of the swept sector."
+            },
+            {
+              "name": "cleave_arc",
+              "default": 20.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Cleave, a narrow far-reaching swing: angle swept, right to left, centered on the facing."
+            },
+            {
+              "name": "cleave_min_range",
+              "default": 0.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Cleave, a narrow far-reaching swing: chosen only with the character at least this far, horizontally."
+            },
+            {
+              "name": "cleave_max_range",
+              "default": 4.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Cleave, a narrow far-reaching swing: chosen only with the character at most this far; at least min_range."
+            },
+            {
+              "name": "cleave_weight",
+              "default": 2.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "weight",
+              "description": "Cleave, a narrow far-reaching swing: how likely it is chosen, against the weights of the other moves in range; 0: never."
+            },
+            {
+              "name": "cleave_track_speed",
+              "default": 150.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "degrees per second",
+              "description": "Cleave, a narrow far-reaching swing: how fast the enemy turns to the character during the startup."
+            },
+            {
+              "name": "lunge_damage",
+              "default": 30.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Lunge, a charge forward: health each hit takes off the character."
+            },
+            {
+              "name": "lunge_impact",
+              "default": 30.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "Lunge, a charge forward: what each hit adds up against the character's poise."
+            },
+            {
+              "name": "lunge_startup_ticks",
+              "default": 35.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Lunge, a charge forward: the warning before the swing, turning to the character at track_speed."
+            },
+            {
+              "name": "lunge_active_ticks",
+              "default": 10.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Lunge, a charge forward: the swing (for a combo, each cut's)."
+            },
+            {
+              "name": "lunge_recovery_ticks",
+              "default": 35.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Lunge, a charge forward: after the swing (for a combo, the last cut's)."
+            },
+            {
+              "name": "lunge_reach",
+              "default": 2.5,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Lunge, a charge forward: radius of the swept sector."
+            },
+            {
+              "name": "lunge_arc",
+              "default": 90.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Lunge, a charge forward: angle swept, right to left, centered on the facing."
+            },
+            {
+              "name": "lunge_min_range",
+              "default": 4.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Lunge, a charge forward: chosen only with the character at least this far, horizontally."
+            },
+            {
+              "name": "lunge_max_range",
+              "default": 9.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Lunge, a charge forward: chosen only with the character at most this far; at least min_range."
+            },
+            {
+              "name": "lunge_weight",
+              "default": 2.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "weight",
+              "description": "Lunge, a charge forward: how likely it is chosen, against the weights of the other moves in range; 0: never."
+            },
+            {
+              "name": "lunge_track_speed",
+              "default": 180.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "degrees per second",
+              "description": "Lunge, a charge forward: how fast the enemy turns to the character during the startup."
+            },
+            {
+              "name": "combo_damage",
+              "default": 20.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Combo, cuts in a row: health each hit takes off the character."
+            },
+            {
+              "name": "combo_impact",
+              "default": 15.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "Combo, cuts in a row: what each hit adds up against the character's poise."
+            },
+            {
+              "name": "combo_startup_ticks",
+              "default": 25.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Combo, cuts in a row: the warning before the swing, turning to the character at track_speed."
+            },
+            {
+              "name": "combo_active_ticks",
+              "default": 5.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Combo, cuts in a row: the swing (for a combo, each cut's)."
+            },
+            {
+              "name": "combo_recovery_ticks",
+              "default": 45.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Combo, cuts in a row: after the swing (for a combo, the last cut's)."
+            },
+            {
+              "name": "combo_reach",
+              "default": 2.8,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Combo, cuts in a row: radius of the swept sector."
+            },
+            {
+              "name": "combo_arc",
+              "default": 140.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Combo, cuts in a row: angle swept, right to left, centered on the facing."
+            },
+            {
+              "name": "combo_min_range",
+              "default": 0.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Combo, cuts in a row: chosen only with the character at least this far, horizontally."
+            },
+            {
+              "name": "combo_max_range",
+              "default": 2.8,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Combo, cuts in a row: chosen only with the character at most this far; at least min_range."
+            },
+            {
+              "name": "combo_weight",
+              "default": 2.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "weight",
+              "description": "Combo, cuts in a row: how likely it is chosen, against the weights of the other moves in range; 0: never."
+            },
+            {
+              "name": "combo_track_speed",
+              "default": 90.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "degrees per second",
+              "description": "Combo, cuts in a row: how fast the enemy turns to the character during the startup."
+            },
+            {
+              "name": "lunge_distance",
+              "default": 5.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "How far the lunge charges, evenly over its active ticks; per tick, less than hurt_radius."
+            },
+            {
+              "name": "combo_hits",
+              "default": 3.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "cuts",
+              "description": "How many cuts the combo has."
+            },
+            {
+              "name": "combo_gap_ticks",
+              "default": 12.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "ticks",
+              "description": "The wait before each cut of the combo after the first, a startup again."
             }
           ],
           "requires": [
             "hurt_radius and hurt_height: both or neither",
             "hp: needs hurt_radius and hurt_height",
             "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
-            "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, swing_high: need swing_damage"
+            "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, swing_high: need swing_damage",
+            "every enemy_*, sweep_*, cleave_*, lunge_* and combo_* prop but enemy_speed: needs enemy_speed"
           ],
           "constraints": [
             "a swinger: swing_low < swing_high",
             "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
             "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
-            "a swinger: its child named arm, if any, needs a mesh"
+            "a swinger or an enemy: its child named arm, if any, needs a mesh",
+            "an enemy (a node with enemy_speed): <move>_min_range <= <move>_max_range for sweep, cleave, lunge and combo",
+            "an enemy: enemy_swing_low < enemy_swing_high",
+            "an enemy needs hurt_radius, hurt_height, hp and lock_height, is not a swinger, and is a root node other than the camera",
+            "an enemy: enemy_speed / 60 and lunge_distance / lunge_active_ticks are less than hurt_radius",
+            "an enemy has no collider in its subtree"
           ]
         }
       },
@@ -2069,12 +2604,129 @@
               }
             ]
           },
+          "EnemyCondition": {
+            "description": "What an enemy is doing; serialized in snake case.",
+            "oneOf": [
+              {
+                "description": "Standing, or turning on the spot.",
+                "type": "string",
+                "const": "idle"
+              },
+              {
+                "description": "Walking up to the character.",
+                "type": "string",
+                "const": "chase"
+              },
+              {
+                "description": "Doing a move.",
+                "type": "string",
+                "const": "attack"
+              },
+              {
+                "description": "Resting after a move.",
+                "type": "string",
+                "const": "rest"
+              },
+              {
+                "description": "Staggered: its hurtbox's health says so.",
+                "type": "string",
+                "const": "stagger"
+              },
+              {
+                "description": "Lying dead: its hurtbox's health says so.",
+                "type": "string",
+                "const": "dead"
+              }
+            ]
+          },
+          "EnemyState": {
+            "description": "An enemy in the state dump (`game.enemies`).",
+            "type": "object",
+            "properties": {
+              "facing": {
+                "description": "Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.",
+                "type": "number",
+                "format": "float"
+              },
+              "hit": {
+                "description": "Which cut of a combo, from 1; 0 for the other moves and outside\n`attack`.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "move": {
+                "description": "The move being done; `None` outside `attack`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/MoveKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "move_tick": {
+                "description": "Which tick of the move, from 1; 0 outside `attack`.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "node": {
+                "description": "The node's path.",
+                "type": "string"
+              },
+              "phase": {
+                "description": "The part of the move; the wait between two cuts of a combo is\n`startup`. `None` outside `attack`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AttackPhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rest": {
+                "description": "Ticks of rest left.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "rng": {
+                "description": "The state of its random numbers.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "state": {
+                "$ref": "#/$defs/EnemyCondition"
+              }
+            },
+            "required": [
+              "node",
+              "state",
+              "move",
+              "move_tick",
+              "phase",
+              "hit",
+              "facing",
+              "rest",
+              "rng"
+            ]
+          },
           "GameState": {
             "description": "The game state in the state dump (`game`).",
             "type": "object",
             "properties": {
               "camera": {
                 "$ref": "#/$defs/CameraState"
+              },
+              "enemies": {
+                "description": "Every enemy, in pre-order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/EnemyState"
+                }
               },
               "hurtboxes": {
                 "description": "Every hurtbox, in pre-order.",
@@ -2106,7 +2758,8 @@
               "camera",
               "lock",
               "hurtboxes",
-              "swingers"
+              "swingers",
+              "enemies"
             ]
           },
           "HealthState": {
@@ -2216,6 +2869,31 @@
               "tick",
               "attack",
               "combo"
+            ]
+          },
+          "MoveKind": {
+            "description": "One of the moves every enemy has; serialized in lower case.",
+            "oneOf": [
+              {
+                "description": "A wide horizontal swing.",
+                "type": "string",
+                "const": "sweep"
+              },
+              {
+                "description": "A narrow, far-reaching swing.",
+                "type": "string",
+                "const": "cleave"
+              },
+              {
+                "description": "A charge forward, swinging on the way.",
+                "type": "string",
+                "const": "lunge"
+              },
+              {
+                "description": "Several cuts in a row, every other one left to right.",
+                "type": "string",
+                "const": "combo"
+              }
             ]
           },
           "PlayerHit": {
@@ -2592,6 +3270,116 @@
               }
             ]
           },
+          "EnemyCondition": {
+            "description": "What an enemy is doing; serialized in snake case.",
+            "oneOf": [
+              {
+                "description": "Standing, or turning on the spot.",
+                "type": "string",
+                "const": "idle"
+              },
+              {
+                "description": "Walking up to the character.",
+                "type": "string",
+                "const": "chase"
+              },
+              {
+                "description": "Doing a move.",
+                "type": "string",
+                "const": "attack"
+              },
+              {
+                "description": "Resting after a move.",
+                "type": "string",
+                "const": "rest"
+              },
+              {
+                "description": "Staggered: its hurtbox's health says so.",
+                "type": "string",
+                "const": "stagger"
+              },
+              {
+                "description": "Lying dead: its hurtbox's health says so.",
+                "type": "string",
+                "const": "dead"
+              }
+            ]
+          },
+          "EnemyState": {
+            "description": "An enemy in the state dump (`game.enemies`).",
+            "type": "object",
+            "properties": {
+              "facing": {
+                "description": "Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.",
+                "type": "number",
+                "format": "float"
+              },
+              "hit": {
+                "description": "Which cut of a combo, from 1; 0 for the other moves and outside\n`attack`.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "move": {
+                "description": "The move being done; `None` outside `attack`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/MoveKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "move_tick": {
+                "description": "Which tick of the move, from 1; 0 outside `attack`.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "node": {
+                "description": "The node's path.",
+                "type": "string"
+              },
+              "phase": {
+                "description": "The part of the move; the wait between two cuts of a combo is\n`startup`. `None` outside `attack`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AttackPhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rest": {
+                "description": "Ticks of rest left.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "rng": {
+                "description": "The state of its random numbers.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "state": {
+                "$ref": "#/$defs/EnemyCondition"
+              }
+            },
+            "required": [
+              "node",
+              "state",
+              "move",
+              "move_tick",
+              "phase",
+              "hit",
+              "facing",
+              "rest",
+              "rng"
+            ]
+          },
           "Event": {
             "description": "One event; serialized as an object whose first field is `type`.",
             "oneOf": [
@@ -2845,6 +3633,42 @@
                   "type",
                   "position"
                 ]
+              },
+              {
+                "description": "An enemy chose a move (step 5c), before that move's first tick.",
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "description": "The enemy's node path.",
+                    "type": "string"
+                  },
+                  "candidates": {
+                    "description": "The moves it chose from, in their order.",
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/MoveKind"
+                    }
+                  },
+                  "distance": {
+                    "description": "The character's horizontal distance.",
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "move": {
+                    "$ref": "#/$defs/MoveKind"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "enemy_move"
+                  }
+                },
+                "required": [
+                  "type",
+                  "by",
+                  "move",
+                  "distance",
+                  "candidates"
+                ]
               }
             ]
           },
@@ -2854,6 +3678,13 @@
             "properties": {
               "camera": {
                 "$ref": "#/$defs/CameraState"
+              },
+              "enemies": {
+                "description": "Every enemy, in pre-order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/EnemyState"
+                }
               },
               "hurtboxes": {
                 "description": "Every hurtbox, in pre-order.",
@@ -2885,7 +3716,8 @@
               "camera",
               "lock",
               "hurtboxes",
-              "swingers"
+              "swingers",
+              "enemies"
             ]
           },
           "HealthState": {
@@ -2927,12 +3759,16 @@
             ]
           },
           "HitAttack": {
-            "description": "What hit: the character's light or heavy attack, or a swinger.",
+            "description": "What hit: the character's light or heavy attack, a swinger, or an\nenemy's move.",
             "type": "string",
             "enum": [
               "attack",
               "heavy",
-              "swing"
+              "swing",
+              "sweep",
+              "cleave",
+              "lunge",
+              "combo"
             ]
           },
           "HurtboxState": {
@@ -3040,6 +3876,31 @@
                 "description": "The character died.",
                 "type": "string",
                 "const": "died"
+              }
+            ]
+          },
+          "MoveKind": {
+            "description": "One of the moves every enemy has; serialized in lower case.",
+            "oneOf": [
+              {
+                "description": "A wide horizontal swing.",
+                "type": "string",
+                "const": "sweep"
+              },
+              {
+                "description": "A narrow, far-reaching swing.",
+                "type": "string",
+                "const": "cleave"
+              },
+              {
+                "description": "A charge forward, swinging on the way.",
+                "type": "string",
+                "const": "lunge"
+              },
+              {
+                "description": "Several cuts in a row, every other one left to right.",
+                "type": "string",
+                "const": "combo"
               }
             ]
           },
@@ -3574,6 +4435,42 @@
               "type",
               "position"
             ]
+          },
+          {
+            "description": "An enemy chose a move (step 5c), before that move's first tick.",
+            "type": "object",
+            "properties": {
+              "by": {
+                "description": "The enemy's node path.",
+                "type": "string"
+              },
+              "candidates": {
+                "description": "The moves it chose from, in their order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/MoveKind"
+                }
+              },
+              "distance": {
+                "description": "The character's horizontal distance.",
+                "type": "number",
+                "format": "float"
+              },
+              "move": {
+                "$ref": "#/$defs/MoveKind"
+              },
+              "type": {
+                "type": "string",
+                "const": "enemy_move"
+              }
+            },
+            "required": [
+              "type",
+              "by",
+              "move",
+              "distance",
+              "candidates"
+            ]
           }
         ],
         "$defs": {
@@ -3667,12 +4564,16 @@
             ]
           },
           "HitAttack": {
-            "description": "What hit: the character's light or heavy attack, or a swinger.",
+            "description": "What hit: the character's light or heavy attack, a swinger, or an\nenemy's move.",
             "type": "string",
             "enum": [
               "attack",
               "heavy",
-              "swing"
+              "swing",
+              "sweep",
+              "cleave",
+              "lunge",
+              "combo"
             ]
           },
           "Input": {
@@ -3709,6 +4610,31 @@
                 "description": "The character died.",
                 "type": "string",
                 "const": "died"
+              }
+            ]
+          },
+          "MoveKind": {
+            "description": "One of the moves every enemy has; serialized in lower case.",
+            "oneOf": [
+              {
+                "description": "A wide horizontal swing.",
+                "type": "string",
+                "const": "sweep"
+              },
+              {
+                "description": "A narrow, far-reaching swing.",
+                "type": "string",
+                "const": "cleave"
+              },
+              {
+                "description": "A charge forward, swinging on the way.",
+                "type": "string",
+                "const": "lunge"
+              },
+              {
+                "description": "Several cuts in a row, every other one left to right.",
+                "type": "string",
+                "const": "combo"
               }
             ]
           },

@@ -9,12 +9,14 @@
 //! this crate's `clippy.toml`). See `docs/architecture.md` sections 1 and 4.
 
 mod demo;
+mod enemy;
 mod events;
 mod game;
 mod health;
 mod moves;
 
 pub use demo::{bindings, demo_scene, demo_scene_source};
+pub use enemy::{EnemyCondition, EnemyState, MoveKind};
 pub use events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
 pub use game::{
     ATTACK, CameraState, DEBUG_CATEGORIES, Game, GameError, GameState, HEAVY, HurtboxState, LOCK,

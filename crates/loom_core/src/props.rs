@@ -22,6 +22,8 @@ pub enum PropRule {
     Below { min: f64, max: f64 },
     /// An angle in degrees, greater than 0 and at most 360.
     Arc,
+    /// Greater than 0 and at most `max`.
+    PositiveAtMost { max: f64 },
     /// Any number: checked only against other props (see the group's
     /// constraints).
     Any,
@@ -40,6 +42,7 @@ impl PropRule {
             }
             Self::Below { min, max } => (min..max).contains(&value),
             Self::Arc => value > 0.0 && value <= 360.0,
+            Self::PositiveAtMost { max } => value > 0.0 && value <= max,
             Self::Any => true,
         }
     }
@@ -59,6 +62,7 @@ impl std::fmt::Display for PropRule {
             } => write!(f, "a whole number from {min} to {max}"),
             Self::Below { min, max } => write!(f, "at least {min} and less than {max}"),
             Self::Arc => write!(f, "greater than 0 and at most 360"),
+            Self::PositiveAtMost { max } => write!(f, "greater than 0 and at most {max}"),
             Self::Any => write!(f, "a number"),
         }
     }
@@ -95,7 +99,7 @@ mod tests {
 
     #[test]
     fn each_rule_allows_exactly_its_range() {
-        let cases: [(PropRule, &[f64], &[f64]); 6] = [
+        let cases: [(PropRule, &[f64], &[f64]); 7] = [
             (PropRule::Positive, &[0.001, 5.0], &[0.0, -1.0]),
             (PropRule::AtLeast { min: 0.0 }, &[0.0, 0.5], &[-0.001]),
             (
@@ -120,6 +124,11 @@ mod tests {
                 &[90.0, -0.1],
             ),
             (PropRule::Arc, &[0.1, 360.0], &[0.0, 360.1]),
+            (
+                PropRule::PositiveAtMost { max: 180.0 },
+                &[0.1, 180.0],
+                &[0.0, 180.1],
+            ),
         ];
         for (rule, ok, bad) in cases {
             for &v in ok {
@@ -156,6 +165,10 @@ mod tests {
                 "at least 0 and less than 90",
             ),
             (PropRule::Arc, "greater than 0 and at most 360"),
+            (
+                PropRule::PositiveAtMost { max: 180.0 },
+                "greater than 0 and at most 180",
+            ),
         ];
         for (rule, text) in texts {
             assert_eq!(rule.to_string(), text);
@@ -189,6 +202,10 @@ mod tests {
             r#"{"kind":"below","min":0.0,"max":90.0}"#
         );
         assert_eq!(json(PropRule::Arc), r#"{"kind":"arc"}"#);
+        assert_eq!(
+            json(PropRule::PositiveAtMost { max: 180.0 }),
+            r#"{"kind":"positive_at_most","max":180.0}"#
+        );
         assert_eq!(json(PropRule::Any), r#"{"kind":"any"}"#);
     }
 }

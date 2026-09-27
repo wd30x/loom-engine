@@ -237,7 +237,8 @@ const SCENARIO_A: &str = concat!(
     "    },\n",
     "    \"lock\": null,\n",
     "    \"hurtboxes\": [],\n",
-    "    \"swingers\": []\n",
+    "    \"swingers\": [],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -470,7 +471,8 @@ const SCENARIO_B: &str = concat!(
     "    },\n",
     "    \"lock\": null,\n",
     "    \"hurtboxes\": [],\n",
-    "    \"swingers\": []\n",
+    "    \"swingers\": [],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -1944,7 +1946,8 @@ const SOULS_MOVES_STATE: &str = concat!(
     "    },\n",
     "    \"lock\": null,\n",
     "    \"hurtboxes\": [],\n",
-    "    \"swingers\": []\n",
+    "    \"swingers\": [],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -2215,7 +2218,8 @@ const SOULS_ATTACKS_STATE: &str = concat!(
     "    },\n",
     "    \"lock\": null,\n",
     "    \"hurtboxes\": [],\n",
-    "    \"swingers\": []\n",
+    "    \"swingers\": [],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -2861,7 +2865,8 @@ const SOULS_LOCK_STATE: &str = concat!(
     "        \"swing_tick\": 120,\n",
     "        \"phase\": \"recovery\"\n",
     "      }\n",
-    "    ]\n",
+    "    ],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -3502,7 +3507,8 @@ const SOULS_COMBO_HITS_STATE: &str = concat!(
     "        \"swing_tick\": 80,\n",
     "        \"phase\": \"recovery\"\n",
     "      }\n",
-    "    ]\n",
+    "    ],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -4167,7 +4173,8 @@ const SOULS_KILL_STATE: &str = concat!(
     "        \"swing_tick\": 90,\n",
     "        \"phase\": \"recovery\"\n",
     "      }\n",
-    "    ]\n",
+    "    ],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -4845,7 +4852,8 @@ const SOULS_STAKE_STATE: &str = concat!(
     "        \"swing_tick\": 43,\n",
     "        \"phase\": \"active\"\n",
     "      }\n",
-    "    ]\n",
+    "    ],\n",
+    "    \"enemies\": []\n",
     "  }\n",
     "}\n",
 );
@@ -5333,7 +5341,7 @@ fn every_repository_scene_fits_the_scene_schema_and_broken_ones_do_not() {
         .filter(|p| p.extension().is_some_and(|x| x == "ron"))
         .collect();
     assets.sort();
-    assert_eq!(assets.len(), 2, "{assets:?}");
+    assert_eq!(assets.len(), 3, "{assets:?}");
     files.extend(assets);
     let scene = validator(&["scene"]);
     let as_json = |file: &PathBuf| -> Value {
@@ -5395,4 +5403,524 @@ fn every_expected_state_dump_fits_its_games_state_dump_schema() {
         .expect("the player is an object")
         .remove("stamina");
     assert!(!souls.is_valid(&dump));
+}
+
+// ---------------------------------------------------------------- the boss
+
+/// The boss fight: walk up (ticks 1-39), take the boss's cleave, backstep
+/// through the next one (tapped on 320-321), lock on (330), walk in
+/// (335-369) and attack three times, the last two buffered.
+const BOSS_SCRIPT: &str = concat!(
+    "(version: 1, tick_hz: 60, events: [",
+    "(tick: 320, action: \"roll\", down: true), (tick: 321, action: \"roll\", down: false), ",
+    "(tick: 330, action: \"lock\", down: true), (tick: 331, action: \"lock\", down: false), ",
+    "(tick: 372, action: \"attack\", down: true), (tick: 373, action: \"attack\", down: false), ",
+    "(tick: 390, action: \"attack\", down: true), (tick: 391, action: \"attack\", down: false), ",
+    "(tick: 420, action: \"attack\", down: true), (tick: 421, action: \"attack\", down: false)",
+    "], axes: [",
+    "(tick: 1, axis: \"move_y\", value: 1.0), (tick: 40, axis: \"move_y\", value: 0.0), ",
+    "(tick: 335, axis: \"move_y\", value: 1.0), (tick: 370, axis: \"move_y\", value: 0.0)",
+    "])\n",
+);
+
+/// State after 460 ticks of `BOSS_SCRIPT` on assets/scenes/boss.ron.
+const BOSS_STATE: &str = concat!(
+    "{\n",
+    "  \"tick\": 460,\n",
+    "  \"sim_time\": 7.666666666666667,\n",
+    "  \"actions\": [],\n",
+    "  \"axes\": {\n",
+    "    \"look_x\": 0.0,\n",
+    "    \"look_y\": 0.0,\n",
+    "    \"move_x\": 0.0,\n",
+    "    \"move_y\": 0.0\n",
+    "  },\n",
+    "  \"nodes\": {\n",
+    "    \"boss\": {\n",
+    "      \"position\": [\n",
+    "        -4.3711393e-7,\n",
+    "        0.0,\n",
+    "        2.166669\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        -1.0,\n",
+    "        0.0,\n",
+    "        7.54979e-8\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"boss/arm\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.8,\n",
+    "        -1.9\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.15,\n",
+    "        0.15,\n",
+    "        2.8\n",
+    "      ]\n",
+    "    },\n",
+    "    \"boss/body\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"boss/hp_bar\": {\n",
+    "      \"position\": [\n",
+    "        -0.08000002,\n",
+    "        3.4,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.4399999,\n",
+    "        0.1,\n",
+    "        0.1\n",
+    "      ]\n",
+    "    },\n",
+    "    \"ground\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        40.0,\n",
+    "        1.0,\n",
+    "        40.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"main_cam\": {\n",
+    "      \"position\": [\n",
+    "        1.0773516e-7,\n",
+    "        1.5179029,\n",
+    "        8.066629\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.0022378694,\n",
+    "        4.6173845e-8,\n",
+    "        1.033313e-10,\n",
+    "        0.9999975\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/a\": {\n",
+    "      \"position\": [\n",
+    "        -7.0,\n",
+    "        1.5,\n",
+    "        -8.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/b\": {\n",
+    "      \"position\": [\n",
+    "        7.0,\n",
+    "        1.5,\n",
+    "        -8.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/c\": {\n",
+    "      \"position\": [\n",
+    "        -7.0,\n",
+    "        1.5,\n",
+    "        4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/d\": {\n",
+    "      \"position\": [\n",
+    "        7.0,\n",
+    "        1.5,\n",
+    "        4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        -2.6165281e-7,\n",
+    "        0.0,\n",
+    "        4.0666695\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.17364818,\n",
+    "        4.5472486e-8,\n",
+    "        -1.8202119e-8,\n",
+    "        0.9848077\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player/visor\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.5,\n",
+    "        -0.3\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.4,\n",
+    "        0.15,\n",
+    "        0.3\n",
+    "      ]\n",
+    "    },\n",
+    "    \"sun\": {\n",
+    "      \"position\": [\n",
+    "        4.0,\n",
+    "        8.0,\n",
+    "        3.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.43359014,\n",
+    "        0.39115202,\n",
+    "        0.21679507,\n",
+    "        0.78230405\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    }\n",
+    "  },\n",
+    "  \"game\": {\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        -2.6165281e-7,\n",
+    "        0.0,\n",
+    "        4.0666695\n",
+    "      ],\n",
+    "      \"facing\": 9.2347946e-8,\n",
+    "      \"stamina\": 43.75,\n",
+    "      \"stamina_wait\": 22,\n",
+    "      \"action\": \"idle\",\n",
+    "      \"action_tick\": 0,\n",
+    "      \"invulnerable\": false,\n",
+    "      \"attack_phase\": null,\n",
+    "      \"combo\": 0,\n",
+    "      \"buffered\": null,\n",
+    "      \"hits\": 2,\n",
+    "      \"last_hit\": {\n",
+    "        \"tick\": 452,\n",
+    "        \"by\": \"boss\"\n",
+    "      },\n",
+    "      \"health\": {\n",
+    "        \"hp\": 10.0,\n",
+    "        \"state\": \"stagger\",\n",
+    "        \"state_ticks\": 22,\n",
+    "        \"impact\": 0.0,\n",
+    "        \"impact_wait\": 52\n",
+    "      }\n",
+    "    },\n",
+    "    \"camera\": {\n",
+    "      \"yaw\": 9.2347925e-8,\n",
+    "      \"pitch\": -0.0044757426,\n",
+    "      \"distance\": 4.0\n",
+    "    },\n",
+    "    \"lock\": \"boss\",\n",
+    "    \"hurtboxes\": [\n",
+    "      {\n",
+    "        \"node\": \"boss\",\n",
+    "        \"hits\": 3,\n",
+    "        \"last_hit\": {\n",
+    "          \"tick\": 443,\n",
+    "          \"attack\": \"attack\",\n",
+    "          \"combo\": 3\n",
+    "        },\n",
+    "        \"health\": {\n",
+    "          \"hp\": 540.0,\n",
+    "          \"state\": \"ok\",\n",
+    "          \"state_ticks\": 0,\n",
+    "          \"impact\": 30.0,\n",
+    "          \"impact_wait\": 43\n",
+    "        }\n",
+    "      }\n",
+    "    ],\n",
+    "    \"swingers\": [],\n",
+    "    \"enemies\": [\n",
+    "      {\n",
+    "        \"node\": \"boss\",\n",
+    "        \"state\": \"attack\",\n",
+    "        \"move\": \"cleave\",\n",
+    "        \"move_tick\": 54,\n",
+    "        \"phase\": \"recovery\",\n",
+    "        \"hit\": 0,\n",
+    "        \"facing\": -3.1415925,\n",
+    "        \"rest\": 0,\n",
+    "        \"rng\": 8709371129873690715\n",
+    "      }\n",
+    "    ]\n",
+    "  }\n",
+    "}\n",
+);
+
+/// SplitMix64's step: the boss's `rng` after `n` numbers from seed 7.
+fn boss_rng(n: u64) -> u64 {
+    7_u64.wrapping_add(n.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
+
+#[test]
+fn boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time() {
+    let dir = test_dir("boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time");
+    let script = write_file(&dir, "boss.ron", BOSS_SCRIPT);
+    let scene = repo_root().join("assets/scenes/boss.ron");
+    let at = |frames: &str| -> Value {
+        let state = dir.join(format!("{frames}.json"));
+        run_headless_replay_on(Some(&scene), frames, &script, &state);
+        serde_json::from_str(&fs::read_to_string(&state).expect("the state dump was written"))
+            .expect("state file is valid JSON")
+    };
+    let boss = |dump: &Value| {
+        let e = &dump["game"]["enemies"][0];
+        assert_eq!(e["node"], "boss");
+        (
+            e["state"].clone(),
+            e["move"].clone(),
+            e["move_tick"].clone(),
+            e["phase"].clone(),
+            e["rng"].as_u64().expect("rng is a whole number"),
+        )
+    };
+    let health = |dump: &Value| {
+        let h = &dump["game"]["player"]["health"];
+        (h["hp"].clone(), h["state"].clone())
+    };
+    // Walking up since tick 1 at 4 m/s, the boss at 2.5 m/s: 8.9 m apart on
+    // tick 29, in the lunge's range (4..=9) only: chosen, its first number.
+    let s = at("29");
+    assert_eq!(
+        boss(&s),
+        (
+            "attack".into(),
+            "lunge".into(),
+            1.into(),
+            "startup".into(),
+            boss_rng(1)
+        )
+    );
+    // The cleave chosen on tick 149 hits on its first active tick, 149 +
+    // 45: 100 - 45 hp, staggered (poise 0).
+    let s = at("194");
+    assert_eq!(
+        boss(&s),
+        (
+            "attack".into(),
+            "cleave".into(),
+            46.into(),
+            "active".into(),
+            boss_rng(2)
+        )
+    );
+    assert_eq!(health(&s), (55.0.into(), "stagger".into()));
+    // The next cleave (tick 278) is backstepped through: no hit.
+    let s = at("326");
+    assert_eq!(
+        boss(&s),
+        (
+            "attack".into(),
+            "cleave".into(),
+            49.into(),
+            "active".into(),
+            boss_rng(3)
+        )
+    );
+    assert_eq!(health(&s), (55.0.into(), "ok".into()));
+    // Resting, then close: all but the lunge in range. The fourth number
+    // modulo 3 + 2 + 2 is 3: past the sweep's 3, within the cleave's 5.
+    let s = at("407");
+    assert_eq!(
+        boss(&s),
+        (
+            "attack".into(),
+            "cleave".into(),
+            1.into(),
+            "startup".into(),
+            boss_rng(4)
+        )
+    );
+
+    // The whole state on the last tick, and the trace of two runs.
+    let trace = |name: &str| {
+        let (trace, state) = (
+            dir.join(format!("{name}.jsonl")),
+            dir.join(format!("{name}.json")),
+        );
+        let out = run_loom(&[
+            "run",
+            "--headless",
+            "--frames",
+            "460",
+            "--scene",
+            path_str(&scene),
+            "--input",
+            path_str(&script),
+            "--trace",
+            path_str(&trace),
+            "--dump-state",
+            path_str(&state),
+        ]);
+        let r = report(&out);
+        assert_eq!(out.code, 0, "{r}");
+        assert_eq!(
+            fs::read_to_string(&state).expect("the state dump was written"),
+            BOSS_STATE
+        );
+        fs::read_to_string(&trace).expect("the trace was written")
+    };
+    let first = trace("one");
+    assert_eq!(first, trace("two"));
+    assert_trace_fits(&first, "souls");
+    let events = trace_events(&first);
+    let moves: Vec<(u64, &Value, &Value)> = events
+        .iter()
+        .filter(|(_, e)| e["type"] == "enemy_move")
+        .map(|(t, e)| (*t, &e["move"], &e["candidates"]))
+        .collect();
+    let moves: Vec<(u64, String, Value)> = moves
+        .into_iter()
+        .map(|(t, m, c)| (t, m.as_str().expect("a move").to_owned(), c.clone()))
+        .collect();
+    assert_eq!(
+        moves,
+        [
+            (29, "lunge".to_owned(), serde_json::json!(["lunge"])),
+            (149, "cleave".to_owned(), serde_json::json!(["cleave"])),
+            (278, "cleave".to_owned(), serde_json::json!(["cleave"])),
+            (
+                407,
+                "cleave".to_owned(),
+                serde_json::json!(["sweep", "cleave", "combo"])
+            ),
+        ]
+    );
+    // Hits both ways and the dodges, by tick.
+    let hits: Vec<(u64, String)> = events
+        .iter()
+        .filter(|(_, e)| e["type"] == "hit" || e["type"] == "dodged")
+        .map(|(t, e)| {
+            let kind = e["type"].as_str().expect("a type");
+            (*t, format!("{kind} {} {}", e["by"], e["attack"]))
+        })
+        .collect();
+    let want: Vec<(u64, String)> = [
+        (194, r#"hit "boss" "cleave""#),
+        (323, r#"dodged "boss" null"#),
+        (324, r#"dodged "boss" null"#),
+        (325, r#"dodged "boss" null"#),
+        (326, r#"dodged "boss" null"#),
+        (383, r#"hit "player" "attack""#),
+        (413, r#"hit "player" "attack""#),
+        (443, r#"hit "player" "attack""#),
+        (452, r#"hit "boss" "cleave""#),
+    ]
+    .iter()
+    .map(|&(t, s)| (t, s.to_owned()))
+    .collect();
+    assert_eq!(hits, want);
 }

@@ -8,6 +8,7 @@ use glam::Vec3;
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::enemy::MoveKind;
 use crate::moves::{Action, Buffered};
 
 /// One event; serialized as an object whose first field is `type`.
@@ -75,15 +76,42 @@ pub enum Event {
         #[schemars(with = "[f32; 3]")]
         position: Vec3,
     },
+    /// An enemy chose a move (step 5c), before that move's first tick.
+    EnemyMove {
+        /// The enemy's node path.
+        by: String,
+        #[serde(rename = "move")]
+        r#move: MoveKind,
+        /// The character's horizontal distance.
+        distance: f32,
+        /// The moves it chose from, in their order.
+        candidates: Vec<MoveKind>,
+    },
 }
 
-/// What hit: the character's light or heavy attack, or a swinger.
+/// What hit: the character's light or heavy attack, a swinger, or an
+/// enemy's move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum HitAttack {
     Attack,
     Heavy,
     Swing,
+    Sweep,
+    Cleave,
+    Lunge,
+    Combo,
+}
+
+impl From<MoveKind> for HitAttack {
+    fn from(kind: MoveKind) -> Self {
+        match kind {
+            MoveKind::Sweep => Self::Sweep,
+            MoveKind::Cleave => Self::Cleave,
+            MoveKind::Lunge => Self::Lunge,
+            MoveKind::Combo => Self::Combo,
+        }
+    }
 }
 
 /// What a hit did to the target.
