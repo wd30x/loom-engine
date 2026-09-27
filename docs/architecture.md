@@ -1669,6 +1669,62 @@ match state:
 - 敌人的 `hit` 事件的 `combo` 恒为 0，连击的第几刀要看状态里的 `hit`。
 - 一招的最后一个 tick，状态导出里已经是 `rest`（或 `idle`），`move` 为 `null`。
 
+### 走近（G4.2 起）
+
+G4.1 的问题（1200 tick 观察）：只要有一招能用，敌人就不再走近。下劈的范围最远，所以 Boss 从远处走过来后，停在 4 米处一直下劈。
+
+用户决定（2026-09-27）：
+- **「走近」也算一个选项**：选招时，把「朝玩家走一段」和招式放在一起按权重随机选。距离越远，越容易选中它。
+- **Boss 的 `poise` 降到 50**：连续两下重攻击，或者五下轻攻击，就能打出硬直。
+
+**新的 props**（敌人的，都可以省略，写了必须有 `enemy_speed`；接在敌人 props 的最后，节点 props 变成 75 个）：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `approach_min_range` | 2 | 米，≥ 0。距离超过它，「走近」才是候选 |
+| `approach_weight_per_meter` | 2 | ≥ 0。「走近」的权重是 `floor(approach_weight_per_meter * (d - approach_min_range))`，算出来是 0 就不是候选 |
+| `approach_ticks` | 30 | 整数 ≥ 1。选中后最多走多少 tick |
+
+- 默认值下：4 米处，下劈 2、突进 2（范围正好从 4 米开始）、走近 4，走近的概率是 1/2；3.5 米处，下劈 2、走近 3；2.5 米处，横扫 3、下劈 2、连击 2、走近 1。
+- 权重的算法：`f32` 乘法和减法，然后 `floorf`（libm），再转成 `u32`。
+
+**选招**（替换「敌人和 Boss」伪代码里 `idle 或 chase` 分支的候选部分）：
+
+```text
+候选 = weight > 0 且 min_range <= d <= max_range 的招，按 sweep、cleave、lunge、combo 的顺序
+w = floor(approach_weight_per_meter * (d - approach_min_range))，d > approach_min_range 时才算
+if w >= 1: 候选最后加上 approach，权重 w
+```
+
+- 候选不为空、朝向也对得上时，照原来的方法按权重选。选中招式同原来；选中 `approach`：
+  - 发 `enemy_move` 事件（`move` 是 `"approach"`，`candidates` 里也有 `"approach"`）；
+  - `state = chase`，`chase = approach_ticks`；
+  - 这个 tick 就按下面的 `chase` 规则走第一步。
+- 候选**只有** `approach`，也要朝向对得上才选；朝向对不上时照原来原地转（`idle`）。
+- 候选为空（离得比所有招都远，并且走近的权重也是 0）：照原来一边转一边走，`state = chase`，`chase` 保持 0。
+
+**`chase` 状态**：
+
+```text
+if chase > 0:                                     // 选中了「走近」
+    朝玩家转（enemy_turn_speed）; 朝玩家走 enemy_speed / 60（带碰撞）
+    chase -= 1
+    if chase == 0 || d_走完之后 <= approach_min_range: chase = 0; state = idle
+else:                                             // 候选为空时的走路，同 G4.1
+    按 idle 的规则重新判断（每个 tick 都选一次）
+```
+
+- `d_走完之后` 是这一步走完、推开之后的水平距离。
+- 走近途中被打出硬直、打死，或者角色跑出仇恨范围、角色死了：`chase = 0`，按原来的规则处理。
+
+**状态导出**：`enemies` 的每项在 `rest` 后面多一个 `chase`（走近还剩多少 tick，不在走近时是 0）。
+
+**G4.1 留下的两处小问题，一起改**：
+- **离开 `rest` 就清零**：不管从哪条路径离开 `rest` 状态（休息完、角色死了、超出仇恨范围、被打出硬直），`rest` 都设成 0。`chase` 同理：离开 `chase` 状态就是 0。导出里不会再出现 `state` 是 `idle`、`rest` 却是 40 这种过期的值。
+- **删掉 `the enemy "<路径>" must be a root node, and not the camera`**：敌人必须有 `lock_height`，而锁定目标的根节点检查排在前面，所以这条永远走不到。检查顺序里去掉「根节点」这一步。
+
+**Boss 场景**：`poise` 改成 50，三个新 prop 写出来（值等于默认值，带英文注释）。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
