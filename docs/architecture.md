@@ -1725,6 +1725,124 @@ else:                                             // 候选为空时的走路，
 
 **Boss 场景**：`poise` 改成 50，三个新 prop 写出来（值等于默认值，带英文注释）。
 
+### 二阶段（G4.3 起）
+
+用户决定（2026-09-27）：
+- **血量降到一半进入二阶段**，阈值是 prop。
+- **咆哮加冲击波**：打断当前动作，原地咆哮一段时间（无敌、变色）；咆哮开始后不久，对身边一圈造成伤害和冲击，逼玩家拉开或者翻滚。
+- **二阶段变强**：
+  - 更快：前摇和休息缩短，走路和转向加快；
+  - 连击多一刀；
+  - 新招「回旋斩」：原地转一圈的 360° 横扫，只在二阶段出现；
+  - 外观变化：身体变成暗红色。
+- 另外（G4.2 审查时用户定）：走近的权重加上限 `approach_weight_max`，默认 4。这样远处也有大约 1/3 的机会出突进。
+
+**新的 props**（敌人的，都可以省略，写了必须有 `enemy_speed`；接在敌人 props 的最后）：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `approach_weight_max` | 4 | 整数 ≥ 0。「走近」权重的上限：`w = min(floor(…), approach_weight_max)` |
+| `phase2_at` | 无 | 0 < v < 1。血量占满血的比例降到不超过它时进入二阶段。不写就没有二阶段 |
+| `phase2_speed_scale` | 0.75 | 0 < v ≤ 1。二阶段的时间系数，见下 |
+| `phase2_combo_hits` | 4 | 整数 ≥ 1。二阶段连击的刀数 |
+| `roar_ticks` | 70 | 整数 ≥ 1。咆哮一共多少 tick |
+| `roar_blast_tick` | 20 | 整数 ≥ 1，≤ `roar_ticks`。咆哮的第几个 tick 放出冲击波 |
+| `roar_damage` | 30 | > 0 |
+| `roar_impact` | 40 | ≥ 0 |
+| `roar_reach` | 4 | 米，> 0。冲击波的半径 |
+
+- `phase2_speed_scale` 等 7 个 phase2、roar 开头的 prop 只在写了 `phase2_at` 时才有意义；没写 `phase2_at` 却写了它们，报 `the node "<路径>": prop "<p>" needs phase2_at`。
+- 新招 `spin` 有和其他招式一样的 11 个 prop（`spin_damage` 等），默认值：
+
+| 后缀 | `spin` |
+|---|---|
+| `damage` | 40 |
+| `impact` | 40 |
+| `startup_ticks` | 50 |
+| `active_ticks` | 12 |
+| `recovery_ticks` | 40 |
+| `reach` | 3.5 |
+| `arc` | 360 |
+| `min_range` | 0 |
+| `max_range` | 3.5 |
+| `weight` | 2 |
+| `track_speed` | 0 |
+
+  - `spin` 的 prop 不需要 `phase2_at` 也能写（没有二阶段时它们没有作用，但检查照常）。
+- 节点 props 增加 20 个（`approach_weight_max`、8 个 phase2 和 roar、11 个 spin），变成 95 个。
+- 新的报错：
+  - `the node "<路径>": prop "<p>" needs phase2_at`；
+  - `the node "<路径>": needs roar_blast_tick <= roar_ticks`；
+  - `spin_min_range <= spin_max_range` 用已有的那条文案；
+  - 二阶段的走路步长（`enemy_speed / phase2_speed_scale / 60`）也必须小于 `hurt_radius`，报错里 `<enemy|lunge>` 写 `enemy in phase 2`；
+  - `phase2_at` 的取值用新规则 `must be greater than 0 and less than 1`。
+- 检查顺序：`needs phase2_at` 接在 `needs enemy_speed` 后面；`roar_blast_tick <= roar_ticks` 接在四个招式（加上 `spin`，排在最后）的范围检查后面；二阶段步长接在原来的步长检查后面。
+
+**二阶段的参数**：加载时算好一份二阶段用的参数，`s = phase2_speed_scale`：
+- 所有招式（包括 `spin`）的 `startup_ticks`：`max(1, round(t * s))`；
+- `combo_gap_ticks`、`enemy_rest_ticks`：`max(0, round(t * s))`；
+- `round(x)` 是 `floorf(x + 0.5)`，`t * s` 用 f32 算；
+- `enemy_speed`、`enemy_turn_speed`、每招的 `track_speed`：除以 `s`；
+- 连击的刀数：`phase2_combo_hits`；
+- 出招、后摇的 tick 数，伤害、冲击、范围、权重：不变；
+- 二阶段的候选多一个 `spin`，排在 `combo` 之后、`approach` 之前。一阶段没有 `spin`。
+
+**进入二阶段**：在「命中」里（角色打中敌人、`health.take` 之后）：
+
+```text
+if 敌人有 phase2_at && stage == 1 && hp > 0 && hp <= phase2_at * hp_max:
+    stage = 2
+    health: state = ok, state_ticks = 0, impact = 0, impact_wait = 0   // 这一下即使打出了硬直也作废，改成咆哮
+    敌人: state = roar, move = null, move_tick = 0, phase = null, hit = 0, rest = 0, chase = 0
+    发 stage 事件（紧跟在这一下的 hit 事件之后）
+```
+
+- 这一下打死了（`hp == 0`）就直接死，不进入二阶段。
+- `hit` 事件的 `result` 仍然按 `take` 的结果写（可能是 `stagger`）；看 `stage` 事件就知道它被咆哮取代了。
+- 复活时回到一阶段：`stage = 1`。
+
+**咆哮**（第 5c 步，`state == roar`）：
+
+```text
+move_tick += 1
+朝玩家转（二阶段的 enemy_turn_speed）
+if move_tick == roar_blast_tick:
+    冲击波：以敌人位置为圆心、半径 roar_reach 的整圈（lo = -π, hi = π），高度用 enemy_swing_low、enemy_swing_high
+    命中、无敌、死亡的规则同其他招式（player_hit，attack 是 "roar"；无敌时发 dodged）
+if move_tick == roar_ticks: state = idle; move_tick = 0
+```
+
+- 进入二阶段的那个 tick，第 5c 步已经看到 `state == roar`，`move_tick` 从 0 加到 1，所以这个 tick 就是咆哮的第 1 个 tick。
+- **咆哮期间无敌**：角色的攻击扫到它时直接跳过，不计 `hits`、不扣血、不闪白、不加 `struck`，也不发事件。咆哮结束后，这一刀后面的 tick 扫到它时照常能打中。
+- 咆哮期间不走、不选招；角色死了、跑出仇恨范围也照样咆哮完。
+- 状态导出里 `phase`：`move_tick < roar_blast_tick` 时是 `startup`，等于时是 `active`，之后是 `recovery`。
+
+**状态导出**：
+- `enemies` 的每项在 `node` 后面多一个 `stage`：1 或 2。
+- `state` 多一个取值 `"roar"`。
+- `move` 多一个取值 `"spin"`。
+
+**事件**：
+- 新增 `stage`：字段 `by`、`stage`（2），在进入二阶段时发。
+- `hit` 的 `attack` 多了 `"spin"`、`"roar"`。
+- `enemy_move` 的 `move`、`candidates` 多了 `"spin"`。
+
+**表现**：
+- 二阶段时，敌人子树里的 mesh（不包括 `hp_bar`、`arm`）用场景原色乘以暗红系数 `(1.0, 0.3, 0.3)`（每个分量分别相乘）。
+- 颜色的优先级：死了变暗 > 闪白 > 咆哮到冲击波之前（`move_tick < roar_blast_tick`）用预警色 `(1.0, 0.55, 0.1)` > 二阶段暗红 > 原色。
+- `spin` 的手臂：规则同其他招式。360° 的扇形分 `active_ticks` 段扫一整圈，手臂跟着转一圈。
+- 调试绘制：`swings` 画咆哮的冲击波，规则同招式（冲击波之前是橙色整圈，冲击波那个 tick 是亮红整圈）；`spin` 同其他招式。
+- 暗红系数是 `souls` 的常量。
+
+**Boss 场景**：
+- 写上 `phase2_at` 0.5；
+- 写出其余 19 个新 prop，值等于默认值，带英文注释。
+
+**已知限制**（G4.3）：
+- 只有两个阶段。
+- 咆哮没有击退：冲击波只造成伤害和冲击，角色站在原地硬直。
+- 咆哮期间的无敌是整个敌人无敌，不区分部位。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
