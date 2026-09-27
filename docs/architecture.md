@@ -493,6 +493,21 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
   - 场景文件里没有对应的字段，加载时所有节点都可见。和颜色一样，可见性是模拟状态的一部分，但不进状态导出的 `nodes`。
   - 不会失败，没有返回值。
 
+### 规范格式（E5.3 起）
+
+运行中编辑（第 13 节）改的是**场景文件的内容**，`save_scene` 把它写回成文本。写出来的文本叫规范格式，规则固定，由 `loom_scene` 负责：
+- `loom_scene` 保留解析出来的文件结构（场景文件的节点描述，不是运行时的节点树），编辑作用在它上面；规范格式就是把它序列化回 RON。
+- 用 ron 的 `PrettyConfig`：缩进 4 个空格，开 `IMPLICIT_SOME`（可选字段写成裸值），不写结构体名。
+- 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`position`、`rotation`、`look_at`、`scale`、`mesh`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
+- 没写的可选字段不写；`props`、`children` 为空时不写；`sprite.alternates` 为空时不写。写了的字段原样保留，即使等于默认值（比如 `scale: (1.0, 1.0, 1.0)`）。
+- 旋转保留文件里写的欧拉角（度），不换成四元数；`look_at` 也原样保留。
+- 数字用 ron 的输出（最短的能精确还原的十进制）；`props` 的值是 f64，其余是 f32。
+- **没有注释**：原文件里的注释会丢。所以 `save_scene` 建议另存新文件，要合回原文件时由人或 AI 手工改。
+- 保证：
+  - `parse(规范格式(文件))` 和 `parse(文件)` 得到的场景完全相同（变换逐位相同）；
+  - 规范格式是幂等的：规范格式再解析、再写出，逐字节不变。
+  - 仓库里所有场景文件（内置演示场景、两个冻结场景、`assets/scenes/` 下的）都要有测试覆盖这两条。
+
 ### 热重载
 
 - 只在**窗口模式**、并且给了 `--scene` 时生效。无头模式从不重载。
@@ -1640,7 +1655,50 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 | `screenshot` | `{"path":"...","size":[W,H],"debug_draw":…}`，`size`、`debug_draw` 可以省略 | 把**当前状态**渲染成 PNG（自动创建父目录）。`debug_draw`（E5.2 起）是 `true`（全部类别）、类别名的数组或 `false`，省略就是 `false`，规则同 `--debug-draw`（第 16 节）；类别名写错回复 -32602。`{"path":...,"size":[W,H],"adapter":{...},"render_ms":毫秒}` |
 | `record` | `{"path":"..."}` | 把从上次 `load_scene`/`reset`（或启动）以来的输入写成输入脚本，规范形式和 `--record` 相同。`{"path":...,"ticks":当前tick}` |
 | `trace` | `{"path":"..."}` 开始，`{}` 停止（E5.1 起） | 开始：把轨迹（第 6 节「轨迹」）写进 `path`（自动创建父目录，已有的文件清空），立刻写一行当前 tick，这一行的 `events` 是当前 tick 发出的事件（tick 0 是 `[]`）；之后每跑一个 tick 写一行。已经在写别的文件时，先停掉那个。result `{"path":…,"tick":当前tick}`。停止：写完并关闭，result `{"path":停掉的路径或null,"lines":写了几行}`。`load_scene`、`reset` 时文件清空，从新的 tick 0 重新写；`quit` 和适配程序退出时写完关闭 |
+| `scene` | 无 | 当前场景的规范格式全文（E5.3 起）：`{"source":"RON 文本","edited":是否编辑过}` |
+| `node` | `{"path":"..."}` | 一个节点（E5.3 起）：`{"path":…,"ron":"这个节点的规范格式，不含 children","children":[子节点名，按顺序],"transform":运行时的局部变换}`。`ron` 是场景文件里写的，`transform` 是游戏当前写进节点的（格式同状态导出的 `nodes`），两者可能不同 |
+| `edit_node` | `{"path":"...","set":"RON 字段","unset":["字段名"],"props":{"名字":数值或null}}`，后三项都可以省略 | 改一个节点（E5.3 起），见下文「运行中编辑」 |
+| `add_node` | `{"parent":路径或null,"index":位置,"ron":"(name: …, …)"}`，`index` 可以省略 | 加一个节点（可以带子节点）；`parent` 为 `null` 时加在根上；`index` 是插在兄弟中的位置，省略就是最后（E5.3 起） |
+| `remove_node` | `{"path":"..."}` | 删一个节点和它的整个子树（E5.3 起） |
+| `edit_scene` | `{"set":"RON 字段"}` | 改顶层的 `camera`、`ambient`（E5.3 起）。`version`、`game` 不能改 |
+| `save_scene` | `{"path":"..."}` | 把当前场景的规范格式写进文件（自动创建父目录）（E5.3 起）。`{"path":…}` |
 | `quit` | 无 | `{}`，然后退出 |
+
+### 运行中编辑（E5.3 起）
+
+用户决定（2026-09-27）：
+- **改场景后重新模拟**：编辑改的是场景文件的内容，引擎用改后的场景从 tick 0 开始，按已经录下的输入重跑到当前 tick。
+  - 游戏代码不用为编辑做任何事，确定性自动成立。
+  - 编辑不进录制，复现靠「改过的场景 + 录制」。
+- **节点的任意字段都能改**：用 RON 片段写字段；增加节点也给一段 RON。改完走和加载场景一样的校验。
+- **保存**：`save_scene` 写规范格式（第 10 节）。
+
+**一次编辑**（`edit_node`、`add_node`、`remove_node`、`edit_scene`）：
+1. 在当前的场景文件结构上做这次修改；
+2. 生成规范格式，按加载场景的全部规则解析、校验，交给游戏建新的实例（游戏自己的要求也在这一步查，比如 souls 的 props）；
+3. 从 tick 0 用录下的输入（上次 `load_scene`/`reset` 以来的，和 `record` 写出的相同）重跑到编辑前的 tick；
+4. 用新的场景和游戏替换旧的。
+
+- 任何一步失败：回复错误（-32602，消息说明原因，校验错误的文案同加载场景），**什么都不变**。
+- 成功：result `{"tick":当前tick}`，和编辑前相同。
+- **保持的输入**不变。**录制**不变：它只有输入，和场景无关。
+- **轨迹**：正在写轨迹时，文件清空，从 tick 0 重写到当前 tick（历史变了）。重跑期间的事件不出现在任何回复里。
+- 编辑一直保留，直到下一次 `load_scene`。`reset` 回到**改后场景**的 tick 0。
+- 保证：编辑后 `state` 的内容，等于 `loom run --headless --scene <save_scene 写出的文件> --input <record 写出的脚本> --frames <tick> --dump-state` 的结果（tick 为 0 时就是改后场景的初始状态）。
+- 代价：每次编辑都要重跑当前 tick 数那么多个 tick。无头模式下 souls 的一个 tick 是微秒级，几千 tick 之内可以忽略。
+
+**`edit_node` 的参数**，按这个顺序应用：
+- `set`：RON 字段列表，写法和场景文件里节点的字段一样，比如 `"position: (1.0, 0.0, 2.0), color: (1.0, 0.0, 0.0)"`。给出的字段整个替换原来的值（`props` 也是整个替换）。
+  - 不能写 `children`（用 `add_node`、`remove_node`）。
+  - 可以写 `name`（改名）；引用它的路径（顶层 `camera`、`orbit_camera.target`）不会跟着改，改名后校验不通过就报错。
+  - 写了不认识的字段、同一个字段写两次，都报错。
+- `unset`：要删掉的可选字段名（比如 `"mesh"`、`"look_at"`）。不能删 `name`；`props`、`children` 不能出现在这里（`props` 用 `set` 给空列表）。同一个字段不能既在 `set` 又在 `unset`。
+- `props`：按名字合并。数值：有这个 prop 就原地改值，没有就加在最后；`null`：删掉，没有这个 prop 时报错。多个名字按名字的字典序处理。
+- 三项都没给：报错（`edit_node needs set, unset or props`）。
+
+**`edit_scene`**：`set` 只能写 `camera`、`ambient`，规则同 `edit_node`。
+
+**`describe`** 多一个 `edited` 字段（E5.3 起，放在 `scene` 后面）：当前场景是否被编辑过。`load_scene` 之后是 false。
 
 ### 保证
 
@@ -1673,6 +1731,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 - **工具**：每个 serve 方法对应一个 MCP 工具，名字和方法相同。
   - `describe`、`load_scene`、`reset`、`input`、`step`、`state`、`screenshot`、`record`，E5.1 起加 `trace`（参数 `path` 可以省略，省略就是停止）。
   - E5.2 起 `screenshot` 多一个可选参数 `debug_draw`，同 serve。
+  - E5.3 起加 `scene`、`node`、`edit_node`、`add_node`、`remove_node`、`edit_scene`、`save_scene`。
   - **没有 `quit`**：子进程的生命周期由适配程序管理。
   - 工具的参数和 serve 方法的 params 一一对应；参数的 JSON Schema 由 rmcp 按参数结构体生成。
 - **结果**：
