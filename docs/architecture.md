@@ -437,6 +437,7 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | `mesh` | `Cube` / `Plane` / `Sphere` / `Capsule(radius, height)` | 无 | 前三种都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调。`Capsule` 带参数（非均匀缩放会把半球压扁）：`height` 是含两端半球的总高，**原点在底部**（占 y ∈ [0, height]），方便角色站在地面上 |
 | `model` | 字符串 | 无 | glTF 模型 `.glb` 的路径（E7.1 起，第 19 节）。不能和 `mesh`、`sprite`、`tilemap` 同时写 |
 | `animation` | `(clips, play)` | 无 | 模型的动画片段（E7.2 起，第 19 节「骨骼和动画片段」）：`clips` 是 `(片段名, RON 片段文件)` 的列表（E7.3 起，原来是表），`play` 是一开始播的片段。只能和 `model` 一起写 |
+| `bone` | 字符串 | 无 | 挂在父节点模型的这根骨骼上（E7.5 起，第 19 节「挂在骨骼上」）。父节点必须带 `model`。只影响画面 |
 | `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)`；有 `model` 时是 `(1, 1, 1)` | 只有带 `mesh` 或 `model` 时才有意义；分量在 0 到 1 之间。对模型是染色（乘在顶点颜色上） |
 | `camera` | `(fov_y, near, far)` 或 `(ortho: (height), near, far)` | 无 | 相机看向自己的 -Z。`fov_y` 是透视相机的垂直视场角（度）。`ortho` 是正交相机（E4.2 起），`height` 是画面竖直方向覆盖的世界长度，宽度按画面比例算。`fov_y` 和 `ortho` 必须**恰好写一个** |
 | `sprite` | `(sheet, tag)` 或 `(sheet, tag, alternates)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名。`alternates`（E4.4 起，可省略）是游戏运行中可以换成的其他 tag，例如 `["corpse"]` |
@@ -503,7 +504,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 运行中编辑（第 13 节）改的是**场景文件的内容**，`save_scene` 把它写回成文本。写出来的文本叫规范格式，规则固定，由 `loom_scene` 负责：
 - `loom_scene` 保留解析出来的文件结构（场景文件的节点描述，不是运行时的节点树），编辑作用在它上面；规范格式就是把它序列化回 RON。
 - 用 ron 的 `PrettyConfig`：缩进 4 个空格，开 `IMPLICIT_SOME`（可选字段写成裸值），不写结构体名。
-- 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`display_name`、`position`、`rotation`、`look_at`、`scale`、`mesh`、`model`、`animation`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
+- 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`display_name`、`position`、`rotation`、`look_at`、`scale`、`bone`、`mesh`、`model`、`animation`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
 - 没写的可选字段不写；`props`、`children` 为空时不写；`sprite.alternates` 为空时不写。写了的字段原样保留，即使等于默认值（比如 `scale: (1.0, 1.0, 1.0)`）。
 - 旋转保留文件里写的欧拉角（度），不换成四元数；`look_at` 也原样保留。
 - 数字用 ron 的输出（最短的能精确还原的十进制）；`props` 的值是 f64，其余是 f32。`props` 里写成整数的值写出来带小数点，比如 `("hp", 100)` 变成 `("hp", 100.0)`，解析结果相同。
@@ -2235,10 +2236,23 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 | `roll`、`backstep` | 翻滚、后撤步 | 32、20，也就是默认的 `roll_ticks`、`backstep_ticks` |
 | `attack1`、`attack2`、`attack3` | 轻攻击第 1、2、3 刀；第 4 刀以后用 `attack3` | 30：前摇 0–10、出招 10–14、后摇 14–30，也就是默认的 10、4、16 |
 | `heavy` | 重攻击 | 50：前摇 0–22、出招 22–27、后摇 27–50 |
+| `stagger` | 硬直（E7.5 起） | 30，也就是默认的 `stagger_ticks`；不循环 |
+| `death` | 死亡（E7.5 起） | 随意，不循环，停在最后一格直到复活 |
+| `drink` | 喝原素瓶（E7.5 起） | 60：举瓶 0–30、回血后放下 30–60，也就是默认的 `flask_ticks`、`flask_heal_tick` |
+| `sit` | 篝火坐着（E7.5 起） | 随意，不循环：前一段坐下，停在最后一格坐着 |
 
 片段按**默认参数**的长度写。参数改了，游戏用播放速度把每一段拉长或压短，所以片段不用改。
 
-**每个 tick 选片段**：在第 6 步写回角色节点时做，只看这个 tick 结束时的状态，所以是状态的纯函数。按顺序取第一条：
+**每个 tick 选片段**：在第 6 步写回角色节点时做，只看这个 tick 结束时的状态，所以是状态的纯函数。按顺序取第一条（E7.5 起前面多了 0a–0d 四条）：
+
+0a. 健康状态是 `dead`：`death`。在变成 `dead` 的那个 tick `play_clip`，`blend` 3，`rate` 100。节点照旧倾倒 90°。
+0b. 健康状态是 `stagger`：`stagger`。在每次被打出硬直的那个 tick（包括硬直中再次打出，`state_ticks` 重新开始）`play_clip`，`blend` 2，`rate = round(100 × 30 / stagger_ticks)`。节点照旧倾斜 20°。
+0c. `action` 是 `drink`：`drink`，分两段，照攻击的办法：
+  - `action_tick == 1` 时从 0 开始，`rate = round(100 × 30 / flask_heal_tick)`，`blend` 4；
+  - `action_tick == flask_heal_tick + 1` 时从 3000 ctick 开始，`rate = round(100 × 30 / (flask_ticks - flask_heal_tick))`，`blend` 0；
+  - `flask_heal_tick == flask_ticks` 时第二段不存在，不调用。
+  - 边走边喝时腿不动，脚会滑（用户决定：以后真有多处需要，再做动画分层）。
+0d. `action` 是 `sit`：`sit`。在坐下的那个 tick `play_clip`，`blend` 6，`rate` 100。
 1. `action` 是 `roll` 或 `backstep`：在 `action_tick == 1` 的那个 tick `play_clip`：
    - `start` 是当前 tick，`blend` 2，`offset` 0；
    - `rate = round(100 × 默认 tick 数 / 实际 tick 数)`。
@@ -2255,7 +2269,7 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
      - 否则 `b > 0` 是 `run_right`，`b < 0` 是 `run_left`。
      - 不锁定时角色会转向移动方向，所以几乎总是 `run`。
    - 速度 `rate = round(100 × |v| × run_speed / RUN_CLIP_SPEED)`，`|v|` 是第 2 步限制在 1 以内的长度。喝瓶时是 `flask_walk_speed`，但喝瓶在 E7.4 用 `idle`。
-5. 其他情况（站着不动、硬直、死亡、喝瓶、篝火）：`idle`，速度 100。
+5. 其他情况（站着不动）：`idle`，速度 100。E7.4 时硬直、死亡、喝瓶、篝火也用 `idle`，E7.5 起由 0a–0d 接管。
 
 **什么时候调接口**：
 - 选出来的片段和正在播的不同，或者是第 1、2 条规定的那个 tick，才调 `play_clip`。
@@ -2268,6 +2282,13 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 - 动作的最后一个 tick 里 `action` 已经回到 `idle`，所以这个 tick 就开始往 `idle` 过渡，片段最后一格播不到（例如轻攻击后摇最多播到 2800 ctick）。有 6 tick 的过渡，看不出跳变，E7.4 审查时接受。
 - 每一段第一个 tick 的片段时间正好是这一段的起点，所以动作第 k 个 tick 显示的是片段的第 k - 1 格。
 - 攻击片段出招第一帧的剑尖可以高于 `swing_high`（重攻击最高约 2.2 m）：高度范围说的是判定扇形，画面只要大致对应（E7.4 审查时定）。
+
+**坐下的高度**（E7.5 起，用户决定）：新写法下坐着时角色节点**不再**降低 0.5 米，由 `sit` 片段自己把髋部放低；老写法照旧降低。
+- 所以用新写法的场景，坐着时状态导出的 `nodes.player.position` 和以前不同，`game` 部分不变。
+
+**瓶子**（E7.5 起）：新写法下，瓶子节点挂在左手上：`bone: "hand_l"`，位置按第 19 节「挂在骨骼上」的约定写（模型的轴，从手的关节偏移）。
+- 喝的片段把左手举到面甲前面；
+- 什么时候显示瓶子，规则不变。
 
 **颜色**：
 - 角色的模型节点也参与闪白、死亡变暗。
@@ -3262,3 +3283,30 @@ E7.2 用户决定（2026-09-28）：
 ```
 
 没有 `animation` 的节点不变。
+
+### 挂在骨骼上（E7.5 起）
+
+用户决定（2026-09-28）：引擎加「挂在骨骼上」，像 Godot 的 `BoneAttachment3D`。第一个用处是喝原素瓶时瓶子在手上，以后换武器、拿盾、Boss 的道具都用它。
+
+**节点字段 `bone`**：
+- 写骨骼名，例如 `(name: "flask", bone: "hand_l", position: (0.0, -0.05, -0.04), mesh: Cube, …)`。
+- 这个节点和它的整个子树跟着**父节点的模型**的这根骨骼动。
+- `loom_scene` 检查：不能是空串；父节点必须带 `model`。
+- `loom_engine` 在加载时检查：模型能蒙皮（「蒙皮」一节）；骨骼名在它的 skin 里。报错格式照模型的写法：`node "<路径>": bone "<名字>": <原因>`。
+- 规范格式写在 `scale` 后面、`mesh` 前面。
+
+**挂接的坐标系**：和片段的约定一样，**按模型的轴**，和骨骼自己的局部轴无关。
+- 设骨骼 j 在当前姿势下的模型空间变换是 `P_j`，在绑定姿势下的是 `P⁰_j`（「骨骼和动画片段」一节算关节矩阵时的中间结果），挂接点是：
+  ```
+  A = 平移(P_j 的位置) * 旋转(P_j 的旋转 * P⁰_j 的旋转⁻¹)
+  ```
+- 绑定姿势下 `A` 只是平移到关节的位置，轴就是模型的轴。所以节点的 `position` 就是「在绑定姿势下，从关节往模型的哪个方向偏多少」。骨骼转了，挂上的东西跟着转。
+- 父节点没有 `animation` 时按绑定姿势算，也就是只平移到关节。
+- 画面上节点的世界矩阵：`父节点的世界矩阵 * A * 节点自己的局部变换`；子树照常往下乘。
+
+**只影响画面**：
+- `Scene::world_matrix` 和模拟用到的一切（碰撞、受击、锁定、调试绘制里游戏画的线）**不含**骨骼姿势，照场景树算。
+- 状态导出里的 `nodes` 仍然是局部变换，不变。
+- 这是因为姿势只在渲染时算（第 19 节「采样」），模拟不知道当前姿势。
+- 所以游戏逻辑用到的节点（受击判定、锁定目标、碰撞体）不要挂在骨骼上。souls 目前只有瓶子挂在骨骼上。
+- 调试绘制的 `skeleton` 类别由引擎画，用的是姿势，不受这条影响。
