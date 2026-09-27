@@ -7,7 +7,10 @@ use glam::Vec3;
 use loom_core::debug::DebugDraw;
 use loom_core::input::{ActionState, TickInput};
 
+use super::debug::DEBUG_BONFIRE;
+use super::enemy_ai::enter_phase2;
 use super::*;
+use crate::enemy::EnemyCondition;
 
 /// The character at the origin facing -Z, the camera behind it; `player`
 /// props on the character, then `nodes`.
@@ -400,7 +403,7 @@ fn sitting_down_resets_the_demo_dummies_and_stake_but_keeps_their_hits() {
 
 #[test]
 fn sitting_down_resets_the_boss_to_its_load_state_from_phase_2() {
-    let source = include_str!("../../../assets/scenes/boss.ron");
+    let source = include_str!("../../../../assets/scenes/boss.ron");
     let mut run = Run::from(source);
     for _ in 0..30 {
         run.idle();

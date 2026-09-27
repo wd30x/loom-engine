@@ -8,7 +8,9 @@ use glam::Vec3;
 use loom_core::debug::DebugDraw;
 use loom_core::input::{ActionState, TickInput};
 
+use super::debug::DEBUG_BLOODSTAIN;
 use super::*;
+use crate::events::{HitAttack, Outcome};
 
 /// The bloodstain marker of the scene files.
 const MARKER: &str = r#"(name: "bloodstain", position: (0.0, 0.05, 0.0), scale: (0.4, 0.1, 0.4),

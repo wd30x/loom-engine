@@ -11,6 +11,7 @@ use glam::Vec3;
 use loom_core::input::{ActionState, TickInput};
 
 use super::*;
+use crate::moves::AttackPhase;
 
 /// The flask child of the scene files.
 const FLASK: &str = r#"(name: "flask", position: (0.5, 1.2, -0.3), scale: (0.12, 0.25, 0.12),

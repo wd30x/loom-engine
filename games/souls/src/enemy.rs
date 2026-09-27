@@ -2,7 +2,7 @@
 //! to it and pick moves at random by distance (`docs/architecture.md`
 //! section 11, "敌人和 Boss"). This module holds what does not need the
 //! rest of the game: the moves, their timeline, the random numbers and
-//! the state dump; `game.rs` runs them.
+//! the state dump; `game/enemy_ai.rs` runs them.
 
 use schemars::JsonSchema;
 use serde::Serialize;

@@ -7,7 +7,12 @@ use glam::{Quat, Vec3};
 use loom_core::debug::DebugDraw;
 use loom_core::input::{ActionState, TickInput};
 
+use super::debug::{DEBUG_ACTIVE, DEBUG_SLICE, DEBUG_STARTUP};
+use super::show::{DEAD_DIM, FLASH_COLOR, FLASH_TICKS, WARN_COLOR, pose};
 use super::*;
+use crate::enemy::{EnemyChoice, EnemyCondition, MoveKind, SplitMix64};
+use crate::events::HitAttack;
+use crate::moves::AttackPhase;
 
 /// The character at the origin facing -Z, the camera behind it; `player`
 /// props on the character, then `nodes`.

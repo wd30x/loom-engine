@@ -9,6 +9,7 @@ use loom_core::input::{ActionState, TickInput};
 
 use super::hud::*;
 use super::*;
+use crate::events::HitAttack;
 
 /// The character with `player` props, then `nodes`.
 fn scene(player: &str, nodes: &str) -> String {
