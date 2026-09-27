@@ -1,5 +1,5 @@
-//! Stamina, roll, sprint, backstep, attacks, lock-on, hits and damage: the
-//! parameters, read from the character node's props with defaults, and the
+//! Stamina, roll, sprint, backstep, attacks, lock-on, hits, damage and the
+//! character's own health: the parameters, read from the character node's props with defaults, and the
 //! action state (`docs/architecture.md` section 11).
 
 use loom_scene::{NodeId, Scene};
@@ -61,7 +61,7 @@ enum Rule {
 /// Every prop the character understands, with its default and rule, in
 /// the order they are checked. Reading, checking and rejecting unknown
 /// names all go through this one table.
-const PARAMS: [(&str, f64, Rule); 45] = [
+const PARAMS: [(&str, f64, Rule); 50] = [
     ("stamina_max", 100.0, Rule::Positive),
     ("stamina_regen", 45.0, Rule::Positive),
     ("stamina_delay_ticks", 30.0, Rule::AtLeast(0)),
@@ -107,6 +107,11 @@ const PARAMS: [(&str, f64, Rule); 45] = [
     ("heavy_damage", 35.0, Rule::Positive),
     ("attack_impact", 10.0, Rule::NotNegative),
     ("heavy_impact", 30.0, Rule::NotNegative),
+    ("hp", 100.0, Rule::Positive),
+    ("poise", 0.0, Rule::NotNegative),
+    ("stagger_ticks", 30.0, Rule::AtLeast(1)),
+    ("poise_reset_ticks", 60.0, Rule::AtLeast(1)),
+    ("respawn_ticks", 120.0, Rule::AtLeast(1)),
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -166,6 +171,13 @@ pub(crate) struct Params {
     /// light and heavy attacks.
     pub swing_low: f32,
     pub swing_high: f32,
+    /// The character's own health: full `hp`, poise, and how long a stagger
+    /// lasts, impacts add up and death lasts before the respawn.
+    pub hp: f32,
+    pub poise: f32,
+    pub stagger_ticks: u32,
+    pub poise_reset_ticks: u32,
+    pub respawn_ticks: u32,
 }
 
 /// Lock-on, in per-tick units and radians.
@@ -307,6 +319,11 @@ impl Params {
             },
             swing_low: get("swing_low") as f32,
             swing_high: get("swing_high") as f32,
+            hp: get("hp") as f32,
+            poise: get("poise") as f32,
+            stagger_ticks: ticks("stagger_ticks"),
+            poise_reset_ticks: ticks("poise_reset_ticks"),
+            respawn_ticks: ticks("respawn_ticks"),
         };
         for (action, m) in [("roll", params.roll), ("backstep", params.backstep)] {
             if !(m.invuln_from <= m.invuln_to && m.invuln_to <= m.ticks) {
@@ -369,7 +386,7 @@ mod tests {
     use super::*;
     use crate::{
         ATTACK, Condition, Game, GameState, HEAVY, HealthState, HurtboxState, LOCK, LOOK_X, LOOK_Y,
-        LastHit, MOVE_X, MOVE_Y, ROLL,
+        LastHit, MOVE_X, MOVE_Y, PlayerHit, ROLL, SwingerState,
     };
     use std::f32::consts::FRAC_PI_2;
 
@@ -734,7 +751,7 @@ mod tests {
         let states = press_on(&mut run, ATTACK, &[1], 15, &NONE);
         for (i, s) in states[..14].iter().enumerate() {
             let t = i as u32 + 1;
-            let p = s.player;
+            let p = &s.player;
             let (phase, z) = match t {
                 1..=4 => (Some(AttackPhase::Startup), 0.0),
                 5..=8 => (Some(AttackPhase::Active), -0.125 * (t - 4) as f32),
@@ -762,21 +779,21 @@ mod tests {
     fn heavy_attack_slides_its_own_distance_and_costs_its_own_stamina() {
         let mut run = Run::new(&attack_props());
         let states = press_on(&mut run, HEAVY, &[1], 22, &NONE);
-        let p = states[5].player; // tick 6: the last startup tick
+        let p = &states[5].player; // tick 6: the last startup tick
         assert_eq!(
             (p.action, p.attack_phase),
             (Action::Heavy, Some(AttackPhase::Startup))
         );
         assert_eq!((p.position, p.stamina, p.combo), (Vec3::ZERO, 75.0, 0));
-        let p = states[13].player; // tick 14: the last active tick
+        let p = &states[13].player; // tick 14: the last active tick
         assert_eq!(p.attack_phase, Some(AttackPhase::Active));
         assert_eq!(p.position, Vec3::new(0.0, 0.0, -1.0));
-        let p = states[20].player; // tick 21
+        let p = &states[20].player; // tick 21
         assert_eq!(
             (p.action_tick, p.attack_phase),
             (21, Some(AttackPhase::Recovery))
         );
-        let p = states[21].player; // tick 22 ends it
+        let p = &states[21].player; // tick 22 ends it
         assert_eq!((p.action, p.attack_phase), (Action::Idle, None));
         assert_eq!(p.position, Vec3::new(0.0, 0.0, -1.0));
     }
@@ -802,7 +819,7 @@ mod tests {
             assert_eq!(s.player.position, position, "tick {t}");
         }
         // Idle again: running and turning at the normal speed (12° a tick).
-        let s = states[14].player;
+        let s = &states[14].player;
         assert_eq!(s.position.x, position.x + 0.0625);
         assert!(s.facing < facing - turn);
     }
@@ -817,7 +834,7 @@ mod tests {
         assert_eq!(states[13].player.action, Action::Idle); // tick 14 ends attack 1
         assert_eq!(states[13].player.buffered, Some(Buffered::Attack));
         for (tick, combo) in [(15, 2), (29, 3), (43, 1)] {
-            let p = states[tick - 1].player;
+            let p = &states[tick - 1].player;
             assert_eq!(
                 (p.action, p.action_tick),
                 (Action::Attack, 1),
@@ -868,7 +885,7 @@ mod tests {
         press_on(&mut run, ATTACK, &[1, 6], 9, &NONE);
         let states = press_on(&mut run, HEAVY, &[1], 6, &NONE); // ticks 10..=15
         assert_eq!(states[0].player.buffered, Some(Buffered::Heavy));
-        let p = states[5].player; // tick 15
+        let p = &states[5].player; // tick 15
         assert_eq!((p.action, p.action_tick, p.combo), (Action::Heavy, 1, 0));
         assert_eq!(p.stamina, 60.0);
     }
@@ -1755,7 +1772,9 @@ mod tests {
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_heigth", 1.0)]),"#),
             "the node \"t\": unknown prop \"lock_heigth\" (known: lock_height, hurt_radius, \
-             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)"
+             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, \
+             swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, \
+             swing_reach, swing_arc, swing_low, swing_high)"
         );
         // Any node but the character, target or not. (Until G3.2 this used
         // "hp", which G3.3 made a known prop.)
@@ -1765,7 +1784,9 @@ mod tests {
                 r#"(name: "g", children: [(name: "t", props: [("armor", 3)])]),"#
             ),
             "the node \"g/t\": unknown prop \"armor\" (known: lock_height, hurt_radius, \
-             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)"
+             hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, \
+             swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, \
+             swing_reach, swing_arc, swing_low, swing_high)"
         );
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_height", 0)]),"#),
@@ -1897,7 +1918,9 @@ mod tests {
             (
                 r#"(name: "t", props: [("hurt_radius", 0.4), ("hurt_heigth", 1.8)]),"#,
                 "the node \"t\": unknown prop \"hurt_heigth\" (known: lock_height, hurt_radius, \
-                 hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)",
+                 hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, \
+                 swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, \
+                 swing_reach, swing_arc, swing_low, swing_high)",
             ),
         ] {
             assert_eq!(error_with("", nodes), message);
@@ -2574,6 +2597,1026 @@ mod tests {
         assert!(
             child(&format!("{HURT}, (\"hp\", 10)"), r#"(name: "hp_bar")"#)
                 .starts_with("the hurtbox \"g/t\" must be a root node")
+        );
+    }
+
+    // ------------------------------------------- the character hit, swingers
+
+    /// A root swinger `name` standing at `(x, y, z)`, not turned (it faces
+    /// -Z), dealing 3 damage, with the swing props `props` and an arm on its
+    /// center line (turned 10° about X, so its pose is not the identity).
+    fn swinger(name: &str, (x, y, z): (f32, f32, f32), props: &str) -> String {
+        format!(
+            r#"(name: "{name}", position: ({x:?}, {y:?}, {z:?}),
+                props: [("swing_damage", 3), {props}],
+                children: [(name: "arm", position: (0.0, 1.0, -1.0), rotation: (10.0, 0.0, 0.0),
+                    scale: (0.1, 0.1, 2.0), mesh: Cube, color: (0.4, 0.3, 0.2))]),"#
+        )
+    }
+
+    /// Two ticks each of startup, active and recovery, sweeping 180° in two
+    /// 90° slices, right to left: a round of 6 ticks, active on its ticks 3
+    /// and 4.
+    const RHYTHM: &str = r#"("swing_startup_ticks", 2), ("swing_active_ticks", 2),
+        ("swing_recovery_ticks", 2), ("swing_arc", 180)"#;
+
+    /// Swing props: `startup` ticks, then one active tick sweeping all
+    /// around within 10 m, then `recovery` ticks. On the character's spot,
+    /// such a swinger hits it on tick `startup + 1` of every round, however
+    /// far it moved or whichever way it faces.
+    fn all_round(startup: u32, recovery: u32) -> String {
+        format!(
+            r#"("swing_startup_ticks", {startup}), ("swing_active_ticks", 1),
+            ("swing_recovery_ticks", {recovery}), ("swing_arc", 360), ("swing_reach", 10)"#
+        )
+    }
+
+    /// A run with `props` on the character (and nothing else: tests that
+    /// want [`PROPS`] include it) and `nodes`.
+    fn hit_run(props: &str, nodes: &str) -> Run {
+        Run::on(&scene_with(props, nodes))
+    }
+
+    const ARM: Vec3 = Vec3::new(0.4, 0.3, 0.2);
+    const WARN: Vec3 = Vec3::new(1.0, 0.55, 0.1);
+
+    fn full_health(hp: f32) -> HealthState {
+        HealthState {
+            hp,
+            state: Condition::Ok,
+            state_ticks: 0,
+            impact: 0.0,
+            impact_wait: 0,
+        }
+    }
+
+    fn hit_by(tick: u64, by: &str) -> Option<PlayerHit> {
+        Some(PlayerHit {
+            tick,
+            by: by.to_owned(),
+        })
+    }
+
+    #[test]
+    fn swinger_counts_its_round_from_the_first_tick_and_starts_over_after_the_period() {
+        // Far from the character, and no hurtbox: it swings on its own.
+        let mut run = hit_run("", &swinger("s", (0.0, 0.0, -20.0), RHYTHM));
+        let s = run.game.state();
+        assert_eq!((s.swingers[0].swing_tick, s.swingers[0].phase), (0, None));
+        for t in 1..=13_u32 {
+            let s = run.tick(false, &NONE);
+            let swing_tick = (t - 1) % 6 + 1;
+            let phase = match swing_tick {
+                1 | 2 => AttackPhase::Startup,
+                3 | 4 => AttackPhase::Active,
+                _ => AttackPhase::Recovery,
+            };
+            assert_eq!(
+                s.swingers,
+                [SwingerState {
+                    node: "s".to_owned(),
+                    swing_tick,
+                    phase: Some(phase)
+                }],
+                "tick {t}"
+            );
+            assert!(s.hurtboxes.is_empty());
+            assert_eq!(s.player.hits, 0);
+        }
+    }
+
+    #[test]
+    fn swinger_hits_the_right_half_on_its_first_active_tick_and_the_left_on_its_second() {
+        // The character 1.5 m in front of the swinger and 0.5 m to its
+        // right (+X) or left: about 18° off the center line, and 0.5 m (more
+        // than the capsule radius 0.35) from the 0° edge between the slices.
+        for (x, tick) in [(-0.5, 3), (0.5, 4)] {
+            let mut run = hit_run(r#"("hp", 100)"#, &swinger("s", (x, 0.0, 1.5), RHYTHM));
+            for t in 1..=6 {
+                let s = run.tick(false, &NONE);
+                assert_eq!(s.player.hits, u32::from(t >= tick), "x {x}, tick {t}");
+            }
+            assert_eq!(run.game.state().player.last_hit, hit_by(tick, "s"));
+        }
+    }
+
+    #[test]
+    fn swinger_hits_the_character_once_a_round_and_again_the_next_round() {
+        // On the character's spot: both active ticks touch it; hits on
+        // tick 3 (not 4) and tick 9.
+        let mut run = hit_run(r#"("hp", 100)"#, &swinger("s", (0.0, 0.0, 0.0), RHYTHM));
+        for t in 1..=12 {
+            let s = run.tick(false, &NONE);
+            let (hits, last) = match t {
+                1..=2 => (0, None),
+                3..=8 => (1, hit_by(3, "s")),
+                _ => (2, hit_by(9, "s")),
+            };
+            assert_eq!((s.player.hits, s.player.last_hit), (hits, last), "tick {t}");
+        }
+    }
+
+    #[test]
+    fn swing_hits_the_character_when_its_band_just_meets_the_capsule() {
+        // Band 0.25-1.5 m above the swinger, the capsule 0-1.8 m, all exact:
+        // the band's top on the feet (swinger at -1.5) or its bottom on the
+        // head (at 1.55) is a hit, both ends being closed; 1/16 m further
+        // is not.
+        let band = format!(r#"{RHYTHM}, ("swing_low", 0.25), ("swing_high", 1.5)"#);
+        let hits = |y: f32| {
+            let mut run = hit_run(r#"("hp", 100)"#, &swinger("s", (0.0, y, 0.0), &band));
+            run.ticks(6, false, &NONE).player.hits
+        };
+        assert_eq!(hits(-1.5), 1);
+        assert_eq!(hits(-1.5625), 0);
+        assert_eq!(hits(1.55), 1);
+        assert_eq!(hits(1.625), 0);
+    }
+
+    #[test]
+    fn swinger_does_not_hit_the_character_behind_it() {
+        // The swinger 1.5 m ahead of the character and facing away (-Z):
+        // the character is 1.5 m from both edges of its 180° sector.
+        let mut run = hit_run(r#"("hp", 100)"#, &swinger("s", (0.0, 0.0, -1.5), RHYTHM));
+        assert_eq!(run.ticks(12, false, &NONE).player.hits, 0);
+    }
+
+    /// Props that make a roll and a backstep 8 ticks long, invulnerable on
+    /// their first 4, and moving only 0.01 m a tick: the character stays
+    /// within 0.08 m of a swinger on its spot, so every slice touches it.
+    const SHORT_DODGES: &str = r#"("roll_ticks", 8), ("roll_distance", 0.08),
+        ("roll_invuln_to", 4), ("backstep_ticks", 8), ("backstep_distance", 0.08),
+        ("backstep_invuln_to", 4)"#;
+
+    /// Taps the roll key on ticks 1-2 (rolling forward, or backstepping
+    /// without `axes`, from tick 2: invulnerable on ticks 2..=5), then
+    /// waits; returns every tick's state.
+    fn dodge(run: &mut Run, ticks: u32, axes: &[(&str, f32)]) -> Vec<GameState> {
+        (1..=ticks)
+            .map(|t| match t {
+                1 => run.tick(true, &NONE),
+                2 => run.tick(false, axes),
+                _ => run.tick(false, &NONE),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dodge_invulnerable_on_the_only_active_tick_is_not_hit_that_round() {
+        // Active on tick 5 (invulnerable: not hit) and 18 (hit).
+        for (axes, action) in [(&FORWARD[..], Action::Roll), (&NONE[..], Action::Backstep)] {
+            let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(4, 8));
+            let mut run = hit_run(SHORT_DODGES, &nodes);
+            let states = dodge(&mut run, 18, axes);
+            let s = &states[4];
+            assert_eq!(
+                (s.player.action, s.player.invulnerable, s.player.hits),
+                (action, true, 0),
+                "{action:?}"
+            );
+            assert_eq!(states[16].player.hits, 0, "{action:?}");
+            let s = &states[17];
+            assert_eq!(
+                (
+                    s.player.invulnerable,
+                    s.player.hits,
+                    s.player.last_hit.clone()
+                ),
+                (false, 1, hit_by(18, "s")),
+                "{action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dodge_is_hit_later_in_the_round_once_invulnerability_is_over_and_broken_off() {
+        // Active on ticks 5-8, sweeping 90° each: invulnerable on tick 5,
+        // hit on tick 6, the dodge's fifth tick. The hit (poise 0, impact
+        // 20) staggers: the dodge stops there.
+        let props = r#"("swing_startup_ticks", 4), ("swing_active_ticks", 4),
+            ("swing_recovery_ticks", 4), ("swing_arc", 360)"#;
+        for (axes, action) in [(&FORWARD[..], Action::Roll), (&NONE[..], Action::Backstep)] {
+            let mut run = hit_run(SHORT_DODGES, &swinger("s", (0.0, 0.0, 0.0), props));
+            let states = dodge(&mut run, 8, axes);
+            let p = &states[4].player;
+            assert_eq!(
+                (p.action, p.action_tick, p.invulnerable, p.hits),
+                (action, 4, true, 0),
+                "{action:?}"
+            );
+            let p = &states[5].player;
+            assert_eq!(
+                (p.action, p.action_tick, p.invulnerable, p.hits),
+                (Action::Idle, 0, false, 1),
+                "{action:?}"
+            );
+            assert_eq!(p.last_hit, hit_by(6, "s"));
+            assert_eq!(p.health.state, Condition::Stagger);
+            // Once a round: ticks 7 and 8 do not hit again.
+            assert_eq!(states[7].player.hits, 1);
+        }
+    }
+
+    /// A run whose swinger stands on the character's spot and hits it on
+    /// ticks 2, 5, 8, ... with `impact`; `props` on the character.
+    fn every_third_tick(props: &str, impact: u32) -> Run {
+        let swing = format!(r#"{}, ("swing_impact", {impact})"#, all_round(1, 1));
+        hit_run(props, &swinger("s", (0.0, 0.0, 0.0), &swing))
+    }
+
+    #[test]
+    fn character_with_zero_poise_is_staggered_by_every_hit_but_not_by_zero_impact() {
+        // Poise 0 and stagger_ticks 30, the defaults: hits on 2, 5, 8.
+        let mut run = every_third_tick(r#"("hp", 100)"#, 1);
+        for t in 1..=9_u32 {
+            let h = run.tick(false, &NONE).player.health;
+            match t {
+                1 => assert_eq!(h.state, Condition::Ok),
+                2 | 5 | 8 => assert_eq!((h.state, h.state_ticks), (Condition::Stagger, 30)),
+                _ => assert_eq!(h.state, Condition::Stagger, "tick {t}"),
+            }
+        }
+        let mut run = every_third_tick(r#"("hp", 100)"#, 0);
+        for t in 1..=9_u32 {
+            let p = run.tick(false, &NONE).player;
+            assert_eq!(p.health.state, Condition::Ok, "tick {t}");
+            assert_eq!(p.health.impact, 0.0);
+        }
+        assert_eq!(run.game.state().player.health.hp, 91.0);
+    }
+
+    #[test]
+    fn character_impacts_up_to_its_poise_do_not_stagger_and_past_it_stagger_for_stagger_ticks() {
+        // Poise 2, impact 1: 1 on tick 2, 2 on tick 5 (equal: no stagger),
+        // 3 > 2 on tick 8: staggered on ticks 8..=12, the impact emptied.
+        let mut run = every_third_tick(r#"("hp", 100), ("poise", 2), ("stagger_ticks", 5)"#, 1);
+        for t in 1..=13_u32 {
+            let h = run.tick(false, &NONE).player.health;
+            match t {
+                2 | 5 => assert_eq!(
+                    (h.state, h.impact),
+                    (Condition::Ok, (t / 3 + 1) as f32),
+                    "tick {t}"
+                ),
+                8 => assert_eq!(
+                    h,
+                    HealthState {
+                        hp: 91.0,
+                        state: Condition::Stagger,
+                        state_ticks: 5,
+                        impact: 0.0,
+                        impact_wait: 60
+                    }
+                ),
+                9..=12 => assert_eq!(
+                    (h.state, h.state_ticks),
+                    (Condition::Stagger, 13 - t),
+                    "tick {t}"
+                ),
+                _ => assert_eq!((h.state, h.state_ticks), (Condition::Ok, 0), "tick {t}"),
+            }
+        }
+    }
+
+    #[test]
+    fn character_staggered_again_while_staggered_starts_the_stagger_over() {
+        // Poise 1: staggered on tick 5 for 8 ticks; the hit on tick 8 adds
+        // up to 1 (5 ticks left), the one on tick 11 to 2: staggered again,
+        // 8 ticks from tick 11, the impact emptied (tick 14 adds 1 again).
+        let mut run = every_third_tick(r#"("hp", 100), ("poise", 1), ("stagger_ticks", 8)"#, 1);
+        let states: Vec<_> = (0..16).map(|_| run.tick(false, &NONE)).collect();
+        let h = states[7].player.health;
+        assert_eq!(
+            (h.state, h.state_ticks, h.impact),
+            (Condition::Stagger, 5, 1.0)
+        );
+        assert_eq!(states[10].player.health.impact, 0.0);
+        for t in 11..=16 {
+            let h = states[t as usize - 1].player.health;
+            assert_eq!(
+                (h.state, h.state_ticks),
+                (Condition::Stagger, 19 - t),
+                "tick {t}"
+            );
+        }
+    }
+
+    #[test]
+    fn stagger_breaks_off_an_attack_in_startup_active_or_recovery() {
+        // The light attack of [`attack_props`] pressed on tick 1: startup
+        // 1-4, active 5-8, recovery 9-14. Hit on tick 3, 6 or 10; the third
+        // time with an attack buffered on tick 9. Nothing starts after the
+        // 3-tick stagger either.
+        for (hit, phase, presses) in [
+            (3, AttackPhase::Startup, &[1][..]),
+            (6, AttackPhase::Active, &[1][..]),
+            (10, AttackPhase::Recovery, &[1, 9][..]),
+        ] {
+            let props = format!(r#"{}, ("stagger_ticks", 3)"#, attack_props());
+            let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(hit - 1, 100));
+            let mut run = hit_run(&props, &nodes);
+            let states = press_on(&mut run, ATTACK, presses, hit + 6, &NONE);
+            let before = &states[hit as usize - 2].player;
+            assert_eq!(
+                (before.action, before.attack_phase),
+                (Action::Attack, Some(phase))
+            );
+            if phase == AttackPhase::Recovery {
+                assert_eq!(before.buffered, Some(Buffered::Attack));
+            }
+            for (i, s) in states.iter().enumerate().skip(hit as usize - 1) {
+                let p = &s.player;
+                assert_eq!(
+                    (p.action, p.action_tick, p.attack_phase, p.combo, p.buffered),
+                    (Action::Idle, 0, None, 0, None),
+                    "hit on {hit}, tick {}",
+                    i + 1
+                );
+            }
+            assert_eq!(states[hit as usize - 1].player.hits, 1);
+        }
+    }
+
+    #[test]
+    fn after_a_stagger_the_next_light_attack_starts_a_new_combo() {
+        // Light attacks of [`attack_props`] (14 ticks) pressed on 1 and
+        // buffered on 10: the second, combo 2, starts on 15 and is hit on
+        // 16, staggered on 16..=18. Pressed again on 19: combo 1, and the
+        // one buffered during its recovery (28) is combo 2, not 3.
+        let props = format!(r#"{}, ("stagger_ticks", 3)"#, attack_props());
+        let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(15, 100));
+        let mut run = hit_run(&props, &nodes);
+        let states = press_on(&mut run, ATTACK, &[1, 10, 19, 28], 33, &NONE);
+        assert_eq!(states[14].player.combo, 2);
+        assert_eq!(states[15].player.action, Action::Idle);
+        assert_eq!(states[17].player.health.state, Condition::Stagger);
+        assert_eq!(states[18].player.health.state, Condition::Ok);
+        assert_eq!(
+            (states[18].player.action, states[18].player.combo),
+            (Action::Attack, 1)
+        );
+        assert_eq!(
+            (states[32].player.action, states[32].player.combo),
+            (Action::Attack, 2)
+        );
+    }
+
+    #[test]
+    fn stagger_stops_a_sprint_until_it_is_over() {
+        // Holding roll and forward from tick 1 sprints from tick 16; hit on
+        // tick 20, staggered on 20..=24: no moving until the sprint goes on
+        // on tick 25.
+        let props = format!(r#"{PROPS}, ("stagger_ticks", 5)"#);
+        let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(19, 100));
+        let mut run = hit_run(&props, &nodes);
+        let states: Vec<_> = (0..25).map(|_| run.tick(true, &FORWARD)).collect();
+        assert_eq!(states[18].player.action, Action::Sprint);
+        let hit = &states[19].player;
+        assert_eq!((hit.action, hit.hits), (Action::Idle, 1));
+        for s in &states[20..24] {
+            assert_eq!(s.player.position, hit.position);
+            assert_eq!(s.player.action, Action::Idle);
+        }
+        let p = &states[24].player;
+        assert_eq!(p.action, Action::Sprint);
+        assert_eq!(p.position, hit.position + Vec3::new(0.0, 0.0, -0.125));
+    }
+
+    #[test]
+    fn staggered_character_neither_moves_nor_turns_nor_acts_but_regains_stamina() {
+        // A light attack of [`attack_props`] on ticks 1-14 (85 stamina
+        // left), hit on tick 15, staggered on 15..=20. On 16..=20 pushed
+        // forward and turning the camera, an attack pressed on 16 and roll
+        // tapped on 17-18: only the camera turns, and stamina comes back
+        // 0.75 a tick (no delay here). On tick 21 it runs, and nothing else
+        // starts.
+        let props = format!(
+            r#"{}, ("stagger_ticks", 6), ("stamina_delay_ticks", 0)"#,
+            attack_props()
+        );
+        let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(14, 100));
+        let mut run = hit_run(&props, &nodes);
+        press_on(&mut run, ATTACK, &[1], 14, &NONE);
+        let hit = run.hold(&[], &NONE);
+        assert_eq!(hit.player.health.state, Condition::Stagger);
+        assert_eq!(hit.player.stamina, 85.75);
+        let turning = [(MOVE_Y, 1.0), (LOOK_X, 0.01)];
+        for t in 16..=20 {
+            let actions: &[&str] = match t {
+                16 => &[ATTACK],
+                17 => &[ROLL],
+                _ => &[],
+            };
+            let s = run.hold(actions, &turning);
+            let p = &s.player;
+            assert_eq!(p.health.state, Condition::Stagger, "tick {t}");
+            assert_eq!(
+                (p.position, p.facing),
+                (hit.player.position, hit.player.facing)
+            );
+            assert_eq!(
+                (p.action, p.attack_phase, p.buffered),
+                (Action::Idle, None, None)
+            );
+            assert_eq!(p.stamina, 85.75 + 0.75 * (t - 15) as f32, "tick {t}");
+            assert_ne!(s.camera.yaw, hit.camera.yaw);
+        }
+        let s = run.hold(&[], &FORWARD);
+        assert_eq!(s.player.health.state, Condition::Ok);
+        assert_eq!(s.player.action, Action::Idle);
+        assert_ne!(s.player.position, hit.player.position);
+    }
+
+    #[test]
+    fn staggered_character_still_turns_the_camera_and_locks_on() {
+        // Hit on tick 2 (staggered for 30 ticks). The camera turns right on
+        // tick 3; the lock key on tick 4 locks on to the target ahead on the
+        // left, and the camera starts turning to it.
+        let nodes = format!(
+            "{}{}",
+            swinger("s", (0.0, 0.0, 0.0), &all_round(1, 100)),
+            target("t", -5.0, -10.0)
+        );
+        let mut run = hit_run("", &nodes);
+        run.tick(false, &NONE);
+        run.tick(false, &NONE);
+        let s = run.hold(&[], &[(LOOK_X, 0.1)]);
+        assert_eq!(s.player.health.state, Condition::Stagger);
+        assert_eq!(s.camera.yaw, -0.1);
+        let s = run.hold(&[LOCK], &NONE);
+        assert_eq!(s.player.health.state, Condition::Stagger);
+        assert_eq!(lock_of(&s), Some("t"));
+        assert!(s.camera.yaw > -0.1);
+    }
+
+    #[test]
+    fn killing_hit_lets_go_of_the_lock_and_a_dead_character_cannot_lock_on() {
+        // hp 3, one hit of 3 on tick 3 kills.
+        let nodes = format!(
+            "{}{}",
+            swinger("s", (0.0, 0.0, 0.0), &all_round(2, 100)),
+            target("t", 0.0, -10.0)
+        );
+        let mut run = hit_run(r#"("hp", 3)"#, &nodes);
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some("t"));
+        assert_eq!(lock_of(&run.hold(&[], &NONE)), Some("t"));
+        let s = run.hold(&[], &NONE);
+        assert_eq!(s.player.health.state, Condition::Dead);
+        assert_eq!(lock_of(&s), None);
+        run.hold(&[], &NONE);
+        let s = run.hold(&[LOCK], &NONE);
+        assert_eq!(
+            (lock_of(&s), s.player.health.state),
+            (None, Condition::Dead)
+        );
+    }
+
+    #[test]
+    fn dead_character_is_not_hit_until_it_respawns() {
+        // Killed on tick 2, dead on 2..=21: the swings of 5, 8, ..., 20 go
+        // through it. Back on tick 22, hit again on 23.
+        let mut run = every_third_tick(r#"("hp", 3), ("respawn_ticks", 20)"#, 1);
+        for t in 1..=23 {
+            let p = run.tick(false, &NONE).player;
+            let (hits, state) = match t {
+                1 => (0, Condition::Ok),
+                2..=21 => (1, Condition::Dead),
+                22 => (1, Condition::Ok),
+                _ => (2, Condition::Dead),
+            };
+            assert_eq!((p.hits, p.health.state), (hits, state), "tick {t}");
+        }
+    }
+
+    #[test]
+    fn character_respawns_at_full_health_where_it_started_respawn_ticks_after_dying() {
+        // An attack on tick 1 spends stamina (1 of [`health_props`], and 30
+        // ticks of delay); running right and turning the camera on 4..=10;
+        // killed on tick 10, dead on 10..=14. On tick 15 it is back at the
+        // start at full health and stamina, the camera as at load, and runs.
+        let props = format!(r#"{}, ("hp", 3), ("respawn_ticks", 5)"#, health_props());
+        let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(9, 100));
+        let mut run = hit_run(&props, &nodes);
+        let away = [(MOVE_X, 1.0), (LOOK_X, 0.05)];
+        let mut states = vec![run.hold(&[ATTACK], &NONE), run.tick(false, &NONE)];
+        states.push(run.tick(false, &NONE));
+        for _ in 4..=14 {
+            states.push(run.tick(false, &away));
+        }
+        let dead = &states[9];
+        assert_eq!(dead.player.health.state, Condition::Dead);
+        assert!(dead.player.position.x > 0.0 && dead.player.stamina < 100.0);
+        let last = &states[13];
+        assert_eq!(
+            (last.player.health.state, last.player.health.state_ticks),
+            (Condition::Dead, 1)
+        );
+        assert_eq!(last.player.position, dead.player.position);
+        assert_ne!(last.camera.yaw, 0.0);
+        let s = run.tick(false, &FORWARD);
+        let p = &s.player;
+        assert_eq!(p.health, full_health(3.0));
+        assert_eq!(p.position, Vec3::new(0.0, 0.0, -0.0625));
+        assert_eq!(p.facing.to_bits(), 0);
+        assert_eq!((p.stamina, p.stamina_wait), (100.0, 0));
+        assert_eq!((s.camera.yaw, s.camera.pitch), (0.0, 0.0));
+        assert_eq!(p.hits, 1);
+    }
+
+    /// A hurtbox swinger 1 m straight ahead (facing away, but sweeping all
+    /// around), active on the second tick of each round, with `props`.
+    fn target_swinger(props: &str, recovery: u32) -> String {
+        swinger(
+            "s",
+            (0.0, 0.0, -1.0),
+            &format!(
+                r#"{}, ("hurt_radius", 0.25), ("hurt_height", 1.8), {props}"#,
+                all_round(1, recovery)
+            ),
+        )
+    }
+
+    #[test]
+    fn swinger_staggered_on_its_active_tick_does_not_swing_then_starts_a_new_round() {
+        // The character's attack (pressed on 1, [`health_props`]) hits on
+        // tick 2 and staggers the swinger (poise 0) for 3 ticks: on tick 2
+        // it does not swing. Back on tick 5 at swing_tick 1, it hits on 6.
+        let nodes = target_swinger(r#"("hp", 100), ("stagger_ticks", 3)"#, 100);
+        let mut run = hit_run(&health_props(), &nodes);
+        let states = press_on(&mut run, ATTACK, &[1], 6, &NONE);
+        let swing = |t: usize| {
+            let s = &states[t - 1].swingers[0];
+            (s.swing_tick, s.phase)
+        };
+        assert_eq!(swing(1), (1, Some(AttackPhase::Startup)));
+        for t in 2..=4 {
+            assert_eq!(swing(t), (0, None), "tick {t}");
+            assert_eq!(states[t - 1].player.hits, 0);
+        }
+        assert_eq!(
+            health_of(&states[1], "s").state,
+            Condition::Stagger,
+            "staggered by the character"
+        );
+        assert_eq!(swing(5), (1, Some(AttackPhase::Startup)));
+        assert_eq!(swing(6), (2, Some(AttackPhase::Active)));
+        assert_eq!(states[5].player.last_hit, hit_by(6, "s"));
+    }
+
+    #[test]
+    fn killed_swinger_stops_until_it_revives_then_starts_a_new_round() {
+        // Killed on tick 2 (3 damage on hp 3), dead on 2..=6, back on 7,
+        // swinging again: it hits on 8.
+        let nodes = target_swinger(r#"("hp", 3), ("revive_ticks", 5)"#, 100);
+        let mut run = hit_run(&health_props(), &nodes);
+        let states = press_on(&mut run, ATTACK, &[1], 8, &NONE);
+        for t in 2..=6 {
+            assert_eq!(states[t - 1].swingers[0].swing_tick, 0, "tick {t}");
+            assert_eq!(health_of(&states[t - 1], "s").state, Condition::Dead);
+        }
+        assert_eq!(states[6].swingers[0].swing_tick, 1);
+        assert_eq!(states[6].player.hits, 0);
+        assert_eq!(states[7].player.last_hit, hit_by(8, "s"));
+    }
+
+    #[test]
+    fn swinger_without_hp_keeps_its_rhythm_when_hit() {
+        // A hurtbox without hp, hit by attacks on ticks 2 and 5 (the
+        // character's poise high enough not to be staggered by its swings).
+        let nodes = target_swinger("", 1);
+        let props = format!(r#"{}, ("poise", 1000)"#, health_props());
+        let mut run = hit_run(&props, &nodes);
+        let states = press_on(&mut run, ATTACK, &[1, 4], 12, &NONE);
+        for (i, s) in states.iter().enumerate() {
+            assert_eq!(s.swingers[0].swing_tick, i as u32 % 3 + 1, "tick {}", i + 1);
+        }
+        let h = hurtbox_state(&states[11], "s");
+        assert_eq!((h.hits, h.health), (2, None));
+        assert_eq!(states[11].player.hits, 4);
+    }
+
+    #[test]
+    fn swinger_does_not_hit_hurtboxes_in_its_sweep() {
+        let nodes = format!(
+            "{}{}",
+            swinger("s", (0.0, 0.0, 0.0), &all_round(1, 1)),
+            hurtbox("h", (0.0, 0.0, -1.0), 0.25, 1.8)
+        );
+        let mut run = hit_run(r#"("hp", 100)"#, &nodes);
+        let s = run.ticks(6, false, &NONE);
+        assert_eq!(s.player.hits, 2);
+        assert_eq!(hurtbox_state(&s, "h").hits, 0);
+    }
+
+    #[test]
+    fn character_stands_turned_to_its_facing_and_tips_away_from_the_swinger_when_hit() {
+        // The character turned 90° (to face -X), the swinger 1.5 m behind
+        // it on +Z: hit on tick 3, it tips 20° towards -Z while staggered
+        // (ticks 3..=5), or lies flat that way while dead (3..=7, respawning
+        // on 8 with hp 3).
+        let (sin, cos) = (
+            libm::sinf(20.0_f32.to_radians()),
+            libm::cosf(20.0_f32.to_radians()),
+        );
+        for (props, down, up) in [
+            (
+                r#"("hp", 100), ("stagger_ticks", 3)"#,
+                3..=5,
+                Vec3::new(0.0, cos, -sin),
+            ),
+            (r#"("hp", 3), ("respawn_ticks", 5)"#, 3..=7, Vec3::NEG_Z),
+        ] {
+            let src = scene_with(props, &swinger("s", (0.0, 0.0, 1.5), RHYTHM)).replace(
+                r#"(name: "player","#,
+                r#"(name: "player", rotation: (0.0, 90.0, 0.0),"#,
+            );
+            let mut run = Run::on(&src);
+            let facing = run.game.state().player.facing;
+            assert!((facing - FRAC_PI_2).abs() < 1e-6);
+            for t in 1..=8_u32 {
+                run.tick(false, &NONE);
+                if down.contains(&t) {
+                    assert_near(up_of(&run, "player"), up, &format!("tick {t}"));
+                    let tilt = if up == Vec3::NEG_Z {
+                        FRAC_PI_2
+                    } else {
+                        20.0_f32.to_radians()
+                    };
+                    assert_same_rotation(
+                        node_rotation(&run, "player"),
+                        Quat::from_rotation_x(-tilt) * Quat::from_rotation_y(facing),
+                    );
+                } else {
+                    // Standing: exactly as before G3.4.
+                    assert_eq!(
+                        quat_bits(node_rotation(&run, "player")),
+                        quat_bits(Quat::from_rotation_y(facing)),
+                        "tick {t}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hit_character_flashes_for_eight_ticks_and_darkens_while_dead_until_it_respawns() {
+        // hp 6: hit on tick 3 (white on 3..=8), killed on tick 9 (darkened on
+        // 9..=18), back on 19 in its colors: 10 ticks after the hit, past
+        // the flash.
+        let src = scene_with(
+            r#"("hp", 6), ("respawn_ticks", 10)"#,
+            &swinger("s", (0.0, 0.0, 0.0), RHYTHM),
+        )
+        .replace(
+            "character: (run_speed: 3.75, turn_speed: 720.0),",
+            r#"character: (run_speed: 3.75, turn_speed: 720.0), color: (0.8, 0.25, 0.2),
+            children: [(name: "visor", mesh: Cube, color: (0.9, 0.85, 0.3))],"#,
+        );
+        let mut run = Run::on(&src);
+        let meshes = [
+            ("player", Vec3::new(0.8, 0.25, 0.2)),
+            ("player/visor", Vec3::new(0.9, 0.85, 0.3)),
+        ];
+        for t in 1..=20_u32 {
+            let s = run.tick(false, &NONE);
+            for (path, color) in meshes {
+                let expected = match t {
+                    3..=8 => Vec3::ONE,
+                    9..=18 => color * 0.4,
+                    _ => color,
+                };
+                assert_eq!(color_of(&run, path), expected, "{path} on tick {t}");
+            }
+            if t == 9 {
+                assert_eq!(s.player.health.state, Condition::Dead);
+            }
+        }
+    }
+
+    /// The arm of swinger `s`: its local transform and its color.
+    fn arm_of(run: &Run) -> (loom_scene::Transform, Vec3) {
+        let scene = run.game.scene();
+        let id = scene.find("s/arm").unwrap();
+        (*scene.transform(id), color_of(run, "s/arm"))
+    }
+
+    #[test]
+    fn arm_waits_at_the_right_end_in_warning_color_sweeps_each_slice_then_returns() {
+        // Far from the character. Startup (ticks 1-2): turned to the right
+        // end, -90°; active (3-4): at the end of the slice swept, 0° then
+        // 90°; recovery (5-6): as in the scene file; tick 7 starts over.
+        let mut run = hit_run("", &swinger("s", (0.0, 0.0, -20.0), RHYTHM));
+        let (scene_arm, _) = arm_of(&run);
+        let (p0, r0) = (scene_arm.position, scene_arm.rotation);
+        let arc = 180.0_f32.to_radians();
+        let (half, slice) = (arc * 0.5, arc / 2.0);
+        for t in 1..=7_u32 {
+            run.tick(false, &NONE);
+            let (arm, color) = arm_of(&run);
+            let angle = match t {
+                1 | 2 | 7 => Some(-half),
+                3 | 4 => Some(-half + (t - 2) as f32 * slice),
+                _ => None,
+            };
+            let (position, rotation) = match angle {
+                Some(a) => (Quat::from_rotation_y(a) * p0, Quat::from_rotation_y(a) * r0),
+                None => (p0, r0),
+            };
+            assert_eq!(bits3(arm.position), bits3(position), "tick {t}");
+            assert_eq!(quat_bits(arm.rotation), quat_bits(rotation), "tick {t}");
+            assert_eq!(arm.scale, scene_arm.scale);
+            let warning = matches!(t, 1 | 2 | 7);
+            assert_eq!(color, if warning { WARN } else { ARM }, "tick {t}");
+        }
+        // The right end is +X: to the right of a swinger facing -Z.
+        run.tick(false, &NONE);
+        let (arm, _) = arm_of(&run);
+        assert_near(arm.position, Vec3::new(1.0, 1.0, 0.0), "right end");
+    }
+
+    fn bits3(v: Vec3) -> [u32; 3] {
+        v.to_array().map(f32::to_bits)
+    }
+
+    #[test]
+    fn arm_flashes_with_its_swinger_instead_of_warning() {
+        // A hurtbox swinger without hp, in startup on ticks 1-10, hit by the
+        // character's attack on tick 2: white on 2..=9, warning on 1 and 10.
+        let nodes = swinger(
+            "s",
+            (0.0, 0.0, -1.0),
+            r#"("hurt_radius", 0.25), ("hurt_height", 1.8), ("swing_startup_ticks", 10)"#,
+        );
+        let mut run = hit_run(&health_props(), &nodes);
+        for t in 1..=10_u32 {
+            let actions: &[&str] = if t == 1 { &[ATTACK] } else { &[] };
+            run.hold(actions, &NONE);
+            let (_, color) = arm_of(&run);
+            let expected = if (2..=9).contains(&t) {
+                Vec3::ONE
+            } else {
+                WARN
+            };
+            assert_eq!(color, expected, "tick {t}");
+        }
+    }
+
+    #[test]
+    fn dead_swinger_arm_darkens_on_the_center_line_until_it_revives() {
+        // Killed on tick 2 (dead on 2..=11): the arm darkened and as in the
+        // scene file; back on tick 12 (past the flash) in startup: the right
+        // end, warning.
+        let nodes = target_swinger(r#"("hp", 3), ("revive_ticks", 10)"#, 100);
+        let mut run = hit_run(&health_props(), &nodes);
+        let (scene_arm, _) = arm_of(&run);
+        for t in 1..=12_u32 {
+            let actions: &[&str] = if t == 1 { &[ATTACK] } else { &[] };
+            run.hold(actions, &NONE);
+            let (arm, color) = arm_of(&run);
+            if (2..=11).contains(&t) {
+                assert_eq!(color, ARM * 0.4, "tick {t}");
+                assert_eq!(bits3(arm.position), bits3(scene_arm.position), "tick {t}");
+                assert_eq!(quat_bits(arm.rotation), quat_bits(scene_arm.rotation));
+            } else {
+                assert_eq!(color, WARN, "tick {t}");
+                assert_ne!(arm.position, scene_arm.position, "tick {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn character_hp_poise_and_respawn_props_are_checked_with_exact_messages() {
+        let whole = "must be a whole number of at least 1";
+        for (props, problem) in [
+            (
+                r#"("hp", 0)"#,
+                "prop \"hp\" must be greater than 0, got 0".to_owned(),
+            ),
+            (
+                r#"("poise", -0.5)"#,
+                "prop \"poise\" must be at least 0, got -0.5".to_owned(),
+            ),
+            (
+                r#"("stagger_ticks", 0)"#,
+                format!("prop \"stagger_ticks\" {whole}, got 0"),
+            ),
+            (
+                r#"("poise_reset_ticks", 1.5)"#,
+                format!("prop \"poise_reset_ticks\" {whole}, got 1.5"),
+            ),
+            (
+                r#"("respawn_ticks", 0.5)"#,
+                format!("prop \"respawn_ticks\" {whole}, got 0.5"),
+            ),
+        ] {
+            assert_eq!(
+                error_of(props),
+                format!("the character \"player\": {problem}")
+            );
+        }
+        let accepted = r#"("hp", 0.5), ("poise", 0), ("stagger_ticks", 1),
+            ("poise_reset_ticks", 1), ("respawn_ticks", 1)"#;
+        assert!(Game::from_source(&scene(accepted)).is_ok());
+        // Node props are another table: revive_ticks is not the character's.
+        assert_eq!(
+            error_of(r#"("revive_ticks", 5)"#),
+            "the character \"player\": unknown prop \"revive_ticks\""
+        );
+    }
+
+    #[test]
+    fn character_hp_poise_and_respawn_props_are_checked_after_the_damage_props() {
+        assert!(error_of(r#"("hp", 0), ("heavy_impact", -1)"#).contains("heavy_impact"));
+        assert!(error_of(r#"("respawn_ticks", 0), ("hp", 0)"#).contains("\"hp\""));
+        assert!(error_of(r#"("respawn_ticks", 0), ("poise", -1)"#).contains("\"poise\""));
+        // Values before the windows, the ranges and the band.
+        assert!(error_of(r#"("roll_invuln_to", 40), ("hp", 0)"#).contains("\"hp\""));
+    }
+
+    /// The error for a root node "t" with `props`.
+    fn node_error(props: &str) -> String {
+        error_with("", &format!(r#"(name: "t", props: [{props}]),"#))
+    }
+
+    #[test]
+    fn swing_props_are_checked_with_exact_messages() {
+        let d = r#"("swing_damage", 3)"#;
+        let whole = "must be a whole number of at least 1";
+        for (props, problem) in [
+            (
+                r#"("swing_damage", 0)"#.to_owned(),
+                "prop \"swing_damage\" must be greater than 0, got 0".to_owned(),
+            ),
+            (
+                format!(r#"{d}, ("swing_impact", -1)"#),
+                "prop \"swing_impact\" must be at least 0, got -1".to_owned(),
+            ),
+            (
+                format!(r#"{d}, ("swing_startup_ticks", 0)"#),
+                format!("prop \"swing_startup_ticks\" {whole}, got 0"),
+            ),
+            (
+                format!(r#"{d}, ("swing_active_ticks", 1.5)"#),
+                format!("prop \"swing_active_ticks\" {whole}, got 1.5"),
+            ),
+            (
+                format!(r#"{d}, ("swing_recovery_ticks", 0.5)"#),
+                format!("prop \"swing_recovery_ticks\" {whole}, got 0.5"),
+            ),
+            (
+                format!(r#"{d}, ("swing_reach", 0)"#),
+                "prop \"swing_reach\" must be greater than 0, got 0".to_owned(),
+            ),
+            (
+                format!(r#"{d}, ("swing_arc", 0)"#),
+                "prop \"swing_arc\" must be greater than 0 and at most 360, got 0".to_owned(),
+            ),
+            (
+                format!(r#"{d}, ("swing_arc", 360.5)"#),
+                "prop \"swing_arc\" must be greater than 0 and at most 360, got 360.5".to_owned(),
+            ),
+            (
+                format!(r#"{d}, ("swing_low", -0.1)"#),
+                "prop \"swing_low\" must be at least 0, got -0.1".to_owned(),
+            ),
+            (
+                format!(r#"{d}, ("swing_high", 0)"#),
+                "prop \"swing_high\" must be greater than 0, got 0".to_owned(),
+            ),
+        ] {
+            assert_eq!(node_error(&props), format!("the node \"t\": {problem}"));
+        }
+        let accepted = r#"("swing_damage", 0.5), ("swing_impact", 0),
+            ("swing_startup_ticks", 1), ("swing_active_ticks", 1), ("swing_recovery_ticks", 1),
+            ("swing_reach", 0.1), ("swing_arc", 360), ("swing_low", 0), ("swing_high", 0.1)"#;
+        let nodes = format!(r#"(name: "t", props: [{accepted}]),"#);
+        assert!(Game::from_source(&scene_with("", &nodes)).is_ok());
+    }
+
+    #[test]
+    fn swinger_nodes_are_checked_with_exact_messages() {
+        let d = r#"("swing_damage", 3)"#;
+        for (props, message) in [
+            (
+                r#"("swing_reach", 2)"#.to_owned(),
+                "the node \"t\": prop \"swing_reach\" needs swing_damage",
+            ),
+            (
+                // The first of the eight in list order, not in the node's.
+                r#"("swing_high", 2), ("swing_impact", 5)"#.to_owned(),
+                "the node \"t\": prop \"swing_impact\" needs swing_damage",
+            ),
+            (
+                // The other end by its default: 1.6, 0.3.
+                format!(r#"{d}, ("swing_low", 1.6)"#),
+                "the node \"t\": needs swing_low < swing_high",
+            ),
+            (
+                format!(r#"{d}, ("swing_high", 0.3)"#),
+                "the node \"t\": needs swing_low < swing_high",
+            ),
+            (
+                format!(r#"{d}, ("swing_dammage", 3)"#),
+                "the node \"t\": unknown prop \"swing_dammage\" (known: lock_height, \
+                 hurt_radius, hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, \
+                 revive_ticks, swing_damage, swing_impact, swing_startup_ticks, \
+                 swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, \
+                 swing_high)",
+            ),
+        ] {
+            assert_eq!(node_error(&props), message);
+        }
+        assert!(
+            Game::from_source(&scene_with(
+                "",
+                &format!(r#"(name: "t", props: [{d}, ("swing_low", 1.5)]),"#)
+            ))
+            .is_ok()
+        );
+        assert_eq!(
+            error_with(
+                "",
+                &format!(r#"(name: "g", children: [(name: "t", props: [{d}])]),"#)
+            ),
+            "the swinger \"g/t\" must be a root node, and not the camera"
+        );
+        let src = scene("").replace(
+            r#"(name: "cam","#,
+            &format!(r#"(name: "cam", props: [{d}],"#),
+        );
+        match Game::from_source(&src) {
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "the swinger \"cam\" must be a root node, and not the camera"
+            ),
+            Ok(_) => panic!("the camera cannot be a swinger"),
+        }
+        assert_eq!(
+            error_with(
+                "",
+                &format!(r#"(name: "t", props: [{d}], children: [(name: "arm")]),"#)
+            ),
+            "the node \"t\": its arm needs a mesh"
+        );
+        // "arm" means nothing on a node that is no swinger.
+        let nodes = format!(
+            r#"(name: "t", props: [{HURT}], children: [(name: "arm")]),
+            (name: "u", children: [(name: "arm")]),"#
+        );
+        assert!(Game::from_source(&scene_with("", &nodes)).is_ok());
+    }
+
+    #[test]
+    fn swinger_checks_run_in_the_documented_order() {
+        let d = r#"("swing_damage", 3)"#;
+        let child = |props: &str, children: &str| {
+            error_with(
+                "",
+                &format!(
+                    r#"(name: "g", children: [(name: "t", props: [{props}],
+                        children: [{children}])]),"#
+                ),
+            )
+        };
+        // Unknown names, then the values in list order.
+        assert!(node_error(r#"("swing_arc", 0), ("swing_x", 1)"#).contains("unknown prop"));
+        assert!(
+            node_error(r#"("swing_arc", 0), ("swing_damage", 0)"#).contains("\"swing_damage\"")
+        );
+        assert!(node_error(r#"("swing_high", 0), ("revive_ticks", 0)"#).contains("revive_ticks"));
+        // Values, then the hurt pair, then hp, then the props needing hp.
+        assert!(node_error(r#"("hurt_radius", 0.4), ("swing_arc", 0)"#).contains("swing_arc"));
+        assert!(node_error(r#"("hurt_radius", 0.4), ("swing_impact", 1)"#).contains("needs both"));
+        assert!(node_error(r#"("hp", 5), ("swing_impact", 1)"#).contains("hp needs hurt"));
+        assert!(node_error(r#"("poise", 5), ("swing_impact", 1)"#).contains("needs hp"));
+        // Needing swing_damage, then the band, then the root rule.
+        assert!(node_error(r#"("swing_low", 2)"#).contains("needs swing_damage"));
+        assert!(child(&format!(r#"{d}, ("swing_low", 2)"#), "").contains("swing_low <"));
+        // The root rule: a lock target's message, then a hurtbox's, then a
+        // swinger's.
+        assert!(
+            child(&format!(r#"{d}, ("lock_height", 1), {HURT}"#), "")
+                .starts_with("the lock target \"g/t\"")
+        );
+        assert!(
+            child(&format!(r#"{d}, ("lock_height", 1)"#), "")
+                .starts_with("the lock target \"g/t\"")
+        );
+        assert!(child(&format!("{d}, {HURT}"), "").starts_with("the hurtbox \"g/t\""));
+        // The root rule, then the hp bar, then the arm.
+        assert!(
+            child(&format!(r#"{d}, {HURT}, ("hp", 5)"#), r#"(name: "arm")"#)
+                .starts_with("the hurtbox \"g/t\"")
+        );
+        assert_eq!(
+            error_with(
+                "",
+                &format!(
+                    r#"(name: "t", props: [{d}, {HURT}, ("hp", 5)],
+                        children: [(name: "arm"), (name: "hp_bar")]),"#
+                )
+            ),
+            "the node \"t\": its hp_bar needs a mesh"
         );
     }
 }

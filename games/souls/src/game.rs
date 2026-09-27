@@ -41,6 +41,8 @@ enum NodeRule {
     NotNegative,
     /// A whole number of at least 1.
     Ticks,
+    /// An angle in degrees, greater than 0 and at most 360.
+    Arc,
 }
 
 /// The props a node other than the character may have, in the order they
@@ -48,8 +50,10 @@ enum NodeRule {
 /// - `lock_height` makes it a lock-on target (locked on this many meters
 ///   above its position);
 /// - `hurt_radius` and `hurt_height` together make it a hurtbox;
-/// - `hp` makes a hurtbox take damage; the last four go with `hp`.
-const NODE_PROPS: [(&str, Option<f64>, NodeRule); 8] = [
+/// - `hp` makes a hurtbox take damage; the four after it go with `hp`;
+/// - `swing_damage` makes it a swinger, hitting the character; the last
+///   eight go with `swing_damage`.
+const NODE_PROPS: [(&str, Option<f64>, NodeRule); 17] = [
     ("lock_height", None, NodeRule::Positive),
     ("hurt_radius", None, NodeRule::Positive),
     ("hurt_height", None, NodeRule::Positive),
@@ -58,10 +62,27 @@ const NODE_PROPS: [(&str, Option<f64>, NodeRule); 8] = [
     ("stagger_ticks", Some(30.0), NodeRule::Ticks),
     ("poise_reset_ticks", Some(60.0), NodeRule::Ticks),
     ("revive_ticks", Some(180.0), NodeRule::Ticks),
+    ("swing_damage", None, NodeRule::Positive),
+    ("swing_impact", Some(20.0), NodeRule::NotNegative),
+    ("swing_startup_ticks", Some(40.0), NodeRule::Ticks),
+    ("swing_active_ticks", Some(6.0), NodeRule::Ticks),
+    ("swing_recovery_ticks", Some(74.0), NodeRule::Ticks),
+    ("swing_reach", Some(2.2), NodeRule::Positive),
+    ("swing_arc", Some(150.0), NodeRule::Arc),
+    ("swing_low", Some(0.3), NodeRule::NotNegative),
+    // Also above `swing_low`, checked on its own.
+    ("swing_high", Some(1.6), NodeRule::Positive),
 ];
+
+/// Where the props that go with `hp` and with `swing_damage` are in
+/// [`NODE_PROPS`].
+const HP_PROPS: std::ops::Range<usize> = 4..8;
+const SWING_PROPS: std::ops::Range<usize> = 9..17;
 
 /// The name of the child of a hurtbox with `hp` that shows its health.
 const HP_BAR: &str = "hp_bar";
+/// The name of the child of a swinger that shows its swing.
+const ARM: &str = "arm";
 
 /// How long a hurtbox flashes after a hit, in ticks, counting the tick of
 /// the hit. A stand-in for real hit feedback, like the constants below.
@@ -74,6 +95,9 @@ const DEAD_DIM: f32 = 0.4;
 const STAGGER_TILT_DEGREES: f32 = 20.0;
 /// How far a dead hurtbox tips over: flat on the ground.
 const DEAD_TILT_DEGREES: f32 = 90.0;
+/// The color of a swinger's arm during its startup: the warning that a
+/// swing is coming. A stand-in, like the flash.
+const WARN_COLOR: Vec3 = Vec3::new(1.0, 0.55, 0.1);
 
 #[derive(Debug, thiserror::Error)]
 pub enum GameError {
@@ -164,7 +188,9 @@ pub enum GameError {
     },
     #[error(
         "the node {node:?}: unknown prop {prop:?} (known: lock_height, hurt_radius, hurt_height, \
-         hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks)"
+         hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks, swing_damage, swing_impact, \
+         swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, \
+         swing_low, swing_high)"
     )]
     UnknownNodeProp { node: String, prop: String },
     #[error("the node {node:?}: prop {prop:?} must be greater than 0, got {value}")]
@@ -185,18 +211,32 @@ pub enum GameError {
         prop: &'static str,
         value: f64,
     },
+    #[error("the node {node:?}: prop {prop:?} must be greater than 0 and at most 360, got {value}")]
+    NodePropNotAnArc {
+        node: String,
+        prop: &'static str,
+        value: f64,
+    },
     #[error("the node {0:?}: needs both hurt_radius and hurt_height, or neither")]
     HurtPropsUnpaired(String),
     #[error("the node {0:?}: hp needs hurt_radius and hurt_height")]
     HpWithoutHurtbox(String),
     #[error("the node {node:?}: prop {prop:?} needs hp")]
     NeedsHp { node: String, prop: &'static str },
+    #[error("the node {node:?}: prop {prop:?} needs swing_damage")]
+    NeedsSwingDamage { node: String, prop: &'static str },
+    #[error("the node {0:?}: needs swing_low < swing_high")]
+    NodeSwingBand(String),
     #[error("the node {0:?}: its hp_bar needs a mesh")]
     HpBarWithoutMesh(String),
+    #[error("the node {0:?}: its arm needs a mesh")]
+    ArmWithoutMesh(String),
     #[error("the lock target {0:?} must be a root node, and not the camera")]
     LockTargetNotRoot(String),
     #[error("the hurtbox {0:?} must be a root node, and not the camera")]
     HurtboxNotRoot(String),
+    #[error("the swinger {0:?} must be a root node, and not the camera")]
+    SwingerNotRoot(String),
 }
 
 /// The game state in the state dump (`game`).
@@ -208,9 +248,11 @@ pub struct GameState {
     pub lock: Option<String>,
     /// Every hurtbox, in pre-order.
     pub hurtboxes: Vec<HurtboxState>,
+    /// Every swinger, in pre-order.
+    pub swingers: Vec<SwingerState>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlayerState {
     /// Feet position in meters; serialized as `[x, y, z]`.
     pub position: Vec3,
@@ -230,6 +272,20 @@ pub struct PlayerState {
     pub combo: u32,
     /// The action to start once the running attack is over.
     pub buffered: Option<Buffered>,
+    /// Times a swinger hit the character since loading.
+    pub hits: u32,
+    /// The latest hit on the character; `None` before the first.
+    pub last_hit: Option<PlayerHit>,
+    pub health: HealthState,
+}
+
+/// One hit on the character.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PlayerHit {
+    /// The tick it happened on, as in the state dump's `tick`.
+    pub tick: u64,
+    /// The path of the swinger that hit.
+    pub by: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -279,9 +335,10 @@ impl BoxCollider {
     }
 }
 
-/// [`GameState`] but the lock and the hurtboxes, which [`Game::state`] adds:
-/// the lock as a path, the hurtboxes from [`Game`]'s own list.
-#[derive(Debug, Clone, Copy)]
+/// [`GameState`] but the lock, the hurtboxes and the swingers, which
+/// [`Game::state`] adds: the lock as a path, the others from [`Game`]'s own
+/// lists.
+#[derive(Debug, Clone)]
 struct Motion {
     player: PlayerState,
     camera: CameraState,
@@ -332,6 +389,84 @@ pub struct HurtboxState {
     pub last_hit: Option<LastHit>,
     /// `None` without an `hp` prop.
     pub health: Option<HealthState>,
+}
+
+/// A node with `swing_damage`: it swings at the character on a fixed
+/// rhythm (startup, active, recovery, over and over), sweeping a sector
+/// right to left like the character's attacks, and never turns.
+#[derive(Debug, Clone)]
+struct Swinger {
+    id: NodeId,
+    /// The path, for the state dump and `last_hit.by`.
+    path: String,
+    /// Computed once from the node's rotation, like the character's.
+    facing: f32,
+    damage: f32,
+    impact: f32,
+    startup: u32,
+    active: u32,
+    /// `startup + active + recovery`, saturating.
+    period: u32,
+    reach: f32,
+    /// Radians: the whole angle of the sector.
+    arc: f32,
+    /// Radians swept per active tick: `arc / active`.
+    slice: f32,
+    /// Meters above the node: the height band swept.
+    low: f32,
+    high: f32,
+    /// The index in `Game::hurtboxes` of the same node, if it is one: a
+    /// staggered or dead one stops swinging.
+    hurtbox: Option<usize>,
+    arm: Option<Arm>,
+    /// Which tick of the round this is, from 1; 0 while staggered or dead.
+    swing_tick: u32,
+    /// This round has hit the character already.
+    struck: bool,
+}
+
+/// The `arm` child of a swinger, as in the scene file: its pose on the
+/// center line, and its color.
+#[derive(Debug, Clone, Copy)]
+struct Arm {
+    id: NodeId,
+    p0: Vec3,
+    r0: Quat,
+    color: Vec3,
+}
+
+impl Swinger {
+    /// The part of the round `swing_tick` is in; `None` at 0.
+    fn phase(&self) -> Option<AttackPhase> {
+        match self.swing_tick {
+            0 => None,
+            t if t <= self.startup => Some(AttackPhase::Startup),
+            t if t - self.startup <= self.active => Some(AttackPhase::Active),
+            _ => Some(AttackPhase::Recovery),
+        }
+    }
+
+    /// `(lo, hi)` of active tick `k` (1-based): the part of the sector it
+    /// sweeps, relative to `facing`, positive to the left.
+    fn slice_of(&self, k: u32) -> (f32, f32) {
+        let half = self.arc * 0.5;
+        (
+            -half + (k - 1) as f32 * self.slice,
+            -half + k as f32 * self.slice,
+        )
+    }
+}
+
+/// A swinger in the state dump (`game.swingers`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SwingerState {
+    /// The node's path.
+    pub node: String,
+    /// Which tick of the round, from 1 to its length; 0 while staggered or
+    /// dead.
+    pub swing_tick: u32,
+    /// `None` when `swing_tick` is 0.
+    pub phase: Option<AttackPhase>,
 }
 
 /// One hit on a hurtbox.
@@ -392,6 +527,19 @@ pub struct Game {
     hurtboxes: Vec<Hurtbox>,
     /// The indices in `hurtboxes` the running attack has already hit.
     struck: Vec<usize>,
+    /// Every swinger, in pre-order.
+    swingers: Vec<Swinger>,
+    /// The character's own health, poise and death (without an hp bar).
+    health: Health,
+    /// Every node with a mesh in the character's subtree (the character
+    /// included), in pre-order, with its color in the scene file: what
+    /// flashes and darkens.
+    player_meshes: Vec<(NodeId, Vec3)>,
+    /// Where the character comes back after dying: its position and
+    /// facing at load.
+    spawn: (Vec3, f32),
+    /// The camera's yaw and pitch at load, given back on a respawn.
+    start_view: (f32, f32),
 }
 
 /// This tick's input as step 4 uses it.
@@ -416,9 +564,10 @@ impl Game {
     /// camera (its target is necessarily that character: a scene has at
     /// most one). The character must not be scaled, and colliders must not
     /// move with either. Nodes with a `lock_height` prop are lock-on
-    /// targets: root nodes other than the camera. Places the camera for
-    /// tick 0, already pulled in front of anything in the way; the
-    /// character is not pushed out of colliders until the first tick.
+    /// targets, and nodes with `swing_damage` swingers: root nodes other
+    /// than the camera. Places the camera for tick 0, already pulled in
+    /// front of anything in the way; the character is not pushed out of
+    /// colliders until the first tick.
     pub fn new(scene: Scene) -> Result<Self, GameError> {
         let player = scene.character().ok_or(GameError::NoCharacter)?;
         let camera = scene.camera();
@@ -457,7 +606,26 @@ impl Game {
             }
         }
         let params = Params::new(&scene, player, radius)?;
-        let (targets, hurtboxes) = targets(&scene, player, camera)?;
+        let Roles {
+            targets,
+            hurtboxes,
+            swingers,
+        } = roles(&scene, player, camera)?;
+        let health = Health::new(
+            params.hp,
+            params.poise,
+            [
+                params.stagger_ticks,
+                params.poise_reset_ticks,
+                params.respawn_ticks,
+            ],
+            None,
+        );
+        let player_meshes = scene
+            .ids()
+            .filter(|&n| is_in_subtree(&scene, n, player))
+            .filter_map(|n| scene.node(n).mesh.map(|m| (n, m.color)))
+            .collect();
         let boxes = scene
             .colliders()
             .iter()
@@ -478,6 +646,9 @@ impl Game {
                 attack_phase: None,
                 combo: 0,
                 buffered: None,
+                hits: 0,
+                last_hit: None,
+                health: health.now,
             },
             camera: CameraState {
                 yaw: wrap(orbit.yaw_degrees.to_radians()),
@@ -486,6 +657,8 @@ impl Game {
                 distance: orbit.distance,
             },
         };
+        let spawn = (state.player.position, state.player.facing);
+        let start_view = (state.camera.yaw, state.camera.pitch);
         let mut game = Self {
             clock: SimClock::new(),
             scene,
@@ -514,6 +687,11 @@ impl Game {
             switch_wait: 0,
             hurtboxes,
             struck: Vec::new(),
+            swingers,
+            health,
+            player_meshes,
+            spawn,
+            start_view,
         };
         game.place_camera(true);
         Ok(game)
@@ -543,13 +721,27 @@ impl Game {
         for health in self.hurtboxes.iter_mut().filter_map(|h| h.health.as_mut()) {
             health.count_down();
         }
+        // The character's too; coming back from the dead is the respawn: at
+        // the spawn point with full stamina, the camera turned as at load.
+        let was_dead = self.health.is_dead();
+        self.health.count_down();
+        if was_dead && !self.health.is_dead() {
+            let player = &mut self.state.player;
+            (player.position, player.facing) = self.spawn;
+            player.stamina = params.stamina_max;
+            player.stamina_wait = 0;
+            (self.state.camera.yaw, self.state.camera.pitch) = self.start_view;
+            self.flick = 0.0;
+            self.switch_wait = 0;
+        }
 
-        let mut player = self.state.player;
+        let mut player = self.state.player.clone();
         let mut camera = self.state.camera;
 
-        // 1a. The lock key, and letting go of a target too far away.
+        // 1a. The lock key (not while dead), and letting go of a target too
+        // far away.
         let lock = params.lock;
-        if input.just_pressed(LOCK) {
+        if input.just_pressed(LOCK) && !self.health.is_dead() {
             self.lock = match self.lock {
                 None => self.acquire(player.position, camera.yaw),
                 Some(_) => None,
@@ -617,7 +809,11 @@ impl Game {
         // out of the colliders. `busy`: stamina used or an action running.
         let intent = Intent { input, tap, v, dir };
         let mut busy = true;
-        if matches!(player.action, Action::Roll | Action::Backstep) {
+        if self.health.now.state != Condition::Ok {
+            // Staggered or dead: no moving, turning or actions, and presses
+            // are dropped; stamina comes back.
+            busy = false;
+        } else if matches!(player.action, Action::Roll | Action::Backstep) {
             let m = params.movement(player.action);
             player.action_tick += 1;
             player.position = resolve(
@@ -705,14 +901,174 @@ impl Game {
             }
             Action::Idle | Action::Sprint | Action::Attack | Action::Heavy => false,
         };
+
+        // 5c. The swingers swing, and may hit the character.
+        self.swing(&mut player);
+        player.health = self.health.now;
         self.state = Motion { player, camera };
 
         // 6. Write the nodes.
-        let transform = self.scene.transform_mut(self.player);
-        transform.position = player.position;
-        transform.rotation = Quat::from_rotation_y(player.facing);
+        self.show_player();
         self.place_camera(false);
         self.show_hurtboxes();
+        self.show_arms();
+    }
+
+    /// Step 5c: every swinger (pre-order) moves on in its round, or stops
+    /// while staggered or dead, to start a new round once it stands again.
+    /// An active tick sweeps its slice of the sector and hits the character
+    /// it touches, at most once a round, unless the character is dead or
+    /// invulnerable.
+    fn swing(&mut self, player: &mut PlayerState) {
+        for i in 0..self.swingers.len() {
+            let s = &mut self.swingers[i];
+            if s.hurtbox
+                .and_then(|h| self.hurtboxes[h].health)
+                .is_some_and(|health| health.now.state != Condition::Ok)
+            {
+                s.swing_tick = 0;
+                continue;
+            }
+            s.swing_tick = s.swing_tick % s.period + 1;
+            if s.swing_tick == 1 {
+                s.struck = false;
+            }
+            if s.phase() != Some(AttackPhase::Active)
+                || s.struck
+                || self.health.is_dead()
+                || player.invulnerable
+            {
+                continue;
+            }
+            let (lo, hi) = s.slice_of(s.swing_tick - s.startup);
+            // Swingers are root nodes: the local position is the world one.
+            let at = self.scene.transform(s.id).position;
+            let sweep = Sweep {
+                p: at,
+                facing: s.facing,
+                reach: s.reach,
+                lo,
+                hi,
+                low: s.low,
+                high: s.high,
+            };
+            if sweep.touches(player.position, self.radius, self.height) {
+                s.struck = true;
+                let (by, damage, impact) = (s.path.clone(), s.damage, s.impact);
+                self.player_hit(player, at, by, damage, impact);
+            }
+        }
+    }
+
+    /// `player_hit` of step 5c: the swinger `by`, standing at `from`, hits
+    /// the character for `damage` and `impact`. A stagger or death breaks
+    /// off whatever it was doing (no combo carries over); a death lets go
+    /// of the lock.
+    fn player_hit(
+        &mut self,
+        player: &mut PlayerState,
+        from: Vec3,
+        by: String,
+        damage: f32,
+        impact: f32,
+    ) {
+        player.hits += 1;
+        player.last_hit = Some(PlayerHit {
+            tick: self.clock.tick(),
+            by,
+        });
+        // Away from the swinger; -Z when on one spot, like a hurtbox.
+        let fall = if hdist(from, player.position) > 0.0 {
+            bearing(from, player.position)
+        } else {
+            0.0
+        };
+        let died = self.health.take(damage, impact, fall);
+        if self.health.now.state != Condition::Ok {
+            player.action = Action::Idle;
+            player.action_tick = 0;
+            player.attack_phase = None;
+            player.combo = 0;
+            player.buffered = None;
+            player.invulnerable = false;
+            self.finished = (Action::Idle, 0);
+        }
+        if died {
+            self.lock = None;
+        }
+    }
+
+    /// Step 6 for the character node: its position, its pose (turned to
+    /// `facing`, tipped over away from the swinger when staggered or dead)
+    /// and the colors of its meshes, like a hurtbox's.
+    fn show_player(&mut self) {
+        let tick = self.clock.tick();
+        let player = &self.state.player;
+        let state = self.health.now.state;
+        let transform = self.scene.transform_mut(self.player);
+        transform.position = player.position;
+        transform.rotation = pose(
+            state,
+            self.health.fall,
+            Quat::from_rotation_y(player.facing),
+        );
+        let flashing = player
+            .last_hit
+            .as_ref()
+            .is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
+        for &(id, color) in &self.player_meshes {
+            self.scene
+                .set_mesh_color(id, shown(color, state == Condition::Dead, flashing))
+                .expect("meshes were picked for having a mesh, and every color is valid");
+        }
+    }
+
+    /// After the hurtboxes, every swinger's arm shows its round: at the
+    /// sector's right end during startup, at the end of this tick's slice
+    /// while active, otherwise on the center line as in the scene file.
+    /// It darkens and flashes with its swinger, and otherwise shows
+    /// [`WARN_COLOR`] during startup.
+    fn show_arms(&mut self) {
+        let tick = self.clock.tick();
+        for s in &self.swingers {
+            let Some(arm) = s.arm else {
+                continue;
+            };
+            let phase = s.phase();
+            let angle = match phase {
+                Some(AttackPhase::Startup) => Some(-(s.arc * 0.5)),
+                Some(AttackPhase::Active) => Some(s.slice_of(s.swing_tick - s.startup).1),
+                Some(AttackPhase::Recovery) | None => None,
+            };
+            let t = self.scene.transform_mut(arm.id);
+            match angle {
+                // Exactly as in the scene file.
+                None => {
+                    t.position = arm.p0;
+                    t.rotation = arm.r0;
+                }
+                Some(angle) => {
+                    let q = Quat::from_rotation_y(angle);
+                    t.position = q * arm.p0;
+                    t.rotation = q * arm.r0;
+                }
+            }
+            let hurtbox = s.hurtbox.map(|h| &self.hurtboxes[h]);
+            let dead = hurtbox
+                .and_then(|h| h.health)
+                .is_some_and(|health| health.is_dead());
+            let flashing = hurtbox
+                .and_then(|h| h.last_hit)
+                .is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
+            let color = if !dead && !flashing && phase == Some(AttackPhase::Startup) {
+                WARN_COLOR
+            } else {
+                shown(arm.color, dead, flashing)
+            };
+            self.scene
+                .set_mesh_color(arm.id, color)
+                .expect("an arm has a mesh (checked at load), and every color is valid");
+        }
     }
 
     /// Starts a roll the way the input points, or a backstep without a
@@ -904,35 +1260,14 @@ impl Game {
             let dead = condition == Some(Condition::Dead);
             let flashing = h.last_hit.is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
             for &(id, color) in &h.meshes {
-                let shown = if dead {
-                    color * DEAD_DIM
-                } else if flashing {
-                    FLASH_COLOR
-                } else {
-                    color
-                };
                 self.scene
-                    .set_mesh_color(id, shown)
+                    .set_mesh_color(id, shown(color, dead, flashing))
                     .expect("meshes were picked for having a mesh, and every color is valid");
             }
             let Some(health) = h.health else {
                 continue;
             };
-            let tilt = match health.now.state {
-                Condition::Ok => None,
-                Condition::Stagger => Some(STAGGER_TILT_DEGREES),
-                Condition::Dead => Some(DEAD_TILT_DEGREES),
-            };
-            self.scene.transform_mut(h.id).rotation = match tilt {
-                None => h.base,
-                // The top tips over towards `fall`, however the node faces.
-                Some(degrees) => {
-                    Quat::from_rotation_y(health.fall)
-                        * Quat::from_rotation_x(-degrees.to_radians())
-                        * Quat::from_rotation_y(-health.fall)
-                        * h.base
-                }
-            };
+            self.scene.transform_mut(h.id).rotation = pose(health.now.state, health.fall, h.base);
             if let Some(bar) = health.bar {
                 let frac = health.now.hp / health.hp_max;
                 let t = self.scene.transform_mut(bar.id);
@@ -949,10 +1284,10 @@ impl Game {
     /// `return_step` per tick once it is gone. When `loading`, the camera
     /// takes the unobstructed distance directly.
     fn place_camera(&mut self, loading: bool) {
-        let player = self.state.player;
+        let position = self.state.player.position;
         let camera = self.state.camera;
         let rot = Quat::from_rotation_y(camera.yaw) * Quat::from_rotation_x(camera.pitch);
-        let pivot = player.position + Vec3::new(0.0, self.pivot_height, 0.0);
+        let pivot = position + Vec3::new(0.0, self.pivot_height, 0.0);
         let target = self.obstruct(pivot, rot * Vec3::Z);
         let distance = if loading || target < camera.distance {
             target
@@ -1016,7 +1351,7 @@ impl Game {
     /// Game state for `--dump-state`.
     pub fn state(&self) -> GameState {
         GameState {
-            player: self.state.player,
+            player: self.state.player.clone(),
             camera: self.state.camera,
             lock: self.lock.map(|t| self.targets[t].path.clone()),
             hurtboxes: self
@@ -1027,6 +1362,15 @@ impl Game {
                     hits: h.hits,
                     last_hit: h.last_hit,
                     health: h.health.map(|health| health.now),
+                })
+                .collect(),
+            swingers: self
+                .swingers
+                .iter()
+                .map(|s| SwingerState {
+                    node: s.path.clone(),
+                    swing_tick: s.swing_tick,
+                    phase: s.phase(),
                 })
                 .collect(),
         }
@@ -1095,18 +1439,24 @@ impl Game {
     }
 }
 
-/// Every lock-on target and every hurtbox of `scene`, in pre-order, checked
-/// node by node (every node but the character), in this order: no props
-/// but [`NODE_PROPS`]; each value by its rule; the two hurt props together
-/// or not at all; `hp` only on a hurtbox; the last four props only with
-/// `hp`; only on root nodes other than the camera; an `hp_bar` with a mesh.
-fn targets(
-    scene: &Scene,
-    player: NodeId,
-    camera: NodeId,
-) -> Result<(Vec<Target>, Vec<Hurtbox>), GameError> {
+/// What the nodes other than the character are for, each list in pre-order.
+struct Roles {
+    targets: Vec<Target>,
+    hurtboxes: Vec<Hurtbox>,
+    swingers: Vec<Swinger>,
+}
+
+/// Every lock-on target, hurtbox and swinger of `scene`, in pre-order,
+/// checked node by node (every node but the character), in this order: no
+/// props but [`NODE_PROPS`]; each value by its rule; the two hurt props
+/// together or not at all; `hp` only on a hurtbox; the four props after it
+/// only with `hp`; the last eight only with `swing_damage`; a swinger's
+/// `swing_low < swing_high`; only on root nodes other than the camera; an
+/// `hp_bar` with a mesh; an `arm` with a mesh.
+fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameError> {
     let mut targets = Vec::new();
     let mut hurtboxes = Vec::new();
+    let mut swingers = Vec::new();
     for id in scene.ids().filter(|&id| id != player) {
         let node = scene.node(id);
         let path = || scene.path(id);
@@ -1134,6 +1484,9 @@ fn targets(
                 NodeRule::Ticks if value.fract() != 0.0 || value < 1.0 => {
                     return Err(GameError::NodePropNotWhole { node, prop, value });
                 }
+                NodeRule::Arc if !(value > 0.0 && value <= 360.0) => {
+                    return Err(GameError::NodePropNotAnArc { node, prop, value });
+                }
                 _ => {}
             }
         }
@@ -1145,6 +1498,10 @@ fn targets(
                 .expect("only names from NODE_PROPS are asked for");
             node.prop(name).or(default)
         };
+        // Only for props with a default.
+        let value = |name: &str| get(name).expect("only props with a default are asked for");
+        // Checked above: whole numbers of at least 1; `as` saturates.
+        let ticks = |name: &str| value(name) as u32;
         let lock_height = node.prop("lock_height");
         let hurt = match (node.prop("hurt_radius"), node.prop("hurt_height")) {
             (Some(radius), Some(height)) => Some((radius as f32, height as f32)),
@@ -1156,41 +1513,60 @@ fn targets(
             return Err(GameError::HpWithoutHurtbox(path()));
         }
         if hp.is_none()
-            && let Some(&(prop, ..)) = NODE_PROPS[4..]
+            && let Some(&(prop, ..)) = NODE_PROPS[HP_PROPS]
                 .iter()
                 .find(|&&(p, ..)| node.prop(p).is_some())
         {
             return Err(GameError::NeedsHp { node: path(), prop });
         }
-        if (lock_height.is_some() || hurt.is_some()) && (node.parent.is_some() || id == camera) {
+        let swing_damage = node.prop("swing_damage");
+        if swing_damage.is_none()
+            && let Some(&(prop, ..)) = NODE_PROPS[SWING_PROPS]
+                .iter()
+                .find(|&&(p, ..)| node.prop(p).is_some())
+        {
+            return Err(GameError::NeedsSwingDamage { node: path(), prop });
+        }
+        // Compared as used: after `as f32`, like the character's band.
+        if swing_damage.is_some() && value("swing_low") as f32 >= value("swing_high") as f32 {
+            return Err(GameError::NodeSwingBand(path()));
+        }
+        if (lock_height.is_some() || hurt.is_some() || swing_damage.is_some())
+            && (node.parent.is_some() || id == camera)
+        {
             return Err(if lock_height.is_some() {
                 GameError::LockTargetNotRoot(path())
-            } else {
+            } else if hurt.is_some() {
                 GameError::HurtboxNotRoot(path())
+            } else {
+                GameError::SwingerNotRoot(path())
             });
         }
-        // Only a hurtbox with hp has an hp bar; anywhere else the name means
-        // nothing.
-        let bar = match hp {
-            Some(_) => node
-                .children
+        // Only a hurtbox with hp has an hp bar, and only a swinger an arm;
+        // anywhere else the names mean nothing.
+        let child = |name: &str| {
+            node.children
                 .iter()
                 .copied()
-                .find(|&c| scene.node(c).name == HP_BAR),
-            None => None,
+                .find(|&c| scene.node(c).name == name)
         };
+        let bar = hp.and_then(|_| child(HP_BAR));
         if let Some(bar) = bar
             && scene.node(bar).mesh.is_none()
         {
             return Err(GameError::HpBarWithoutMesh(path()));
         }
+        let arm = swing_damage.and_then(|_| child(ARM));
+        if let Some(arm) = arm
+            && scene.node(arm).mesh.is_none()
+        {
+            return Err(GameError::ArmWithoutMesh(path()));
+        }
         let hurtbox = hurt.map(|(radius, height)| {
-            // Checked above: whole numbers of at least 1; `as` saturates.
-            let ticks = |name: &str| get(name).expect("every tick prop has a default") as u32;
             let health = hp.map(|hp| {
                 Health::new(
                     hp as f32,
-                    get("poise").expect("poise has a default") as f32,
+                    value("poise") as f32,
                     ["stagger_ticks", "poise_reset_ticks", "revive_ticks"].map(ticks),
                     bar.map(|bar| {
                         let t = scene.transform(bar);
@@ -1218,17 +1594,92 @@ fn targets(
                 health,
             }
         });
+        let hurtbox_index = hurtbox.as_ref().map(|_| hurtboxes.len());
         if let Some(height) = lock_height {
             targets.push(Target {
                 id,
                 path: path(),
                 height: height as f32,
-                hurtbox: hurtbox.as_ref().map(|_| hurtboxes.len()),
+                hurtbox: hurtbox_index,
+            });
+        }
+        if let Some(damage) = swing_damage {
+            let [startup, active, recovery] = [
+                "swing_startup_ticks",
+                "swing_active_ticks",
+                "swing_recovery_ticks",
+            ]
+            .map(ticks);
+            let arc = (value("swing_arc") as f32).to_radians();
+            // As the character's facing at load.
+            let f = scene.transform(id).rotation * Vec3::NEG_Z;
+            swingers.push(Swinger {
+                id,
+                path: path(),
+                facing: positive_zero(wrap(libm::atan2f(-f.x, -f.z))),
+                damage: damage as f32,
+                impact: value("swing_impact") as f32,
+                startup,
+                active,
+                period: startup.saturating_add(active).saturating_add(recovery),
+                reach: value("swing_reach") as f32,
+                arc,
+                slice: arc / active as f32,
+                low: value("swing_low") as f32,
+                high: value("swing_high") as f32,
+                hurtbox: hurtbox_index,
+                arm: arm.map(|arm| {
+                    let t = scene.transform(arm);
+                    Arm {
+                        id: arm,
+                        p0: t.position,
+                        r0: t.rotation,
+                        color: scene
+                            .node(arm)
+                            .mesh
+                            .expect("checked above: the arm has a mesh")
+                            .color,
+                    }
+                }),
+                swing_tick: 0,
+                struck: false,
             });
         }
         hurtboxes.extend(hurtbox);
     }
-    Ok((targets, hurtboxes))
+    Ok(Roles {
+        targets,
+        hurtboxes,
+        swingers,
+    })
+}
+
+/// The rotation of a node with health whose standing rotation is `base`:
+/// `base` itself while `Ok` (bit for bit), otherwise tipped over towards
+/// `fall` by [`STAGGER_TILT_DEGREES`] or [`DEAD_TILT_DEGREES`].
+fn pose(state: Condition, fall: f32, base: Quat) -> Quat {
+    let degrees = match state {
+        Condition::Ok => return base,
+        Condition::Stagger => STAGGER_TILT_DEGREES,
+        Condition::Dead => DEAD_TILT_DEGREES,
+    };
+    // The top tips over towards `fall`, however the node faces.
+    Quat::from_rotation_y(fall)
+        * Quat::from_rotation_x(-degrees.to_radians())
+        * Quat::from_rotation_y(-fall)
+        * base
+}
+
+/// The color a mesh of scene color `color` shows: darkened when `dead`,
+/// else [`FLASH_COLOR`] while `flashing`, else its own.
+fn shown(color: Vec3, dead: bool, flashing: bool) -> Vec3 {
+    if dead {
+        color * DEAD_DIM
+    } else if flashing {
+        FLASH_COLOR
+    } else {
+        color
+    }
 }
 
 /// Whether `node` is `root` or one of its descendants.
@@ -1692,7 +2143,7 @@ mod tests {
 
     /// FNV-1a over the bits of every field the state dump had in G2.1.
     fn g2_1_fingerprint(hash: &mut u64, s: &GameState) {
-        let p = s.player;
+        let p = &s.player;
         let words = [
             p.position.x.to_bits(),
             p.position.y.to_bits(),
@@ -1738,7 +2189,7 @@ mod tests {
             game.tick(&input);
             let s = game.state();
             g2_1_fingerprint(&mut hash, &s);
-            let p = s.player;
+            let p = &s.player;
             assert_eq!((p.attack_phase, p.combo, p.buffered), (None, 0, None));
             if !seen.contains(&s.player.action) {
                 seen.push(s.player.action);
@@ -1780,7 +2231,7 @@ mod tests {
 
     /// FNV-1a over the bits of every field the state dump had in G2.3.
     fn g2_3_fingerprint(hash: &mut u64, s: &GameState) {
-        let p = s.player;
+        let p = &s.player;
         let words = [
             p.position.x.to_bits(),
             p.position.y.to_bits(),
@@ -1874,7 +2325,7 @@ mod tests {
     /// FNV-1a over the bits of every `player` and `camera` field and the
     /// `lock` path.
     fn g3_1_fingerprint(hash: &mut u64, s: &GameState) {
-        let p = s.player;
+        let p = &s.player;
         let words = [
             p.position.x.to_bits(),
             p.position.y.to_bits(),
@@ -1944,6 +2395,85 @@ mod tests {
         assert!(hits[2].0 == "dummy_c" && hits[2].1 > 0, "{hits:?}");
         assert_eq!(hash, 4_107_292_735_894_931_732);
     }
+
+    /// FNV-1a over [`g3_1_fingerprint`]'s fields, then every hurtbox's
+    /// `hits`, `last_hit` and `health`, then the transforms of the three
+    /// dummies and their hp bars.
+    fn g3_3_fingerprint(hash: &mut u64, game: &Game) {
+        let s = game.state();
+        g3_1_fingerprint(hash, &s);
+        let mut words = Vec::new();
+        for h in &s.hurtboxes {
+            words.push(h.hits);
+            match h.last_hit {
+                Some(hit) => words.extend([
+                    1,
+                    hit.tick as u32,
+                    (hit.tick >> 32) as u32,
+                    hit.attack as u32,
+                    hit.combo,
+                ]),
+                None => words.push(0),
+            }
+            match h.health {
+                Some(health) => words.extend([
+                    1,
+                    health.hp.to_bits(),
+                    health.state as u32,
+                    health.state_ticks,
+                    health.impact.to_bits(),
+                    health.impact_wait,
+                ]),
+                None => words.push(0),
+            }
+        }
+        for dummy in ["dummy_a", "dummy_b", "dummy_c"] {
+            for path in [dummy.to_owned(), format!("{dummy}/hp_bar")] {
+                let t = node(game, &path);
+                words.extend(bits3(t.position));
+                words.extend(bits4(t.rotation));
+                words.extend(bits3(t.scale));
+            }
+        }
+        for byte in words.iter().flat_map(|w| w.to_le_bytes()) {
+            *hash = (*hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    #[test]
+    fn without_swingers_every_tick_matches_g3_3() {
+        // The expected hash was computed by this same test on the G3.3 code
+        // (commit d4e8080), before swingers existed, on the G3.3 demo scene:
+        // it covers every tick of attacks that hit, stagger and hurt two
+        // dummies, with their poses and hp bars.
+        let mut game = Game::from_source(G3_3_DEMO).unwrap();
+        let mut input = ActionState::new();
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut staggers = 0;
+        for t in 1..=450 {
+            let (actions, axes) = g3_1_reference_input(t);
+            input.advance(TickInput {
+                actions: actions.into_iter().map(str::to_owned).collect(),
+                axes: axes.into_iter().map(|(a, v)| (a.to_owned(), v)).collect(),
+            });
+            game.tick(&input);
+            g3_3_fingerprint(&mut hash, &game);
+            staggers += game
+                .state()
+                .hurtboxes
+                .iter()
+                .filter(|h| h.health.is_some_and(|x| x.state == Condition::Stagger))
+                .count();
+        }
+        assert!(staggers > 0);
+        let hits: Vec<_> = game.state().hurtboxes.iter().map(|h| h.hits).collect();
+        assert!(hits[0] == 0 && hits[1] > 0 && hits[2] > 0, "{hits:?}");
+        assert_eq!(hash, 17_394_125_667_144_692_205);
+    }
+
+    /// The demo scene as it was in G3.3, before the stake: tests whose
+    /// results the stake would change run on it.
+    const G3_3_DEMO: &str = include_str!("g3_3_demo.scene.ron");
 
     /// The demo scene as it was in G2.3, before the lock-on dummies:
     /// tests whose results the dummies would change run on it.

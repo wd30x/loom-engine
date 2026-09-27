@@ -71,19 +71,23 @@ mod tests {
                 "wall",
                 "dummy_a/block",
                 "dummy_b/block",
-                "dummy_c/block"
+                "dummy_c/block",
+                "stake/block"
             ]
         );
     }
 
     #[test]
-    fn built_in_scene_lock_targets_are_the_three_dummies() {
+    fn built_in_scene_lock_targets_are_the_three_dummies_and_the_stake() {
         let game = Game::new(demo_scene()).unwrap();
-        assert_eq!(game.target_paths(), ["dummy_a", "dummy_b", "dummy_c"]);
+        assert_eq!(
+            game.target_paths(),
+            ["dummy_a", "dummy_b", "dummy_c", "stake"]
+        );
     }
 
     #[test]
-    fn built_in_scene_hurtboxes_are_the_three_dummies_unhit() {
+    fn built_in_scene_hurtboxes_are_the_three_dummies_and_the_stake_unhit() {
         let game = Game::new(demo_scene()).unwrap();
         let hurtboxes: Vec<_> = game
             .state()
@@ -93,7 +97,7 @@ mod tests {
             .collect();
         assert_eq!(
             hurtboxes,
-            ["dummy_a", "dummy_b", "dummy_c"].map(|n| (n.to_owned(), 0, None))
+            ["dummy_a", "dummy_b", "dummy_c", "stake"].map(|n| (n.to_owned(), 0, None))
         );
     }
 
@@ -113,5 +117,37 @@ mod tests {
             let bar = scene.find(&format!("{}/hp_bar", h.node)).unwrap();
             assert!(scene.node(bar).mesh.is_some() && scene.is_drawn(bar));
         }
+    }
+
+    #[test]
+    fn built_in_scene_has_a_stake_with_health_and_an_arm_swinging_at_a_full_hp_player() {
+        let game = Game::new(demo_scene()).unwrap();
+        let state = game.state();
+        let swingers: Vec<_> = state
+            .swingers
+            .iter()
+            .map(|s| (s.node.as_str(), s.swing_tick, s.phase))
+            .collect();
+        assert_eq!(swingers, [("stake", 0, None)]);
+        let stake = state.hurtboxes.iter().find(|h| h.node == "stake").unwrap();
+        assert_eq!(stake.health.map(|h| h.hp), Some(100.0));
+        let scene = game.scene();
+        let arm = scene.find("stake/arm").unwrap();
+        assert!(scene.node(arm).mesh.is_some());
+        let full = HealthState {
+            hp: 100.0,
+            state: Condition::Ok,
+            state_ticks: 0,
+            impact: 0.0,
+            impact_wait: 0,
+        };
+        assert_eq!(
+            (
+                state.player.hits,
+                state.player.last_hit,
+                state.player.health
+            ),
+            (0, None, full)
+        );
     }
 }

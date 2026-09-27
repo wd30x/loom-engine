@@ -57,6 +57,11 @@
                 ("heavy_damage", 35),
                 ("attack_impact", 10),           // added up against the target's poise
                 ("heavy_impact", 30),
+                ("hp", 100),                     // the character's own health
+                ("poise", 0),                    // 0: every hit with any impact staggers
+                ("stagger_ticks", 30),           // how long a stagger lasts
+                ("poise_reset_ticks", 60),       // ticks without a hit before impacts are forgotten
+                ("respawn_ticks", 120),          // ticks lying dead before coming back at the start
             ],
             children: [
                 // 面朝方向的标记：胶囊体本身是旋转对称的，看不出朝向
@@ -102,6 +107,37 @@
                 (name: "body", mesh: Capsule(radius: 0.4, height: 1.8), color: (0.45, 0.5, 0.6)),
                 (name: "block", position: (0.0, 0.9, 0.0), scale: (0.8, 1.8, 0.8), collider: Box),
                 (name: "hp_bar", position: (0.0, 2.1, 0.0), scale: (0.8, 0.08, 0.08), mesh: Cube,
+                    color: (0.8, 0.1, 0.1)),
+            ]),
+        // A stake that swings at the character, once a round of 120 ticks: 40 ticks of warning
+        // (the arm out at the right end of the sector, orange), a 6-tick swing sweeping it right
+        // to left, then the arm back on the center line. Like the dummies, it can be locked on to,
+        // hit, staggered and killed, and stops swinging while staggered or dead.
+        (name: "stake", position: (6.0, 0.0, 2.0),
+            props: [
+                ("lock_height", 1.0),            // meters above the feet: the lock point
+                ("hurt_radius", 0.3),            // meters: the hurtbox around the post
+                ("hurt_height", 1.6),            // meters, from the feet up
+                ("hp", 100),                     // full health
+                ("poise", 25),                   // impacts added up past this stagger it
+                ("swing_damage", 30),            // hp a hit takes off the character
+                ("swing_impact", 20),            // added up against the character's poise
+                ("swing_startup_ticks", 40),     // the warning before the swing
+                ("swing_active_ticks", 6),       // the swing
+                ("swing_recovery_ticks", 74),    // after the swing, until the next round
+                ("swing_reach", 2.2),            // meters: radius of the swept sector
+                ("swing_arc", 150),              // degrees swept, right to left, centered on -Z
+                ("swing_low", 0.3),              // meters above the feet: the band the swing sweeps
+                ("swing_high", 1.6),
+            ],
+            children: [
+                (name: "post", position: (0.0, 0.8, 0.0), scale: (0.3, 1.6, 0.3), mesh: Cube,
+                    color: (0.55, 0.4, 0.25)),
+                (name: "block", position: (0.0, 0.8, 0.0), scale: (0.3, 1.6, 0.3), collider: Box),
+                // On the center line; reaches from 0.2 m out to 2.2 m, the swing's reach.
+                (name: "arm", position: (0.0, 1.1, -1.2), scale: (0.1, 0.1, 2.0), mesh: Cube,
+                    color: (0.45, 0.33, 0.2)),
+                (name: "hp_bar", position: (0.0, 1.9, 0.0), scale: (0.8, 0.08, 0.08), mesh: Cube,
                     color: (0.8, 0.1, 0.1)),
             ]),
         (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
