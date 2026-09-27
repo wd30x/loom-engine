@@ -97,6 +97,7 @@
                 ("hurt_height", 3.0),            // meters, from the feet up
                 ("hp", 600),                     // full health
                 ("souls", 2000),                 // what killing it gives the character
+                ("boss_bar", 1),                 // 1: its health bar at the bottom of the HUD
                 ("poise", 50),                   // impacts added up past this stagger it: two heavies
                 ("stagger_ticks", 40),           // how long a stagger lasts
                 ("poise_reset_ticks", 60),       // ticks without a hit before impacts are forgotten

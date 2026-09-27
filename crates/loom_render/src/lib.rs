@@ -11,8 +11,10 @@ use std::sync::mpsc;
 
 use wgpu::util::DeviceExt;
 
-pub use frame::{DirectionalLight, DrawItem, Frame, LineDraw, Projection, SpriteDraw};
-use frame::{GpuDraw, GpuGlobals, GpuSprite, LineVertex, line_vertices};
+pub use frame::{
+    DirectionalLight, DrawItem, Frame, HudDraw, LineDraw, Projection, SpriteDraw, view_projection,
+};
+use frame::{GpuDraw, GpuGlobals, GpuSprite, HudVertex, LineVertex, hud_vertices, line_vertices};
 pub use mesh::MeshKind;
 
 /// Format of the offscreen color target. Readback returns its bytes as-is,
@@ -208,28 +210,37 @@ impl DrawBuffer {
     }
 }
 
-/// The vertex buffer of the debug lines. Grows as needed, never shrinks.
-struct LineBuffer {
+/// The vertex buffer of the debug lines or of the HUD. Grows as needed,
+/// never shrinks.
+struct VertexBuffer {
     buffer: wgpu::Buffer,
+    label: &'static str,
+    /// Bytes per vertex.
+    stride: usize,
     /// In vertices.
     capacity: usize,
 }
 
-impl LineBuffer {
-    fn new(device: &wgpu::Device, capacity: usize) -> Self {
+impl VertexBuffer {
+    fn new(device: &wgpu::Device, label: &'static str, stride: usize, capacity: usize) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("debug lines"),
-            size: (capacity * std::mem::size_of::<LineVertex>()) as wgpu::BufferAddress,
+            label: Some(label),
+            size: (capacity * stride) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { buffer, capacity }
+        Self {
+            buffer,
+            label,
+            stride,
+            capacity,
+        }
     }
 
     /// Replaces the buffer with a larger one if `len` vertices do not fit.
     fn reserve(&mut self, device: &wgpu::Device, len: usize) {
         if len > self.capacity {
-            *self = Self::new(device, len.next_power_of_two());
+            *self = Self::new(device, self.label, self.stride, len.next_power_of_two());
         }
     }
 }
@@ -437,6 +448,8 @@ impl Presenter {
 const INITIAL_DRAW_CAPACITY: usize = 64;
 /// Debug line vertices the first line buffer holds (two per line).
 const INITIAL_LINE_VERTICES: usize = 1024;
+/// HUD vertices the first HUD buffer holds (six per item).
+const INITIAL_HUD_VERTICES: usize = 96;
 
 /// Vertex and index buffers of one mesh.
 struct GpuMesh {
@@ -491,7 +504,9 @@ pub struct Renderer {
     line_pipeline: wgpu::RenderPipeline,
     /// Binds only the globals, for the line pipeline.
     line_bind_group: wgpu::BindGroup,
-    lines: LineBuffer,
+    lines: VertexBuffer,
+    hud_pipeline: wgpu::RenderPipeline,
+    hud: VertexBuffer,
     /// Bind groups of the textures, each binding one as group 1 of the
     /// sprite pipeline; indexed by [`TextureId`], never removed.
     textures: Vec<wgpu::BindGroup>,
@@ -765,7 +780,62 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        let lines = LineBuffer::new(&device, INITIAL_LINE_VERTICES);
+        let lines = VertexBuffer::new(
+            &device,
+            "debug lines",
+            std::mem::size_of::<LineVertex>(),
+            INITIAL_LINE_VERTICES,
+        );
+
+        // HUD: NDC vertices, no bindings, alpha blending, no depth test and
+        // no depth writes, drawn between the sprites and the debug lines.
+        let hud_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/hud.wgsl"));
+        let hud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("hud"),
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+        let hud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hud"),
+            layout: Some(&hud_layout),
+            vertex: wgpu::VertexState {
+                module: &hud_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(HudVertex::layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &hud_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let hud = VertexBuffer::new(
+            &device,
+            "hud",
+            std::mem::size_of::<HudVertex>(),
+            INITIAL_HUD_VERTICES,
+        );
 
         let meshes = MeshKind::BUILT_IN
             .iter()
@@ -790,6 +860,8 @@ impl Renderer {
             line_pipeline,
             line_bind_group,
             lines,
+            hud_pipeline,
+            hud,
             textures: Vec::new(),
             meshes,
             size: (0, 0),
@@ -821,6 +893,8 @@ impl Renderer {
             line_pipeline,
             line_bind_group,
             lines,
+            hud_pipeline,
+            hud,
             textures,
             meshes,
             size: _,
@@ -834,6 +908,7 @@ impl Renderer {
                 draws,
                 sprites,
                 (lines, line_bind_group, line_pipeline),
+                (hud, hud_pipeline),
                 textures,
                 meshes,
                 pipeline,
@@ -988,6 +1063,12 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.sprites.buffer, 0, bytemuck::cast_slice(&sprites));
         }
+        let hud_vertices = hud_vertices(frame.hud, offscreen.width, offscreen.height);
+        if !hud_vertices.is_empty() {
+            self.hud.reserve(&self.device, hud_vertices.len());
+            self.queue
+                .write_buffer(&self.hud.buffer, 0, bytemuck::cast_slice(&hud_vertices));
+        }
         let line_vertices = line_vertices(frame.lines);
         if !line_vertices.is_empty() {
             self.lines.reserve(&self.device, line_vertices.len());
@@ -1056,6 +1137,13 @@ impl Renderer {
                     pass.draw(0..6, start..end);
                     start = end;
                 }
+            }
+            if !hud_vertices.is_empty() {
+                pass.set_pipeline(&self.hud_pipeline);
+                pass.set_vertex_buffer(0, self.hud.buffer.slice(..));
+                let count =
+                    u32::try_from(hud_vertices.len()).expect("hud vertex count fits in u32");
+                pass.draw(0..count, 0..1);
             }
             if !line_vertices.is_empty() {
                 pass.set_pipeline(&self.line_pipeline);
@@ -1177,3 +1265,7 @@ mod tests {
         assert_eq!(super::default_backends(), wgpu::Backends::DX12);
     }
 }
+
+#[cfg(test)]
+#[path = "hud_gpu_tests.rs"]
+mod hud_gpu_tests;

@@ -7,8 +7,10 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec3};
+use loom_core::hud::{Hud, HudItem, HudView};
 use loom_render::{
-    DirectionalLight, DrawItem, Frame, LineDraw, Projection, RenderError, Renderer, SpriteDraw,
+    DirectionalLight, DrawItem, Frame, HudDraw, LineDraw, Projection, RenderError, Renderer,
+    SpriteDraw, view_projection,
 };
 use loom_scene::{NodeId, Scene};
 
@@ -17,15 +19,19 @@ use crate::report::ViewReport;
 use crate::run::{millis_since, save_screenshot};
 use crate::sheet::Sheets;
 
-/// Draws `scene` from its camera, with the debug `lines` on top. `sheets`
-/// must have been loaded for `scene` ([`Sheets::load`]) and only ever be
-/// drawn with `renderer`. Returns `false` if the frame was skipped (zero
-/// render size).
+/// A game's HUD for a view: what [`render_scene`] draws over the scene.
+pub(crate) type HudFn<'a> = &'a dyn Fn(&HudView, &mut Hud);
+
+/// Draws `scene` from its camera, with the HUD `hud` lays out (if any) over
+/// it and the debug `lines` on top. `sheets` must have been loaded for
+/// `scene` ([`Sheets::load`]) and only ever be drawn with `renderer`.
+/// Returns `false` if the frame was skipped (zero render size).
 pub(crate) fn render_scene(
     renderer: &mut Renderer,
     scene: &Scene,
     sheets: &mut Sheets,
     lines: &[LineDraw],
+    hud: Option<HudFn<'_>>,
 ) -> Result<bool, RenderError> {
     let draws = mesh_draws(scene);
     let sprites = sprite_draws(renderer, scene, sheets)?;
@@ -50,17 +56,55 @@ pub(crate) fn render_scene(
         }
     });
 
+    let view = scene.world_matrix(camera_id).inverse();
+    let projection = projection(camera.projection);
+    let (width, height) = renderer.size();
+    let hud = match hud {
+        Some(hud) if width > 0 && height > 0 => {
+            let aspect = width as f32 / height as f32;
+            let view_proj = view_projection(view, projection, aspect, camera.near, camera.far);
+            let mut items = Hud::new();
+            hud(&HudView::new(width, height, view_proj), &mut items);
+            hud_draws(items.items(), height)
+        }
+        _ => Vec::new(),
+    };
     renderer.render(&Frame {
-        view: scene.world_matrix(camera_id).inverse(),
-        projection: projection(camera.projection),
+        view,
+        projection,
         near: camera.near,
         far: camera.far,
         ambient: scene.ambient(),
         light,
         draws: &draws,
         sprites: &sprites,
+        hud: &hud,
         lines,
     })
+}
+
+/// HUD items in HUD units to pixels of a frame `height` pixels high.
+fn hud_draws(items: &[HudItem], height: u32) -> Vec<HudDraw> {
+    let scale = height as f32 / loom_core::hud::HUD_HEIGHT;
+    items
+        .iter()
+        .map(|&item| match item {
+            HudItem::Rect { min, size, color } => HudDraw::Rect {
+                min: min * scale,
+                size: size * scale,
+                color,
+            },
+            HudItem::Disc {
+                center,
+                radius,
+                color,
+            } => HudDraw::Disc {
+                center: center * scale,
+                radius: radius * scale,
+                color,
+            },
+        })
+        .collect()
 }
 
 /// One draw per drawn node with a mesh ([`Scene::is_drawn`]), in scene
@@ -165,7 +209,7 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
         Sheets::load(&scene).with_context(|| format!("invalid scene {}", path.display()))?;
     let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
     let renderer_init_ms = millis_since(started);
-    render_scene(&mut renderer, &scene, &mut sheets, &[])?;
+    render_scene(&mut renderer, &scene, &mut sheets, &[], None)?;
     let screenshot = save_screenshot(&renderer, &args.screenshot)?;
     let adapter = renderer.adapter_summary();
     renderer.shutdown();
@@ -182,7 +226,50 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
 
 #[cfg(test)]
 mod tests {
+    use glam::{Vec2, Vec4};
+
     use super::*;
+
+    #[test]
+    fn hud_units_scale_to_pixels_by_the_frame_height() {
+        let items = [
+            HudItem::Rect {
+                min: Vec2::new(40.0, 40.0),
+                size: Vec2::new(300.0, 12.0),
+                color: Vec4::ONE,
+            },
+            HudItem::Disc {
+                center: Vec2::new(640.0, 360.0),
+                radius: 5.0,
+                color: Vec4::ZERO,
+            },
+        ];
+        // 720 high: one unit a pixel.
+        assert_eq!(
+            hud_draws(&items, 720),
+            [
+                HudDraw::Rect {
+                    min: Vec2::new(40.0, 40.0),
+                    size: Vec2::new(300.0, 12.0),
+                    color: Vec4::ONE,
+                },
+                HudDraw::Disc {
+                    center: Vec2::new(640.0, 360.0),
+                    radius: 5.0,
+                    color: Vec4::ZERO,
+                },
+            ]
+        );
+        // 360 high: half a pixel a unit.
+        assert_eq!(
+            hud_draws(&items, 360)[0],
+            HudDraw::Rect {
+                min: Vec2::new(20.0, 20.0),
+                size: Vec2::new(150.0, 6.0),
+                color: Vec4::ONE,
+            }
+        );
+    }
 
     #[test]
     fn hidden_mesh_nodes_and_their_subtrees_are_not_drawn() {

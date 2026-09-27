@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(character["props"].as_array().unwrap().len(), 56);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
-            97
+            98
         );
         assert_eq!(
             prop("souls", "character", "stamina_max"),
@@ -223,6 +223,7 @@ mod tests {
         assert_eq!(node[94], "spin_track_speed");
         assert_eq!(node[95], "bonfire_range");
         assert_eq!(node[96], "souls");
+        assert_eq!(node[97], "boss_bar");
         assert_eq!(
             prop("souls", "node", "phase2_at")["rule"],
             json!({"kind": "between", "min": 0.0, "max": 1.0})
@@ -276,7 +277,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (56 + 97 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (56 + 98 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),

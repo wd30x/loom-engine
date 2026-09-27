@@ -7,6 +7,7 @@
 use glam::Vec3;
 use loom_core::SimClock;
 use loom_core::debug::DebugDraw;
+use loom_core::hud::{Hud, HudView};
 use loom_core::input::{ActionMap, ActionState};
 use loom_core::props::{PropGroup, PropRule, PropSpec};
 use loom_scene::{Node, NodeId, Scene, SceneError};
@@ -632,6 +633,10 @@ impl Game {
 
     /// Draws nothing: rogue has no debug draw categories.
     pub fn debug_draw(&self, _categories: &[&str], _draw: &mut DebugDraw) {}
+
+    /// Draws nothing: rogue has no HUD yet (`docs/architecture.md`
+    /// section 18).
+    pub fn hud(&self, _view: &HudView, _hud: &mut Hud) {}
 
     pub fn clock(&self) -> SimClock {
         self.clock

@@ -6,6 +6,7 @@
 use anyhow::{Result, bail};
 use loom_core::SimClock;
 use loom_core::debug::DebugDraw;
+use loom_core::hud::{Hud, HudView};
 use loom_core::input::{ActionMap, ActionState};
 use loom_scene::Scene;
 use serde::Serialize;
@@ -26,8 +27,8 @@ pub(crate) enum AnyGame {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum AnyGameState {
-    Souls(souls::GameState),
-    Rogue(rogue::GameState),
+    Souls(Box<souls::GameState>),
+    Rogue(Box<rogue::GameState>),
 }
 
 /// The events of one tick (`docs/architecture.md` section 6, "轨迹"): the
@@ -136,6 +137,14 @@ impl AnyGame {
         }
     }
 
+    /// Lays out the HUD of the current state for `view`. Changes nothing.
+    pub fn hud(&self, view: &HudView, hud: &mut Hud) {
+        match self {
+            Self::Souls(game) => game.hud(view, hud),
+            Self::Rogue(game) => game.hud(view, hud),
+        }
+    }
+
     /// The events of the latest tick; none before the first.
     pub fn events(&self) -> AnyEvents<'_> {
         match self {
@@ -160,8 +169,8 @@ impl AnyGame {
 
     pub fn state(&self) -> AnyGameState {
         match self {
-            Self::Souls(game) => AnyGameState::Souls(game.state()),
-            Self::Rogue(game) => AnyGameState::Rogue(game.state()),
+            Self::Souls(game) => AnyGameState::Souls(Box::new(game.state())),
+            Self::Rogue(game) => AnyGameState::Rogue(Box::new(game.state())),
         }
     }
 }

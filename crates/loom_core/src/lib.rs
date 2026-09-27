@@ -6,6 +6,7 @@
 //! See `docs/architecture.md`.
 
 pub mod debug;
+pub mod hud;
 pub mod input;
 pub mod props;
 pub mod time;

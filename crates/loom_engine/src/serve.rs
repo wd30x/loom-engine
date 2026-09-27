@@ -233,6 +233,7 @@ impl Session {
                     path,
                     size,
                     debug_draw,
+                    hud,
                 } = parse_params(params)?;
                 let game = self.sim.game();
                 let categories = match debug_draw {
@@ -254,7 +255,7 @@ impl Session {
                     }
                 };
                 let (path, adapter) = self
-                    .screenshot(&path, width, height, &categories)
+                    .screenshot(&path, width, height, &categories, hud.unwrap_or(true))
                     .map_err(ServeError::Engine)?;
                 let render_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 reply(
@@ -435,13 +436,14 @@ impl Session {
         width: u32,
         height: u32,
         categories: &[&str],
+        hud: bool,
     ) -> Result<(String, AdapterSummary)> {
         if self.renderer.is_none() {
             self.renderer = Some(Renderer::new_headless(width, height)?);
         }
         let renderer = self.renderer.as_mut().expect("created just above");
         renderer.resize(width, height)?;
-        self.sim.render(renderer, categories)?;
+        self.sim.render(renderer, categories, hud)?;
         let saved = save_screenshot(renderer, path)?;
         Ok((saved, renderer.adapter_summary()))
     }
@@ -686,6 +688,8 @@ struct ScreenshotParams {
     path: PathBuf,
     size: Option<[u32; 2]>,
     debug_draw: Option<DebugDrawParam>,
+    /// Whether to draw the game's HUD; `true` when left out.
+    hud: Option<bool>,
 }
 
 /// `true` for every category, `false` for none, or the names.

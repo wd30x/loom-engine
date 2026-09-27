@@ -83,6 +83,9 @@ pub(crate) struct RunArgs {
     /// only the comma-separated ones given. F3 toggles them in a window.
     #[arg(long, value_name = "CATEGORIES", num_args = 0..=1, require_equals = true)]
     debug_draw: Option<Option<String>>,
+    /// Do not draw the game's HUD, in the window or the screenshot.
+    #[arg(long)]
+    no_hud: bool,
     /// Window mode: do not capture the mouse (no lock, pointer stays visible)
     /// and ignore mouse motion, so axes come from keys only.
     #[arg(long, conflicts_with = "headless")]

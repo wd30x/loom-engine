@@ -2813,3 +2813,10 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 - HUD 不改变模拟：画不画，状态导出、轨迹、录制都逐字节相同。
 - 列表为空时（`rogue`、`--no-hud`），截图和 E6 之前逐字节相同。
 - 同一个状态、同一个后端，截图逐字节相同。
+
+**E6.1 审查时定**：
+- **GPU 测试**：`loom_render` 的 HUD 渲染测试标 `#[ignore]`，不进 `cargo test`；由 smoke 的 H11 用 `--ignored` 跑。
+- **投影矩阵**：`loom_render::view_projection()` 公开，引擎算 `HudView` 时用它，保证和渲染器是同一个矩阵。
+- **smoke 的 H4**：两个后端都加 `--no-hud` 比较。
+- **报告的 `hud`**：反映的是开关，和 `debug_draw` 一样。游戏什么都不画时也是 `true`。
+- **MCP 的 `screenshot` 工具**：E6.1 时还没有 `hud` 参数，总是带 HUD；E6.2 补上透传。

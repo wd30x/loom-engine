@@ -993,6 +993,29 @@ fn screenshot_with_a_bad_debug_draw_is_invalid_params_before_any_rendering() {
     assert!(!shot.exists());
 }
 
+// ---------------------------------------------------------------- hud
+
+#[test]
+fn screenshot_with_a_hud_that_is_not_a_bool_is_invalid_params_before_any_rendering() {
+    // Rejected before the renderer is created: this needs no GPU. The
+    // renders with and without the HUD are checked by smoke (H11).
+    let dir =
+        test_dir("screenshot_with_a_hud_that_is_not_a_bool_is_invalid_params_before_any_rendering");
+    let shot = dir.join("never.png");
+    let path = path_str(&shot);
+    let replies = serve_in(
+        &repo_root(),
+        &[
+            req(1, "screenshot", json!({"path": path, "hud": "off"})),
+            req(2, "screenshot", json!({"path": path, "hud": 0})),
+        ],
+    );
+    for reply in &replies {
+        assert_eq!(error_code(reply), -32602, "{reply}");
+    }
+    assert!(!shot.exists());
+}
+
 // Windows only: elsewhere file locks are advisory and the write succeeds.
 #[cfg(windows)]
 #[test]

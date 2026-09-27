@@ -145,8 +145,9 @@ macro_rules! move_props {
 ///   [`APPROACH_PROPS`] and [`PHASE2_PROPS`] (all but `phase2_at` going
 ///   with it too), then the spin's eleven;
 /// - `bonfire_range` makes it a bonfire;
-/// - `souls` goes with `hp`: what killing it gives.
-pub(crate) const NODE_PROPS: [PropSpec; 97] = join(&[
+/// - `souls` goes with `hp`: what killing it gives;
+/// - `boss_bar` goes with `enemy_speed`: the enemy's bar on the HUD.
+pub(crate) const NODE_PROPS: [PropSpec; 98] = join(&[
     &BASE_PROPS,
     &ENEMY_PROPS,
     &move_props!(
@@ -193,6 +194,17 @@ pub(crate) const NODE_PROPS: [PropSpec; 97] = join(&[
         rule: PropRule::Whole { min: 0, max: None },
         unit: "souls",
         description: "What the character gets each time it kills the node.",
+    }],
+    &[PropSpec {
+        name: "boss_bar",
+        default: Some(0.0),
+        rule: PropRule::Whole {
+            min: 0,
+            max: Some(1),
+        },
+        unit: "flag",
+        description: "1: the HUD shows the enemy's health at the bottom while the character is \
+                      within its aggro range.",
     }],
 ]);
 
@@ -532,6 +544,13 @@ const ENEMY_OTHER_PROPS: std::ops::Range<usize> = 18..95;
 const PHASE2_OTHER_PROPS: std::ops::Range<usize> = 77..84;
 /// Where `souls`, which also goes with `hp`, is in [`NODE_PROPS`].
 const SOULS_PROP: usize = 96;
+/// Where `boss_bar`, which also goes with `enemy_speed`, is in
+/// [`NODE_PROPS`].
+const BOSS_BAR_PROP: usize = 97;
+/// Ticks the health bar's trail stays where it was after a hit.
+const HP_TRAIL_WAIT: u32 = 30;
+/// Ticks the trail takes to fall the length of full health.
+const HP_TRAIL_TICKS: f32 = 60.0;
 
 /// The name of the child of a hurtbox with `hp` that shows its health.
 const HP_BAR: &str = "hp_bar";
@@ -790,6 +809,11 @@ pub struct PlayerState {
     pub flask: u32,
     /// Souls carried; 0 at load.
     pub souls: u32,
+    /// Where the health bar's trail stands, in hp: full at load; it waits
+    /// after a hit, then falls to `hp` (step 5d).
+    pub hp_trail: f32,
+    /// Ticks left before the trail starts falling.
+    pub hp_trail_wait: u32,
 }
 
 /// One hit on the character.
@@ -985,6 +1009,8 @@ struct Enemy {
     /// The cut of the move (1 for the moves that have one) that has hit
     /// the character already; 0 for none.
     struck: u32,
+    /// `boss_bar` 1: the HUD shows its health.
+    boss_bar: bool,
 }
 
 /// A node with `bonfire_range`: the character sits down at it.
@@ -1344,6 +1370,8 @@ impl Game {
                 health: health.now,
                 flask: params.flask_charges,
                 souls: 0,
+                hp_trail: params.hp,
+                hp_trail_wait: 0,
             },
             camera: CameraState {
                 yaw: wrap(orbit.yaw_degrees.to_radians()),
@@ -1712,6 +1740,18 @@ impl Game {
         self.run_enemies(&mut player);
         self.swing(&mut player);
         player.health = self.health.now;
+
+        // 5d. The health bar's trail: level with any gain at once; after a
+        // loss it waits, then falls the length of full health a second.
+        let hp = player.health.hp;
+        if hp >= player.hp_trail {
+            player.hp_trail = hp;
+            player.hp_trail_wait = 0;
+        } else if player.hp_trail_wait > 0 {
+            player.hp_trail_wait -= 1;
+        } else {
+            player.hp_trail = f32::max(hp, player.hp_trail - self.health.hp_max / HP_TRAIL_TICKS);
+        }
         self.state = Motion { player, camera };
 
         // 6. Write the nodes.
@@ -2221,7 +2261,11 @@ impl Game {
         } else {
             0.0
         };
+        let before = self.health.now.hp;
         let outcome = self.health.take(damage, impact, fall);
+        if self.health.now.hp < before {
+            player.hp_trail_wait = HP_TRAIL_WAIT;
+        }
         self.events.push(Event::Hit {
             by,
             target: self.player_path.clone(),
@@ -3187,7 +3231,7 @@ pub(crate) const NODE_REQUIRES: [&str; 6] = [
     "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, \
      swing_arc, swing_low, swing_high: need swing_damage",
     "every enemy_*, sweep_*, cleave_*, lunge_*, combo_*, approach_*, phase2_*, roar_* and \
-     spin_* prop but enemy_speed: needs enemy_speed",
+     spin_* prop but enemy_speed, and boss_bar: need enemy_speed",
     "phase2_speed_scale, phase2_combo_hits, roar_ticks, roar_blast_tick, roar_damage, \
      roar_impact, roar_reach: need phase2_at",
 ];
@@ -3340,6 +3384,7 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
         if enemy_speed.is_none()
             && let Some(spec) = NODE_PROPS[ENEMY_OTHER_PROPS]
                 .iter()
+                .chain([&NODE_PROPS[BOSS_BAR_PROP]])
                 .find(|spec| node.prop(spec.name).is_some())
         {
             return Err(GameError::NeedsEnemySpeed {
@@ -3613,6 +3658,7 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 chase: 0,
                 rng: SplitMix64(params.seed),
                 struck: 0,
+                boss_bar: value("boss_bar") == 1.0,
             });
         }
         hurtboxes.extend(hurtbox);
@@ -4896,3 +4942,10 @@ mod flask_tests;
 #[cfg(test)]
 #[path = "souls_tests.rs"]
 mod souls_tests;
+
+#[path = "hud.rs"]
+mod hud;
+
+#[cfg(test)]
+#[path = "hud_tests.rs"]
+mod hud_tests;

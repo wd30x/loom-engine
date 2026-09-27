@@ -60,7 +60,8 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
             let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
             let init_ms = millis_since(started);
             let debug = sim.debug_draw().map(<[_]>::to_vec).unwrap_or_default();
-            sim.render(&mut renderer, &debug)?;
+            let hud = sim.hud();
+            sim.render(&mut renderer, &debug, hud)?;
             let saved = save_screenshot(&renderer, path)?;
             let adapter = renderer.adapter_summary();
             renderer.shutdown();
@@ -83,6 +84,7 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
         scene: sim.scene_path(),
         game: sim.game().name(),
         debug_draw: sim.debug_draw().map(<[_]>::to_vec),
+        hud: sim.hud(),
         reloads: 0,
         reload_errors: 0,
         adapter,
@@ -193,6 +195,7 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
         scene: app.sim.scene_path(),
         game: app.sim.game().name(),
         debug_draw: app.sim.debug_draw().map(<[_]>::to_vec),
+        hud: app.sim.hud(),
         reloads: app.reloads,
         reload_errors: app.reload_errors,
         adapter: Some(adapter.into()),
@@ -285,7 +288,8 @@ impl WindowRun<'_> {
             } else {
                 &[]
             };
-            match self.sim.render(renderer, categories) {
+            let hud = self.sim.hud();
+            match self.sim.render(renderer, categories, hud) {
                 Ok(_) => self.drawn_debug = self.debug_on,
                 Err(e) => return self.fail(e.into()),
             }
@@ -368,7 +372,8 @@ impl WindowRun<'_> {
         } else {
             &[]
         };
-        if !self.sim.render(renderer, categories)? {
+        let hud = self.sim.hud();
+        if !self.sim.render(renderer, categories, hud)? {
             return Ok(AppControl::Continue);
         }
         self.drawn_debug = self.debug_on;

@@ -230,7 +230,9 @@ const SCENARIO_A: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -476,7 +478,9 @@ const SCENARIO_B: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -1963,7 +1967,9 @@ const SOULS_MOVES_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -2247,7 +2253,9 @@ const SOULS_ATTACKS_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -2941,7 +2949,9 @@ const SOULS_LOCK_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": -0.25161445,\n",
@@ -3681,7 +3691,9 @@ const SOULS_COMBO_HITS_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -4449,7 +4461,9 @@ const SOULS_KILL_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 50\n",
+    "      \"souls\": 50,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -5235,7 +5249,9 @@ const SOULS_STAKE_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -5654,6 +5670,21 @@ fn debug_draw_report_is_null_every_category_or_the_ones_given_in_game_order() {
         let r = report(&out);
         assert_eq!(out.code, 0, "{r}");
         assert_eq!(r["debug_draw"], expected, "{flag:?}");
+    }
+}
+
+// ---------------------------------------------------------------- hud
+
+#[test]
+fn hud_report_is_true_unless_no_hud_is_given() {
+    // The renders themselves are checked by smoke (H11): this needs no GPU.
+    for (flag, expected) in [(None, true), (Some("--no-hud"), false)] {
+        let mut args = vec!["run", "--headless", "--frames", "1"];
+        args.extend(flag);
+        let out = run_loom(&args);
+        let r = report(&out);
+        assert_eq!(out.code, 0, "{r}");
+        assert_eq!(r["hud"], expected, "{flag:?}");
     }
 }
 
@@ -6277,7 +6308,9 @@ const BOSS_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 55.0,\n",
+    "      \"hp_trail_wait\": 27\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 5.1124314e-8,\n",
@@ -6544,7 +6577,12 @@ fn boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time() {
             (501, r#"hit "boss" "combo""#),
             (518, r#"hit "boss" "combo""#),
         ])
-    );
+    ); // The health bar's trail: each cut of the combo (484, 501, 518) starts
+    // its 30-tick wait over, so on 520 it still stands at 55, the health
+    // before the combo, two ticks into the last wait.
+    let s: Value = serde_json::from_str(BOSS_STATE).expect("valid JSON");
+    assert_eq!(s["game"]["player"]["hp_trail"], 55.0);
+    assert_eq!(s["game"]["player"]["hp_trail_wait"], 27);
 }
 
 /// Two heavy attacks stagger the boss (poise 50): walk up (1-39), backstep
@@ -6989,7 +7027,9 @@ const BOSS_PHASE2_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 25.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 7.9010476e-8,\n",
@@ -7780,7 +7820,9 @@ const BONFIRE_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -8588,7 +8630,9 @@ const FLASK_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 0\n",
+    "      \"souls\": 0,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",
@@ -9405,7 +9449,9 @@ const SOULS_STATE: &str = concat!(
     "        \"impact_wait\": 0\n",
     "      },\n",
     "      \"flask\": 3,\n",
-    "      \"souls\": 50\n",
+    "      \"souls\": 50,\n",
+    "      \"hp_trail\": 100.0,\n",
+    "      \"hp_trail_wait\": 0\n",
     "    },\n",
     "    \"camera\": {\n",
     "      \"yaw\": 0.0,\n",

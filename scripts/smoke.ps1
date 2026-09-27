@@ -346,10 +346,12 @@ Test-Check 'H3' 'headless run without screenshot loads no GPU driver' {
 }
 
 Test-Check 'H4' 'WGPU_BACKEND=vulkan overrides the default backend and renders the image to within 1 per channel' {
-    Assert-True (Test-Path "$out/h1_a.png") 'no screenshot from H1'
+    # Without the HUD: the scene alone, as compared since G3.1.
+    $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--no-hud', '--screenshot', "$out/h4_dx12.png")
+    Assert-ExitOk $r
     $env:WGPU_BACKEND = 'vulkan'
     try {
-        $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--screenshot', "$out/h4.png")
+        $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--no-hud', '--screenshot', "$out/h4.png")
     } finally {
         Remove-Item Env:WGPU_BACKEND -ErrorAction SilentlyContinue
     }
@@ -357,7 +359,7 @@ Test-Check 'H4' 'WGPU_BACKEND=vulkan overrides the default backend and renders t
     Assert-True ($r.Json.adapter.backend -eq 'Vulkan') "backend is $($r.Json.adapter.backend), expected Vulkan"
     # Backends may round differently; only the same machine and driver
     # promise identical bytes (docs/architecture.md section 4).
-    $script:detail = Assert-NearlySameImage "$out/h1_a.png" "$out/h4.png" 1
+    $script:detail = Assert-NearlySameImage "$out/h4_dx12.png" "$out/h4.png" 1
 }
 
 Test-Check 'H5' 'serve screenshots match loom run and reuse the renderer' {
@@ -577,6 +579,38 @@ Test-Check 'H10' 'debug draw screenshots are byte-identical, differ from plain o
     Assert-SameBytes "$out/h1_a.png" "$out/h10_serve_off.png"
     Assert-SameBytes "$out/h10_colliders.png" "$out/h10_serve_colliders.png"
     $script:detail = "sha256 $((Get-FileHash "$out/h10_a.png").Hash)"
+}
+
+Test-Check 'H11' 'the HUD draws over souls, --no-hud and serve hud false leave it out, rogue has none, and the GPU tests pass' {
+    Assert-True (Test-Path "$out/h1_a.png") 'no screenshot from H1'
+    Assert-True (Test-Path "$out/h9.png") 'no screenshot from H9'
+    $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--no-hud', '--screenshot', "$out/h11_no_hud.png")
+    Assert-ExitOk $r
+    Assert-True ($r.Json.hud -eq $false) "hud is $($r.Json.hud)"
+    Assert-True ((Get-FileHash "$out/h11_no_hud.png").Hash -ne (Get-FileHash "$out/h1_a.png").Hash) 'the HUD changed nothing'
+    $requests = @(
+        '{"jsonrpc":"2.0","id":1,"method":"step","params":{"ticks":60}}'
+        "{`"jsonrpc`":`"2.0`",`"id`":2,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h11_serve_off.png`",`"hud`":false}}"
+        "{`"jsonrpc`":`"2.0`",`"id`":3,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h11_serve_on.png`",`"hud`":true}}"
+        '{"jsonrpc":"2.0","id":4,"method":"quit"}'
+    )
+    $lines = @($requests | & $exe serve 2>$null)
+    Assert-True ($LASTEXITCODE -eq 0) "loom serve exit code $LASTEXITCODE"
+    foreach ($line in $lines) {
+        Assert-True ($null -eq ($line | ConvertFrom-Json).PSObject.Properties['error']) "error reply: $line"
+    }
+    Assert-SameBytes "$out/h11_no_hud.png" "$out/h11_serve_off.png"
+    Assert-SameBytes "$out/h1_a.png" "$out/h11_serve_on.png"
+    # Rogue draws no HUD: the same bytes either way.
+    $r = Invoke-Loom @('run', '--headless', '--frames', '28', '--scene', 'assets/scenes/rogue.ron',
+        '--input', "$out/h9_script.ron", '--no-hud', '--screenshot', "$out/h11_rogue.png")
+    Assert-ExitOk $r
+    Assert-SameBytes "$out/h9.png" "$out/h11_rogue.png"
+    # Pixel-exact rectangles, blending and discs (loom_render's ignored tests).
+    $log = cargo test -q -p loom_render -- --ignored 2>&1
+    Assert-True ($LASTEXITCODE -eq 0) "loom_render GPU tests failed: $($log -join ' | ')"
+    $result = @($log | Where-Object { "$_" -like 'test result: ok. * passed*' })[0]
+    $script:detail = "sha256 $((Get-FileHash "$out/h1_a.png").Hash); GPU tests: $result"
 }
 
 # ---------------------------------------------------------------- W: window

@@ -2738,6 +2738,17 @@
               },
               "unit": "souls",
               "description": "What the character gets each time it kills the node."
+            },
+            {
+              "name": "boss_bar",
+              "default": 0.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0,
+                "max": 1
+              },
+              "unit": "flag",
+              "description": "1: the HUD shows the enemy's health at the bottom while the character is within its aggro range."
             }
           ],
           "requires": [
@@ -2745,7 +2756,7 @@
             "hp: needs hurt_radius and hurt_height",
             "poise, stagger_ticks, poise_reset_ticks, revive_ticks, souls: need hp",
             "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, swing_high: need swing_damage",
-            "every enemy_*, sweep_*, cleave_*, lunge_*, combo_*, approach_*, phase2_*, roar_* and spin_* prop but enemy_speed: needs enemy_speed",
+            "every enemy_*, sweep_*, cleave_*, lunge_*, combo_*, approach_*, phase2_*, roar_* and spin_* prop but enemy_speed, and boss_bar: need enemy_speed",
             "phase2_speed_scale, phase2_combo_hits, roar_ticks, roar_blast_tick, roar_damage, roar_impact, roar_reach: need phase2_at"
           ],
           "constraints": [
@@ -3366,6 +3377,17 @@
                 "format": "uint32",
                 "minimum": 0
               },
+              "hp_trail": {
+                "description": "Where the health bar's trail stands, in hp: full at load; it waits\nafter a hit, then falls to `hp` (step 5d).",
+                "type": "number",
+                "format": "float"
+              },
+              "hp_trail_wait": {
+                "description": "Ticks left before the trail starts falling.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "invulnerable": {
                 "description": "Inside the invulnerability window of a roll or backstep: swings\nmiss.",
                 "type": "boolean"
@@ -3424,7 +3446,9 @@
               "last_hit",
               "health",
               "flask",
-              "souls"
+              "souls",
+              "hp_trail",
+              "hp_trail_wait"
             ]
           },
           "RespawnState": {
@@ -4768,6 +4792,17 @@
                 "format": "uint32",
                 "minimum": 0
               },
+              "hp_trail": {
+                "description": "Where the health bar's trail stands, in hp: full at load; it waits\nafter a hit, then falls to `hp` (step 5d).",
+                "type": "number",
+                "format": "float"
+              },
+              "hp_trail_wait": {
+                "description": "Ticks left before the trail starts falling.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "invulnerable": {
                 "description": "Inside the invulnerability window of a roll or backstep: swings\nmiss.",
                 "type": "boolean"
@@ -4826,7 +4861,9 @@
               "last_hit",
               "health",
               "flask",
-              "souls"
+              "souls",
+              "hp_trail",
+              "hp_trail_wait"
             ]
           },
           "RespawnState": {

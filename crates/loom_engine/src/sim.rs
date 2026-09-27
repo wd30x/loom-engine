@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use loom_core::debug::DebugDraw;
+use loom_core::hud::{Hud, HudView};
 use loom_core::input::{
     ActionMap, ActionState, InputCollector, InputRecorder, InputScript, Key, ScriptPlayer,
     TickInput, canonical_axis_value,
@@ -22,7 +23,7 @@ use crate::report::{InputReport, TraceReport};
 use crate::sheet::Sheets;
 use crate::state::StateDump;
 use crate::trace::Trace;
-use crate::view::render_scene;
+use crate::view::{HudFn, render_scene};
 
 /// A scene ready to simulate: the game its top-level `game` names and the
 /// sprite sheets it uses, loaded together so a missing sheet or tag fails
@@ -78,6 +79,9 @@ pub(crate) struct Sim {
     trace: Option<Trace>,
     /// `--debug-draw`: the categories it turned on; `None` without it.
     debug_draw: Option<Vec<&'static str>>,
+    /// Whether frames show the HUD: not with `--no-hud`. A serve session
+    /// chooses per screenshot instead.
+    hud: bool,
     /// `--scene` as given; `None` for the built-in scene.
     scene_path: Option<String>,
     /// Source text of the scene as loaded (`--scene`, or a scene a serve
@@ -131,6 +135,7 @@ impl Sim {
             recorder: args.record.is_some().then(InputRecorder::new),
             trace: None,
             debug_draw,
+            hud: !args.no_hud,
             scene_path: args.scene.as_ref().map(|p| p.display().to_string()),
             scene_source,
         };
@@ -158,6 +163,7 @@ impl Sim {
             recorder: Some(InputRecorder::new()),
             trace: None,
             debug_draw: None,
+            hud: true,
             scene_path,
             scene_source,
         }
@@ -213,6 +219,7 @@ impl Sim {
             recorder: Some(recorder),
             trace: None,
             debug_draw: None,
+            hud: self.hud,
             scene_path: self.scene_path.clone(),
             scene_source: Some(source),
         };
@@ -362,19 +369,29 @@ impl Sim {
 
     /// Draws the current state with `renderer`, which must be the only
     /// renderer this `Sim` ever draws with (it owns the sheets' textures),
-    /// with the debug draw of `categories` (the game's names) on top.
-    /// Returns `false` if the frame was skipped (zero render size).
+    /// with the game's HUD over it when `hud` and the debug draw of
+    /// `categories` (the game's names) on top. Returns `false` if the frame
+    /// was skipped (zero render size).
     pub fn render(
         &mut self,
         renderer: &mut Renderer,
         categories: &[&str],
+        hud: bool,
     ) -> Result<bool, RenderError> {
         let mut draw = DebugDraw::new();
         if !categories.is_empty() {
             self.game.debug_draw(categories, &mut draw);
         }
         let lines = debug::line_draws(draw.lines());
-        render_scene(renderer, self.game.scene(), &mut self.sheets, &lines)
+        let game = &self.game;
+        let lay_out = |view: &HudView, items: &mut Hud| game.hud(view, items);
+        let hud: Option<HudFn<'_>> = if hud { Some(&lay_out) } else { None };
+        render_scene(renderer, game.scene(), &mut self.sheets, &lines, hud)
+    }
+
+    /// Whether frames show the HUD: `false` with `--no-hud`.
+    pub fn hud(&self) -> bool {
+        self.hud
     }
 
     /// `--debug-draw`: the categories it turned on; `None` without it.

@@ -4,7 +4,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::camera::rh;
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 
 use crate::{MeshKind, TextureId};
 
@@ -25,9 +25,28 @@ pub struct Frame<'a> {
     /// same depth buffer. Unlit and alpha-tested, so the order does not
     /// change the result.
     pub sprites: &'a [SpriteDraw],
+    /// The HUD, in pixels, drawn after `sprites` and before `lines` in this
+    /// order: alpha-blended, no depth test. Nothing is drawn for an empty
+    /// list.
+    pub hud: &'a [HudDraw],
     /// Debug lines, drawn last in this order, over everything: no depth
     /// test. Nothing is drawn for an empty list.
     pub lines: &'a [LineDraw],
+}
+
+/// One HUD item in pixels of the render target (origin at the top left,
+/// +Y down). Colors are linear RGB plus alpha, blended over what is below.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HudDraw {
+    /// A filled axis-aligned rectangle: its top-left corner and its size.
+    Rect { min: Vec2, size: Vec2, color: Vec4 },
+    /// A filled disc: a pixel is covered when its center is within
+    /// `radius` of `center` (a hard edge).
+    Disc {
+        center: Vec2,
+        radius: f32,
+        color: Vec4,
+    },
 }
 
 /// One debug line segment in world space, 1 pixel wide, opaque.
@@ -79,6 +98,18 @@ pub struct SpriteDraw {
     pub rect: [u32; 4],
 }
 
+/// World to clip space for a camera at `view` (world to view) with
+/// `projection`, at the render size's `aspect`: what the renderer uses.
+pub fn view_projection(
+    view: Mat4,
+    projection: Projection,
+    aspect: f32,
+    near: f32,
+    far: f32,
+) -> Mat4 {
+    self::projection(projection, aspect, near, far) * view
+}
+
 /// Right-handed projection with depth 0..1. The perspective one is the
 /// non-deprecated name of glam's `Mat4::perspective_rh`.
 pub(crate) fn projection(projection: Projection, aspect: f32, near: f32, far: f32) -> Mat4 {
@@ -107,7 +138,8 @@ pub(crate) struct GpuGlobals {
 
 impl GpuGlobals {
     pub fn new(frame: &Frame<'_>, aspect: f32) -> Self {
-        let view_proj = projection(frame.projection, aspect, frame.near, frame.far) * frame.view;
+        let view_proj =
+            view_projection(frame.view, frame.projection, aspect, frame.near, frame.far);
         let (dir, color) = match frame.light {
             Some(l) => (l.direction, l.color * l.intensity),
             None => (Vec3::NEG_Y, Vec3::ZERO),
@@ -195,9 +227,107 @@ pub(crate) fn line_vertices(lines: &[LineDraw]) -> Vec<LineVertex> {
         .collect()
 }
 
+/// One corner of a HUD item; matches `VertexIn` in `shaders/hud.wgsl`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
+pub(crate) struct HudVertex {
+    /// NDC.
+    position: [f32; 2],
+    /// -1..1 across a disc's bounding square; 0 on a rectangle.
+    local: [f32; 2],
+    color: [f32; 4],
+}
+
+impl HudVertex {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<HudVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
+/// The vertices of `hud` for a triangle list on a `width` x `height` pixel
+/// target: two triangles per item, in order; a disc is its bounding square.
+pub(crate) fn hud_vertices(hud: &[HudDraw], width: u32, height: u32) -> Vec<HudVertex> {
+    let (w, h) = (width as f32, height as f32);
+    let ndc = |p: Vec2| [p.x / w * 2.0 - 1.0, 1.0 - p.y / h * 2.0];
+    hud.iter()
+        .flat_map(|item| {
+            let (min, max, disc, color) = match *item {
+                HudDraw::Rect { min, size, color } => (min, min + size, false, color),
+                HudDraw::Disc {
+                    center,
+                    radius,
+                    color,
+                } => (
+                    center - Vec2::splat(radius),
+                    center + Vec2::splat(radius),
+                    true,
+                    color,
+                ),
+            };
+            let corner = |x: bool, y: bool| {
+                let p = Vec2::new(if x { max.x } else { min.x }, if y { max.y } else { min.y });
+                let local = if disc {
+                    [if x { 1.0 } else { -1.0 }, if y { 1.0 } else { -1.0 }]
+                } else {
+                    [0.0, 0.0]
+                };
+                HudVertex {
+                    position: ndc(p),
+                    local,
+                    color: color.to_array(),
+                }
+            };
+            let (a, b, c, d) = (
+                corner(false, false),
+                corner(true, false),
+                corner(true, true),
+                corner(false, true),
+            );
+            [a, b, c, a, c, d]
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hud_vertices_are_two_triangles_per_item_in_ndc() {
+        let hud = [
+            HudDraw::Rect {
+                min: Vec2::new(0.0, 0.0),
+                size: Vec2::new(100.0, 50.0),
+                color: Vec4::new(1.0, 0.0, 0.0, 0.5),
+            },
+            HudDraw::Disc {
+                center: Vec2::new(100.0, 50.0),
+                radius: 25.0,
+                color: Vec4::ONE,
+            },
+        ];
+        let v = hud_vertices(&hud, 200, 100);
+        assert_eq!(v.len(), 12);
+        // The rectangle: the top-left quarter of the screen, local 0.
+        assert_eq!(v[0].position, [-1.0, 1.0]);
+        assert_eq!(v[2].position, [0.0, 0.0]);
+        assert_eq!(v[5].position, [-1.0, 0.0]);
+        assert!(v[..6].iter().all(|v| v.local == [0.0, 0.0]));
+        assert_eq!(v[0].color, [1.0, 0.0, 0.0, 0.5]);
+        // The disc: its bounding square around the center, local ±1.
+        assert_eq!((v[6].position, v[6].local), ([-0.25, 0.5], [-1.0, -1.0]));
+        assert_eq!((v[8].position, v[8].local), ([0.25, -0.5], [1.0, 1.0]));
+        // 32 bytes a vertex, as the shader's three attributes.
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&v).len(), 12 * 32);
+        assert!(hud_vertices(&[], 200, 100).is_empty());
+    }
 
     #[test]
     fn line_vertices_are_both_ends_of_each_line_with_its_color() {
