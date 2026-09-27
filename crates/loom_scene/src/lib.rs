@@ -9,19 +9,21 @@
 //! The tree is simulation state: its structure is fixed after parsing, only
 //! transforms change.
 
+#[cfg(test)]
+mod animation_tests;
 mod clip;
 mod doc;
 #[cfg(test)]
 mod doc_tests;
 mod file;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-pub use clip::{Clip, ClipError, clip_schema};
+pub use clip::{BoneDesc, Clip, ClipError, ClipFile, Keyframe, clip_schema};
 pub use doc::{EditError, SceneDoc};
 pub use file::MeshKind;
 use file::{
@@ -103,6 +105,8 @@ pub enum Problem {
     AnimationWithoutModel,
     #[error("animation play {0:?} is not one of its clips")]
     AnimationPlayUnknown(String),
+    #[error("animation clip {0:?} is given twice")]
+    DuplicateClip(String),
     #[error("tilemap rows must not be empty")]
     TilemapNoRows,
     #[error("tilemap rows must all have the same number of characters, at least 1")]
@@ -209,18 +213,78 @@ pub struct Model {
     pub animation: Option<Animation>,
 }
 
-/// A model's animation clips (`docs/architecture.md` section 19). The clip
-/// files are read by `loom_engine`, not here.
+/// A model's animation clips and what plays (`docs/architecture.md`
+/// section 19, "播放和过渡"). The clip files are read by `loom_engine`, not
+/// here. Part of the simulation state: games switch clips with
+/// [`Scene::play_clip`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Animation {
-    /// Clip name to clip file path, as written; at least one, names and
-    /// paths not empty.
-    pub clips: BTreeMap<String, String>,
+    /// `(name, path)` pairs as written, in file order: at least one, names
+    /// and paths not empty, names unique.
+    pub clips: Vec<(String, String)>,
     /// The clip playing: one of `clips`' names.
     pub playing: String,
-    /// The tick the playing clip started at: 0 until games can switch
-    /// clips (E7.3).
+    /// The tick the playing clip started at.
     pub start: u64,
+    /// The clip blended from, and the tick it had started at; `None` until
+    /// the first switch.
+    pub from: Option<(String, u64)>,
+    /// Ticks the blend from `from` takes; 0 switches at once.
+    pub blend: u64,
+}
+
+impl Animation {
+    /// The path of the clip named `name`, if the node declares it.
+    pub fn clip_path(&self, name: &str) -> Option<&str> {
+        self.clips
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, path)| path.as_str())
+    }
+
+    /// The offset of `bone` from its bind pose at tick `tau`: the playing
+    /// clip's, blended from the `from` clip's while the blend lasts
+    /// (`docs/architecture.md` section 19, "画某个 tick 的姿势"). `clip`
+    /// gives the clip of each of the node's clip names. A bone a clip does
+    /// not list has the identity rotation and no move in it.
+    pub fn offsets<'c>(
+        &self,
+        clip: impl Fn(&str) -> &'c Clip,
+        bone: &str,
+        tau: u64,
+    ) -> (Quat, Vec3) {
+        let sample = |name: &str, since: u64| {
+            clip(name)
+                .sample(bone, tau.saturating_sub(since))
+                .unwrap_or((Quat::IDENTITY, Vec3::ZERO))
+        };
+        let new = sample(&self.playing, self.start);
+        let Some((from, from_start)) = &self.from else {
+            return new;
+        };
+        // Ticks into the blend; `None` before it starts.
+        let into = tau.checked_sub(self.start);
+        if self.blend == 0 || into.is_some_and(|t| t >= self.blend) {
+            return new;
+        }
+        let old = sample(from, *from_start);
+        match into {
+            None | Some(0) => old,
+            Some(t) => {
+                let w = t as f32 / self.blend as f32;
+                (old.0.slerp(new.0, w), old.1.lerp(new.1, w))
+            }
+        }
+    }
+}
+
+/// Why [`Scene::play_clip`] refused.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum AnimationError {
+    #[error("node {0:?} has no animation")]
+    NoAnimation(String),
+    #[error("node {path:?}: the scene declares no animation clip {clip:?}")]
+    Undeclared { path: String, clip: String },
 }
 
 /// Looks along the node's -Z.
@@ -559,6 +623,45 @@ impl Scene {
         if let Some(sprite) = &mut self.nodes[id.0].sprite {
             sprite.current = index;
         }
+        Ok(())
+    }
+
+    /// Switches the animation of `id` to its clip `clip`, started at tick
+    /// `start`, blended from what played over `blend` ticks
+    /// (`docs/architecture.md` section 19, "播放和过渡"). The clip must be
+    /// one the scene declares for the node, so the engine only ever meets
+    /// clips checked at load time; on an error nothing changes. Switching
+    /// to the clip already playing restarts it, blended from where it was.
+    pub fn play_clip(
+        &mut self,
+        id: NodeId,
+        clip: &str,
+        start: u64,
+        blend: u64,
+    ) -> Result<(), AnimationError> {
+        let path = || self.path(id);
+        let Some(animation) = self.nodes[id.0]
+            .model
+            .as_ref()
+            .and_then(|m| m.animation.as_ref())
+        else {
+            return Err(AnimationError::NoAnimation(path()));
+        };
+        if animation.clip_path(clip).is_none() {
+            return Err(AnimationError::Undeclared {
+                path: path(),
+                clip: clip.to_owned(),
+            });
+        }
+        let animation = self.nodes[id.0]
+            .model
+            .as_mut()
+            .and_then(|m| m.animation.as_mut())
+            .expect("checked above");
+        let playing = std::mem::replace(&mut animation.playing, clip.to_owned());
+        animation.from = Some((playing, animation.start));
+        animation.start = start;
+        animation.blend = blend;
         Ok(())
     }
 
@@ -942,7 +1045,7 @@ fn camera(c: &CameraDesc) -> Result<Camera, Problem> {
 
 /// A rotation from YXZ Euler angles in degrees `(x, y, z)`: a node's
 /// `rotation`, and a clip's rotation keyframes.
-pub(crate) fn euler_degrees(d: Vec3) -> Quat {
+pub fn euler_degrees(d: Vec3) -> Quat {
     Quat::from_euler(
         EulerRot::YXZ,
         d.y.to_radians(),
@@ -955,17 +1058,22 @@ fn animation(a: &AnimationDesc) -> Result<Animation, Problem> {
     if a.clips.is_empty() {
         return Err(Problem::EmptyField("animation clips"));
     }
-    for (name, path) in &a.clips {
+    for (i, (name, path)) in a.clips.iter().enumerate() {
         not_empty(name, "animation clip name")?;
         not_empty(path, "animation clip path")?;
+        if a.clips[..i].iter().any(|(n, _)| n == name) {
+            return Err(Problem::DuplicateClip(name.clone()));
+        }
     }
-    if !a.clips.contains_key(&a.play) {
+    if !a.clips.iter().any(|(n, _)| *n == a.play) {
         return Err(Problem::AnimationPlayUnknown(a.play.clone()));
     }
     Ok(Animation {
         clips: a.clips.clone(),
         playing: a.play.clone(),
         start: 0,
+        from: None,
+        blend: 0,
     })
 }
 

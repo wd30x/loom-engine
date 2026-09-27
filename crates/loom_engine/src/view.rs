@@ -3,10 +3,12 @@
 //! place that knows both. Also `loom view`, which renders a scene once
 //! without simulating it.
 
+use std::borrow::Cow;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec2, Vec3};
+use loom_core::debug::DebugDraw;
 use loom_core::hud::{GLYPH_CELL, Hud, HudItem, HudView, glyph_cell};
 use loom_render::{
     DirectionalLight, DrawItem, DrawMesh, Frame, HudDraw, JointRange, LineDraw, MeshId, Projection,
@@ -15,6 +17,7 @@ use loom_render::{
 use loom_scene::{Model, NodeId, Scene};
 
 use crate::ViewArgs;
+use crate::debug;
 use crate::model::Models;
 use crate::output::ensure_parent_dir;
 use crate::report::ViewReport;
@@ -26,10 +29,12 @@ pub(crate) type HudFn<'a> = &'a dyn Fn(&HudView, &mut Hud);
 
 /// Draws `scene` from its camera at game tick `tick` (which poses the
 /// animated models), with the HUD `hud` lays out (if any) over it and the
-/// debug `lines` on top. `sheets` and `models` must have been loaded for
-/// `scene` ([`Sheets::load`], [`Models::load`]) and only ever be drawn
-/// with `renderer`. Returns `false` if the frame was skipped (zero render
+/// debug `lines` on top, followed by the `skeleton` debug draw if on.
+/// `sheets` and `models` must have been loaded for `scene`
+/// ([`Sheets::load`], [`Models::load`]) and only ever be drawn with
+/// `renderer`. Returns `false` if the frame was skipped (zero render
 /// size).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_scene(
     renderer: &mut Renderer,
     scene: &Scene,
@@ -38,11 +43,17 @@ pub(crate) fn render_scene(
     lines: &[LineDraw],
     hud: Option<HudFn<'_>>,
     tick: u64,
+    skeleton: bool,
 ) -> Result<bool, RenderError> {
     let mut joints = Vec::new();
-    let draws = mesh_draws(scene, |model| {
-        models.draw(renderer, model, tick, &mut joints)
+    let mut bones = skeleton.then(DebugDraw::new);
+    let draws = mesh_draws(scene, |model, world| {
+        models.draw(renderer, model, world, tick, &mut joints, bones.as_mut())
     })?;
+    let lines: Cow<'_, [LineDraw]> = match &bones {
+        Some(bones) => [lines, &debug::line_draws(bones.lines())].concat().into(),
+        None => lines.into(),
+    };
     let sprites = sprite_draws(renderer, scene, sheets)?;
 
     let camera_id = scene.camera();
@@ -92,7 +103,7 @@ pub(crate) fn render_scene(
         joints: &joints,
         sprites: &sprites,
         hud: &hud,
-        lines,
+        lines: &lines,
     })
 }
 
@@ -185,26 +196,27 @@ fn hud_draws(
 }
 
 /// One draw per drawn node with a mesh or a model ([`Scene::is_drawn`]),
-/// in scene pre-order; `model` gives the mesh of a model, and its joint
-/// range if it is animated.
+/// in scene pre-order; `model` gives the mesh of a model at its world
+/// matrix, and its joint range if it is animated.
 fn mesh_draws(
     scene: &Scene,
-    mut model: impl FnMut(&Model) -> Result<(MeshId, Option<JointRange>), RenderError>,
+    mut model: impl FnMut(&Model, Mat4) -> Result<(MeshId, Option<JointRange>), RenderError>,
 ) -> Result<Vec<DrawItem>, RenderError> {
     let mut draws = Vec::new();
     for id in scene.ids().filter(|&id| scene.is_drawn(id)) {
         let node = scene.node(id);
+        let world = scene.world_matrix(id);
         let (mesh, color, joints) = match (&node.mesh, &node.model) {
             (Some(mesh), _) => (mesh_kind(mesh.kind).into(), mesh.color, None),
             (None, Some(m)) => {
-                let (mesh, joints) = model(m)?;
+                let (mesh, joints) = model(m, world)?;
                 (DrawMesh::Id(mesh), m.color, joints)
             }
             (None, None) => continue,
         };
         draws.push(DrawItem {
             mesh,
-            model: scene.world_matrix(id),
+            model: world,
             color,
             joints,
         });
@@ -287,10 +299,15 @@ fn mesh_kind(kind: loom_scene::MeshKind) -> loom_render::MeshKind {
 /// `loom view`: renders the scene as loaded, without a game (so it needs no
 /// `game`, nor what a game requires) and without ticking, once for each of
 /// `--ticks` (which only poses the animated models), and saves the frames
-/// left to right as one screenshot. The scene, its sheets, models and
-/// clips are checked before the GPU is touched. `started` is the process
-/// start, for `renderer_init_ms`.
+/// left to right as one screenshot; `--debug-draw` has only `skeleton`.
+/// The debug draw, the scene, its sheets, models and clips are checked
+/// before the GPU is touched. `started` is the process start, for
+/// `renderer_init_ms`.
 pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
+    let skeleton = match &args.debug_draw {
+        Some(value) => !debug::select_cli("view", &[debug::SKELETON], value.as_deref())?.is_empty(),
+        None => false,
+    };
     let path = &args.scene;
     let src = std::fs::read_to_string(path)
         .with_context(|| format!("reading scene {}", path.display()))?;
@@ -318,6 +335,7 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
             &[],
             None,
             tick,
+            skeleton,
         )?;
         let pixels = renderer.read_pixels().context("reading back the frame")?;
         let frame = image::RgbaImage::from_raw(width, height, pixels)
@@ -556,7 +574,7 @@ mod tests {
         )
         .unwrap();
         let mut asked = Vec::new();
-        let draws = mesh_draws(&scene, |model| {
+        let draws = mesh_draws(&scene, |model, _| {
             asked.push(model.path.clone());
             let id = MeshId::from_index(if model.path == "k.glb" { 7 } else { 3 });
             let joints = (model.path == "j.glb").then_some(JointRange { first: 4, count: 2 });
@@ -602,7 +620,7 @@ mod tests {
         )
         .unwrap();
         let colors = |scene: &Scene| {
-            mesh_draws(scene, |_| unreachable!("the scene has no model"))
+            mesh_draws(scene, |_, _| unreachable!("the scene has no model"))
                 .unwrap()
                 .iter()
                 .map(|d| d.color)

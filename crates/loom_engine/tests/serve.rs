@@ -985,7 +985,7 @@ fn screenshot_with_a_bad_debug_draw_is_invalid_params_before_any_rendering() {
     }
     assert_eq!(
         message(&replies[0]),
-        r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders", "lock", "bonfires" and "bloodstain""#
+        r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders", "lock", "bonfires", "bloodstain" and "skeleton""#
     );
     assert_eq!(
         message(&replies[1]),
@@ -993,7 +993,7 @@ fn screenshot_with_a_bad_debug_draw_is_invalid_params_before_any_rendering() {
     );
     assert_eq!(
         message(&replies[4]),
-        r#"unknown debug draw category "lock": rogue has none"#
+        r#"unknown debug draw category "lock": rogue has "skeleton""#
     );
     assert!(!shot.exists());
 }

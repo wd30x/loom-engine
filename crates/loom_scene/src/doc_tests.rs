@@ -498,15 +498,15 @@ fn edit_node_sets_and_unsets_model() {
 fn animation_is_written_right_after_the_model_and_rewrites_the_same() {
     let src = r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
         (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
-        (color: (0.5, 0.5, 0.5), animation: (play: "idle", clips: {"walk": "w.ron", "idle": "i.ron"}),
+        (color: (0.5, 0.5, 0.5), animation: (play: "idle", clips: [("walk", "w.ron"), ("idle", "i.ron")]),
             model: "k.glb", name: "knight"),
     ])"#;
     let doc = SceneDoc::parse(src).unwrap();
     assert_eq!(
         ron_of(&doc, "knight"),
         "(\n    name: \"knight\",\n    model: \"k.glb\",\n    animation: (\n        \
-         clips: {\n            \"idle\": \"i.ron\",\n            \"walk\": \"w.ron\",\n        \
-         },\n        play: \"idle\",\n    ),\n    color: (0.5, 0.5, 0.5),\n)\n"
+         clips: [\n            (\"walk\", \"w.ron\"),\n            (\"idle\", \"i.ron\"),\n        \
+         ],\n        play: \"idle\",\n    ),\n    color: (0.5, 0.5, 0.5),\n)\n"
     );
     let once = doc.to_ron();
     assert_eq!(SceneDoc::parse(&once).unwrap().to_ron(), once);
@@ -518,7 +518,7 @@ fn edit_node_sets_and_unsets_animation() {
     let mut doc = small();
     doc.edit_node(
         "box",
-        Some(r#"model: "k.glb", animation: (clips: {"idle": "i.ron"}, play: "idle")"#),
+        Some(r#"model: "k.glb", animation: (clips: [("idle", "i.ron")], play: "idle")"#),
         &["mesh".to_owned()],
         &no_props(),
     )

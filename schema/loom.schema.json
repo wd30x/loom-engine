@@ -65,12 +65,22 @@
         "type": "object",
         "properties": {
           "clips": {
-            "description": "Clip name to the path of its RON clip file (the `clip` schema),\nrelative to the working directory. At least one; names and paths\nnot empty.",
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
+            "description": "`(name, path)` pairs: each clip's name and the path of its RON clip\nfile (the `clip` schema), relative to the working directory. At\nleast one; names and paths not empty, each name given once. A list,\nnot a map: ron silently keeps the last of two duplicate map keys.",
+            "type": "array",
+            "items": {
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ]
             },
-            "minProperties": 1
+            "minItems": 1
           },
           "play": {
             "description": "The clip played from tick 0: one of `clips`' names.",
@@ -868,10 +878,10 @@
             "$ref": "#/$defs/GameState"
           },
           "nodes": {
-            "description": "Local transform of every scene node, keyed by path (sorted).",
+            "description": "Every scene node's local transform, and its animation if it has\none, keyed by path (sorted).",
             "type": "object",
             "additionalProperties": {
-              "$ref": "#/$defs/Transform"
+              "$ref": "#/$defs/NodeState"
             }
           },
           "sim_time": {
@@ -895,6 +905,63 @@
           "game"
         ],
         "$defs": {
+          "AnimationState": {
+            "description": "What an animated model plays.",
+            "type": "object",
+            "properties": {
+              "blend": {
+                "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "clip": {
+                "description": "The clip playing.",
+                "type": "string"
+              },
+              "from": {
+                "description": "The clip blended from, `null` until the first switch.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ClipStart"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "start": {
+                "description": "The tick it started at.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start",
+              "from",
+              "blend"
+            ]
+          },
+          "ClipStart": {
+            "description": "A clip and the tick it started at.",
+            "type": "object",
+            "properties": {
+              "clip": {
+                "type": "string"
+              },
+              "start": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start"
+            ]
+          },
           "GameState": {
             "description": "The game state in the state dump (`game`).",
             "type": "object",
@@ -950,35 +1017,21 @@
               "text"
             ]
           },
-          "PlayerState": {
-            "description": "The player (`game.player`).",
+          "NodeState": {
+            "description": "One node in a state dump: its local transform (relative to the parent)\nand, for an animated model, what plays (`docs/architecture.md` section\n19): the clip names and ticks, not the bones' pose.",
             "type": "object",
             "properties": {
-              "cell": {
-                "description": "`[column, row]`; row 0 is the map's top row.",
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "maxItems": 2,
-                "minItems": 2
+              "animation": {
+                "description": "Only on a node with an `animation`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AnimationState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
-              "hp": {
-                "description": "0 when dead.",
-                "type": "integer",
-                "format": "int32"
-              }
-            },
-            "required": [
-              "cell",
-              "hp"
-            ]
-          },
-          "Transform": {
-            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
-            "type": "object",
-            "properties": {
               "position": {
                 "description": "`[x, y, z]`, in meters.",
                 "type": "array",
@@ -1014,6 +1067,31 @@
               "position",
               "rotation",
               "scale"
+            ]
+          },
+          "PlayerState": {
+            "description": "The player (`game.player`).",
+            "type": "object",
+            "properties": {
+              "cell": {
+                "description": "`[column, row]`; row 0 is the map's top row.",
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "hp": {
+                "description": "0 when dead.",
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "required": [
+              "cell",
+              "hp"
             ]
           },
           "ZombieState": {
@@ -1084,6 +1162,63 @@
           "state"
         ],
         "$defs": {
+          "AnimationState": {
+            "description": "What an animated model plays.",
+            "type": "object",
+            "properties": {
+              "blend": {
+                "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "clip": {
+                "description": "The clip playing.",
+                "type": "string"
+              },
+              "from": {
+                "description": "The clip blended from, `null` until the first switch.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ClipStart"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "start": {
+                "description": "The tick it started at.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start",
+              "from",
+              "blend"
+            ]
+          },
+          "ClipStart": {
+            "description": "A clip and the tick it started at.",
+            "type": "object",
+            "properties": {
+              "clip": {
+                "type": "string"
+              },
+              "start": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start"
+            ]
+          },
           "Event": {
             "description": "One event of a tick, for traces and `loom serve`'s `step`\n(`docs/architecture.md` section 15, \"事件\"); serialized as an object\nwhose first field is `type`.",
             "oneOf": [
@@ -1199,6 +1334,58 @@
               "text"
             ]
           },
+          "NodeState": {
+            "description": "One node in a state dump: its local transform (relative to the parent)\nand, for an animated model, what plays (`docs/architecture.md` section\n19): the clip names and ticks, not the bones' pose.",
+            "type": "object",
+            "properties": {
+              "animation": {
+                "description": "Only on a node with an `animation`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AnimationState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "position": {
+                "description": "`[x, y, z]`, in meters.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "rotation": {
+                "description": "A unit quaternion `[x, y, z, w]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 4,
+                "minItems": 4
+              },
+              "scale": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "rotation",
+              "scale"
+            ]
+          },
           "PlayerState": {
             "description": "The player (`game.player`).",
             "type": "object",
@@ -1249,10 +1436,10 @@
                 "$ref": "#/$defs/GameState"
               },
               "nodes": {
-                "description": "Local transform of every scene node, keyed by path (sorted).",
+                "description": "Every scene node's local transform, and its animation if it has\none, keyed by path (sorted).",
                 "type": "object",
                 "additionalProperties": {
-                  "$ref": "#/$defs/Transform"
+                  "$ref": "#/$defs/NodeState"
                 }
               },
               "sim_time": {
@@ -1274,47 +1461,6 @@
               "axes",
               "nodes",
               "game"
-            ]
-          },
-          "Transform": {
-            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
-            "type": "object",
-            "properties": {
-              "position": {
-                "description": "`[x, y, z]`, in meters.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 3,
-                "minItems": 3
-              },
-              "rotation": {
-                "description": "A unit quaternion `[x, y, z, w]`.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 4,
-                "minItems": 4
-              },
-              "scale": {
-                "description": "`[x, y, z]`.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 3,
-                "minItems": 3
-              }
-            },
-            "required": [
-              "position",
-              "rotation",
-              "scale"
             ]
           },
           "ZombieState": {
@@ -2969,10 +3115,10 @@
             "$ref": "#/$defs/GameState"
           },
           "nodes": {
-            "description": "Local transform of every scene node, keyed by path (sorted).",
+            "description": "Every scene node's local transform, and its animation if it has\none, keyed by path (sorted).",
             "type": "object",
             "additionalProperties": {
-              "$ref": "#/$defs/Transform"
+              "$ref": "#/$defs/NodeState"
             }
           },
           "sim_time": {
@@ -3028,6 +3174,45 @@
                 "type": "string",
                 "const": "drink"
               }
+            ]
+          },
+          "AnimationState": {
+            "description": "What an animated model plays.",
+            "type": "object",
+            "properties": {
+              "blend": {
+                "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "clip": {
+                "description": "The clip playing.",
+                "type": "string"
+              },
+              "from": {
+                "description": "The clip blended from, `null` until the first switch.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ClipStart"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "start": {
+                "description": "The tick it started at.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start",
+              "from",
+              "blend"
             ]
           },
           "AttackPhase": {
@@ -3110,6 +3295,24 @@
               "yaw",
               "pitch",
               "distance"
+            ]
+          },
+          "ClipStart": {
+            "description": "A clip and the tick it started at.",
+            "type": "object",
+            "properties": {
+              "clip": {
+                "type": "string"
+              },
+              "start": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start"
             ]
           },
           "Condition": {
@@ -3463,6 +3666,58 @@
               }
             ]
           },
+          "NodeState": {
+            "description": "One node in a state dump: its local transform (relative to the parent)\nand, for an animated model, what plays (`docs/architecture.md` section\n19): the clip names and ticks, not the bones' pose.",
+            "type": "object",
+            "properties": {
+              "animation": {
+                "description": "Only on a node with an `animation`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AnimationState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "position": {
+                "description": "`[x, y, z]`, in meters.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "rotation": {
+                "description": "A unit quaternion `[x, y, z, w]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 4,
+                "minItems": 4
+              },
+              "scale": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "rotation",
+              "scale"
+            ]
+          },
           "PlayerHit": {
             "description": "One hit on the character.",
             "type": "object",
@@ -3682,47 +3937,6 @@
               "swing_tick",
               "phase"
             ]
-          },
-          "Transform": {
-            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
-            "type": "object",
-            "properties": {
-              "position": {
-                "description": "`[x, y, z]`, in meters.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 3,
-                "minItems": 3
-              },
-              "rotation": {
-                "description": "A unit quaternion `[x, y, z, w]`.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 4,
-                "minItems": 4
-              },
-              "scale": {
-                "description": "`[x, y, z]`.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 3,
-                "minItems": 3
-              }
-            },
-            "required": [
-              "position",
-              "rotation",
-              "scale"
-            ]
           }
         }
       },
@@ -3788,6 +4002,45 @@
                 "type": "string",
                 "const": "drink"
               }
+            ]
+          },
+          "AnimationState": {
+            "description": "What an animated model plays.",
+            "type": "object",
+            "properties": {
+              "blend": {
+                "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "clip": {
+                "description": "The clip playing.",
+                "type": "string"
+              },
+              "from": {
+                "description": "The clip blended from, `null` until the first switch.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ClipStart"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "start": {
+                "description": "The tick it started at.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start",
+              "from",
+              "blend"
             ]
           },
           "AttackPhase": {
@@ -3870,6 +4123,24 @@
               "yaw",
               "pitch",
               "distance"
+            ]
+          },
+          "ClipStart": {
+            "description": "A clip and the tick it started at.",
+            "type": "object",
+            "properties": {
+              "clip": {
+                "type": "string"
+              },
+              "start": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "clip",
+              "start"
             ]
           },
           "Condition": {
@@ -4857,6 +5128,58 @@
               }
             ]
           },
+          "NodeState": {
+            "description": "One node in a state dump: its local transform (relative to the parent)\nand, for an animated model, what plays (`docs/architecture.md` section\n19): the clip names and ticks, not the bones' pose.",
+            "type": "object",
+            "properties": {
+              "animation": {
+                "description": "Only on a node with an `animation`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AnimationState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "position": {
+                "description": "`[x, y, z]`, in meters.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "rotation": {
+                "description": "A unit quaternion `[x, y, z, w]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 4,
+                "minItems": 4
+              },
+              "scale": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "rotation",
+              "scale"
+            ]
+          },
           "Outcome": {
             "description": "What a hit did to the target.",
             "oneOf": [
@@ -5091,10 +5414,10 @@
                 "$ref": "#/$defs/GameState"
               },
               "nodes": {
-                "description": "Local transform of every scene node, keyed by path (sorted).",
+                "description": "Every scene node's local transform, and its animation if it has\none, keyed by path (sorted).",
                 "type": "object",
                 "additionalProperties": {
-                  "$ref": "#/$defs/Transform"
+                  "$ref": "#/$defs/NodeState"
                 }
               },
               "sim_time": {
@@ -5148,47 +5471,6 @@
               "node",
               "swing_tick",
               "phase"
-            ]
-          },
-          "Transform": {
-            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
-            "type": "object",
-            "properties": {
-              "position": {
-                "description": "`[x, y, z]`, in meters.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 3,
-                "minItems": 3
-              },
-              "rotation": {
-                "description": "A unit quaternion `[x, y, z, w]`.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 4,
-                "minItems": 4
-              },
-              "scale": {
-                "description": "`[x, y, z]`.",
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "float"
-                },
-                "maxItems": 3,
-                "minItems": 3
-              }
-            },
-            "required": [
-              "position",
-              "rotation",
-              "scale"
             ]
           }
         }

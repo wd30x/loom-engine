@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Quat, Vec3};
+use loom_core::debug::DebugDraw;
 use loom_scene::{Animation, Clip, NodeId, Scene};
 
 use crate::model::Skeleton;
@@ -55,12 +56,22 @@ impl Clips {
         Ok(())
     }
 
-    /// The clip `animation` plays; [`Clips::load`] read it.
-    pub fn playing(&self, animation: &Animation) -> &Clip {
-        let path = &animation.clips[&animation.playing];
+    /// The clip `animation` names `name`; [`Clips::load`] read it.
+    fn clip(&self, animation: &Animation, name: &str) -> &Clip {
+        let path = animation
+            .clip_path(name)
+            .expect("Scene::play_clip only plays declared clips");
         self.clips
             .get(path)
             .expect("Clips::load read every clip of the scene")
+    }
+
+    /// The model-space pose of `skeleton` by `animation` at tick `tau`
+    /// ([`Animation::offsets`], [`pose`]).
+    pub fn pose(&self, skeleton: &Skeleton, animation: &Animation, tau: u64) -> Vec<Mat4> {
+        pose(skeleton, |bone| {
+            animation.offsets(|name| self.clip(animation, name), bone, tau)
+        })
     }
 }
 
@@ -70,20 +81,19 @@ fn load_file(path: &Path) -> Result<Clip> {
     Ok(Clip::parse(&src)?)
 }
 
-/// The joint matrices of `skeleton` posed by `clip` `t` ticks after it
-/// started, in the skeleton's order: each joint's model-space pose times
-/// its inverse bind matrix. A bone the clip moves by rotation `q` and move
-/// `d` gets the local rotation `R * (B⁻¹ * q * B)` and the local
-/// translation `T + B_p⁻¹ * d`, so with its parent still it turns by `q`
-/// about its own position along the model's axes and moves by `d`.
-pub(crate) fn pose(skeleton: &Skeleton, clip: &Clip, t: u64) -> Vec<Mat4> {
+/// The model-space transform of every joint of `skeleton`, in its order,
+/// with each named bone moved by the offset `offsets` gives it (rotation
+/// `q`, move `d`; an unnamed joint keeps its bind pose). The bone gets the
+/// local rotation `R * (B⁻¹ * q * B)` and the local translation
+/// `T + B_p⁻¹ * d`, so with its parent still it turns by `q` about its own
+/// position along the model's axes and moves by `d`.
+pub(crate) fn pose(skeleton: &Skeleton, offsets: impl Fn(&str) -> (Quat, Vec3)) -> Vec<Mat4> {
     let mut model: Vec<Mat4> = Vec::with_capacity(skeleton.joints.len());
     for joint in &skeleton.joints {
         let (q, d) = joint
             .name
             .as_deref()
-            .and_then(|name| clip.sample(name, t))
-            .unwrap_or((Quat::IDENTITY, Vec3::ZERO));
+            .map_or((Quat::IDENTITY, Vec3::ZERO), &offsets);
         let rotation = joint.rotation * (joint.bind_rotation.inverse() * q * joint.bind_rotation);
         let translation = joint.translation + joint.parent_bind_rotation.inverse() * d;
         let local = Mat4::from_scale_rotation_translation(joint.scale, rotation, translation);
@@ -94,12 +104,36 @@ pub(crate) fn pose(skeleton: &Skeleton, clip: &Clip, t: u64) -> Vec<Mat4> {
         model.push(parent * local);
     }
     model
-        .iter()
+}
+
+/// The joint matrices of a pose ([`pose`]) of `skeleton`: each joint's
+/// model-space transform times its inverse bind matrix.
+pub(crate) fn joint_matrices(skeleton: &Skeleton, pose: &[Mat4]) -> Vec<Mat4> {
+    pose.iter()
         .zip(&skeleton.joints)
         .map(|(m, j)| *m * j.inverse_bind)
         .collect()
 }
 
+/// The size of a joint's cross in the `skeleton` debug draw (each of its
+/// three segments), meters.
+const JOINT_CROSS: f32 = 0.03;
+/// The `skeleton` debug draw's color.
+const SKELETON_COLOR: Vec3 = Vec3::new(1.0, 0.8, 0.0);
+
+/// The `skeleton` debug draw of a pose ([`pose`]) of `skeleton` placed by
+/// `world` (`docs/architecture.md` section 19): a cross at every joint, a
+/// segment from every joint to its parent joint.
+pub(crate) fn draw_skeleton(skeleton: &Skeleton, pose: &[Mat4], world: Mat4, draw: &mut DebugDraw) {
+    let at = |m: &Mat4| world.transform_point3(m.w_axis.truncate());
+    for (joint, m) in skeleton.joints.iter().zip(pose) {
+        draw.cross(at(m), JOINT_CROSS, SKELETON_COLOR);
+        if let Some(p) = joint.parent {
+            draw.line(at(&pose[p]), at(m), SKELETON_COLOR);
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "anim_tests.rs"]
-mod tests;
+pub(crate) mod tests;

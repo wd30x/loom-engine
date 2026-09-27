@@ -557,7 +557,7 @@ Test-Check 'H10' 'debug draw screenshots are byte-identical, differ from plain o
     foreach ($n in 'a', 'b') {
         $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--debug-draw', '--screenshot', "$out/h10_$n.png")
         Assert-ExitOk $r
-        Assert-True (($r.Json.debug_draw -join ',') -eq 'hurtboxes,swings,colliders,lock,bonfires,bloodstain') "debug_draw is $($r.Json.debug_draw -join ',')"
+        Assert-True (($r.Json.debug_draw -join ',') -eq 'hurtboxes,swings,colliders,lock,bonfires,bloodstain,skeleton') "debug_draw is $($r.Json.debug_draw -join ',')"
     }
     Assert-SameBytes "$out/h10_a.png" "$out/h10_b.png"
     Assert-True ((Get-FileHash "$out/h10_a.png").Hash -ne (Get-FileHash "$out/h1_a.png").Hash) 'the debug draw changed nothing'
@@ -637,6 +637,20 @@ Test-Check 'H13' 'view --ticks films the animation preview, the same bytes twice
     $size = Get-PngSize "$out/h13_a.png"
     Assert-True ($size -eq '1920x360') "PNG is $size"
     $script:detail = "sha256 $((Get-FileHash "$out/h13_a.png").Hash)"
+}
+
+Test-Check 'H14' 'view --debug-draw films the animation preview with its skeletons, the same bytes twice' {
+    Assert-True (Test-Path "$out/h13_a.png") 'no film strip from H13'
+    foreach ($n in 'a', 'b') {
+        $r = Invoke-Loom @('view', '--scene', 'assets/scenes/anim_preview.ron', '--ticks', '0,15,30,45',
+            '--size', '480x360', '--debug-draw', '--screenshot', "$out/h14_$n.png")
+        Assert-ExitOk $r
+    }
+    Assert-SameBytes "$out/h14_a.png" "$out/h14_b.png"
+    $size = Get-PngSize "$out/h14_a.png"
+    Assert-True ($size -eq '1920x360') "PNG is $size"
+    Assert-True ((Get-FileHash "$out/h14_a.png").Hash -ne (Get-FileHash "$out/h13_a.png").Hash) 'the skeletons changed nothing'
+    $script:detail = "sha256 $((Get-FileHash "$out/h14_a.png").Hash)"
 }
 
 # ---------------------------------------------------------------- W: window

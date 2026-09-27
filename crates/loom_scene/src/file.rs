@@ -7,8 +7,6 @@
 //! (`docs/architecture.md` section 10, "规范格式"): fields in declaration
 //! order, absent optional fields and empty lists left out.
 
-use std::collections::BTreeMap;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -146,11 +144,12 @@ pub enum MeshKind {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AnimationDesc {
-    /// Clip name to the path of its RON clip file (the `clip` schema),
-    /// relative to the working directory. At least one; names and paths
-    /// not empty.
-    #[schemars(extend("minProperties" = 1))]
-    pub clips: BTreeMap<String, String>,
+    /// `(name, path)` pairs: each clip's name and the path of its RON clip
+    /// file (the `clip` schema), relative to the working directory. At
+    /// least one; names and paths not empty, each name given once. A list,
+    /// not a map: ron silently keeps the last of two duplicate map keys.
+    #[schemars(length(min = 1))]
+    pub clips: Vec<(String, String)>,
     /// The clip played from tick 0: one of `clips`' names.
     pub play: String,
 }

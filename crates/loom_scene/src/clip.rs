@@ -7,11 +7,14 @@ use std::collections::BTreeMap;
 
 use glam::{Quat, Vec3};
 use ron::extensions::Extensions;
+use ron::ser::PrettyConfig;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::euler_degrees;
-use crate::file::Triple;
+
+/// A keyframe of a clip file: `(tick, (x, y, z))`.
+pub type Keyframe = (u64, (f32, f32, f32));
 
 /// A loom animation clip file (`docs/architecture.md` section 19). The
 /// file is RON; this schema describes the same data as JSON: a keyframe
@@ -20,10 +23,10 @@ use crate::file::Triple;
 /// written bare in RON (`rotation: [...]`, not `rotation: Some([...])`).
 /// Loading checks more than the structure: the rules are in the field
 /// descriptions.
-#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(title = "clip")]
-pub(crate) struct ClipFile {
+pub struct ClipFile {
     /// The clip's length in ticks (1/60 s), greater than 0.
     #[schemars(range(min = 1))]
     pub length: u64,
@@ -38,16 +41,38 @@ pub(crate) struct ClipFile {
 /// One bone's channels: at least one of the two. Values are offsets from
 /// the bind pose along the model's axes (+X right, +Y up, -Z forward), not
 /// the bone's own axes; a parent's motion carries its children's axes.
-#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BoneDesc {
+pub struct BoneDesc {
     /// `(tick, (x, y, z))` keyframes of YXZ Euler angles in degrees, as a
     /// scene node's `rotation`, about the bone's position. At least one;
     /// ticks strictly increasing, each at most `length`; values finite.
-    pub rotation: Option<Vec<(u64, Triple)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<Vec<Keyframe>>,
     /// `(tick, (x, y, z))` keyframes of a move in meters. At least one;
     /// ticks strictly increasing, each at most `length`; values finite.
-    pub translation: Option<Vec<(u64, Triple)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub translation: Option<Vec<Keyframe>>,
+}
+
+impl ClipFile {
+    /// The file as RON: ron's pretty printer, 4-space indent, bare optional
+    /// values, no struct names, `\n` line ends, a final newline (the scene
+    /// files' canonical format).
+    pub fn to_ron(&self) -> String {
+        let config = PrettyConfig::new()
+            .indentor("    ".to_owned())
+            .new_line("\n".to_owned());
+        let mut text = options()
+            .to_string_pretty(self, config)
+            .expect("clip files contain only plain data");
+        text.push('\n');
+        text
+    }
+}
+
+fn options() -> ron::Options {
+    ron::Options::default().with_default_extension(Extensions::IMPLICIT_SOME)
 }
 
 /// What is wrong with a clip file.
@@ -111,8 +136,7 @@ struct Channels {
 impl Clip {
     /// Parses and checks a clip file.
     pub fn parse(src: &str) -> Result<Self, ClipError> {
-        let options = ron::Options::default().with_default_extension(Extensions::IMPLICIT_SOME);
-        let file: ClipFile = options.from_str(src)?;
+        let file: ClipFile = options().from_str(src)?;
         if file.length == 0 {
             return Err(ClipError::Length);
         }
@@ -176,7 +200,7 @@ impl Clip {
 fn keys(
     bone: &str,
     channel: &'static str,
-    keys: Option<Vec<(u64, Triple)>>,
+    keys: Option<Vec<Keyframe>>,
     length: u64,
 ) -> Result<Vec<(u64, Vec3)>, ClipError> {
     let Some(keys) = keys else {

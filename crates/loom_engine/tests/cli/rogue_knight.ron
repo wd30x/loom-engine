@@ -1,0 +1,48 @@
+// The rogue scene (assets/scenes/rogue.ron) plus an animated decoration, for the CLI tests
+// of the animation in state dumps and of the skeleton debug draw (docs/architecture.md
+// section 19). Paths are relative to the repository root, where the tests run it.
+(
+    version: 1,
+    game: "rogue",
+    camera: "cam",
+    ambient: (1.0, 1.0, 1.0),         // sprites are unlit: any value will do
+    nodes: [
+        (name: "cam", position: (9.5, -5.125, 10.0),
+            camera: (ortho: (height: 11.25), near: 0.1, far: 100.0)),
+        // '#' is a wall; every other legend character is floor
+        (name: "map", tilemap: (
+            sheet: "assets/art/tiles.json",
+            legend: [('#', "wall"), ('.', "floor")],
+            rows: [
+                "####################",
+                "#..................#",
+                "#..................#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#..........#",
+                "#.......#######....#",
+                "#..................#",
+                "#..................#",
+                "####################",
+            ],
+        )),
+        // z = 1: in front of everything
+        (name: "player", position: (3.0, -2.0, 1.0),
+            sprite: (sheet: "assets/art/tiles.json", tag: "player", alternates: ["corpse"]),
+            props: [("hp", 10), ("attack", 1)]),
+        // Zombies: root nodes named zombie or zombie_*, acting in this order
+        (name: "zombie", position: (7.0, -2.0, 0.5),
+            sprite: (sheet: "assets/art/tiles.json", tag: "zombie", alternates: ["corpse"]),
+            props: [("hp", 3), ("attack", 1), ("speed", 67)]),
+        // inside the corner of the L-shaped wall
+        (name: "zombie_2", position: (12.0, -7.0, 0.5),
+            sprite: (sheet: "assets/art/tiles.json", tag: "zombie", alternates: ["corpse"]),
+            props: [("hp", 3), ("attack", 1), ("speed", 67)]),
+        // Decoration: a knight playing idle, which rogue ignores.
+        (name: "knight", position: (10.0, -5.0, 0.5), model: "assets/models/humanoid.glb",
+            animation: (clips: [("idle", "assets/anims/humanoid/idle.ron"), ("walk", "assets/anims/humanoid/walk.ron")],
+                play: "idle")),
+    ],
+)

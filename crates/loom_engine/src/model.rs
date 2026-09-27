@@ -10,6 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use glam::{Mat3, Mat4, Quat, Vec3};
+use loom_core::debug::DebugDraw;
 use loom_render::{JointRange, MeshId, RenderError, Renderer, SkinnedVertex, Vertex};
 use loom_scene::Scene;
 use serde::Serialize;
@@ -59,6 +60,8 @@ pub(crate) struct Skeleton {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Joint {
     pub name: Option<String>,
+    /// The joint's glTF node index.
+    pub node: usize,
     /// The parent joint's index, which is lower; `None` when the parent
     /// node is not a joint of the skin (or there is none).
     pub parent: Option<usize>,
@@ -223,7 +226,10 @@ fn material_label(m: &gltf::Material<'_>) -> String {
 
 /// The bytes of `buffer`: only the `.glb`'s own binary chunk (checked
 /// before any is read).
-fn buffer_data<'a>(buffer: gltf::Buffer<'_>, blob: Option<&'a [u8]>) -> Option<&'a [u8]> {
+pub(crate) fn buffer_data<'a>(
+    buffer: gltf::Buffer<'_>,
+    blob: Option<&'a [u8]>,
+) -> Option<&'a [u8]> {
     match buffer.source() {
         gltf::buffer::Source::Bin => blob,
         gltf::buffer::Source::Uri(_) => None,
@@ -439,6 +445,7 @@ fn skinned(
         };
         joints.push(Joint {
             name: node.name().map(str::to_owned),
+            node: node.index(),
             parent,
             outer,
             translation: Vec3::from_array(translation),
@@ -587,16 +594,19 @@ impl Models {
         Ok(Self { models, clips })
     }
 
-    /// What to draw for `model`, a model [`Models::load`] read: its mesh,
-    /// uploaded on first use; for an animated model, its skinned mesh and
-    /// the range of its joint matrices at `tick`, which are appended to
-    /// `joints`.
+    /// What to draw for `model`, a model [`Models::load`] read, placed by
+    /// `world`: its mesh, uploaded on first use; for an animated model, its
+    /// skinned mesh and the range of its joint matrices at `tick`, which
+    /// are appended to `joints`, and with `skeleton` its bones in that same
+    /// pose.
     pub fn draw(
         &mut self,
         renderer: &mut Renderer,
         model: &loom_scene::Model,
+        world: Mat4,
         tick: u64,
         joints: &mut Vec<Mat4>,
+        skeleton: Option<&mut DebugDraw>,
     ) -> Result<(MeshId, Option<JointRange>), RenderError> {
         let loaded = self
             .models
@@ -622,10 +632,12 @@ impl Models {
                 id
             }
         };
-        let clip = self.clips.playing(animation);
-        let t = tick.saturating_sub(animation.start);
+        let pose = self.clips.pose(&skinned.skeleton, animation, tick);
+        if let Some(draw) = skeleton {
+            anim::draw_skeleton(&skinned.skeleton, &pose, world, draw);
+        }
         let first = u32::try_from(joints.len()).expect("far fewer than 2^32 joints");
-        joints.extend(anim::pose(&skinned.skeleton, clip, t));
+        joints.extend(anim::joint_matrices(&skinned.skeleton, &pose));
         let count = u32::try_from(skinned.skeleton.joints.len()).expect("a skin's joints fit u16");
         Ok((id, Some(JointRange { first, count })))
     }

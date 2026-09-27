@@ -399,8 +399,9 @@ impl Sim {
     /// Draws the current state with `renderer`, which must be the only
     /// renderer this `Sim` ever draws with (it owns the sheets' textures),
     /// with the game's HUD over it when `hud` and the debug draw of
-    /// `categories` (the game's names) on top. Returns `false` if the frame
-    /// was skipped (zero render size).
+    /// `categories` (of [`AnyGame::debug_categories`], so maybe the
+    /// engine's `skeleton`) on top. Returns `false` if the frame was
+    /// skipped (zero render size).
     pub fn render(
         &mut self,
         renderer: &mut Renderer,
@@ -423,6 +424,7 @@ impl Sim {
             &lines,
             hud,
             game.clock().tick(),
+            categories.contains(&debug::SKELETON),
         )
     }
 

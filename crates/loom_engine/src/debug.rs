@@ -5,6 +5,15 @@
 use loom_core::debug::DebugLine;
 use loom_render::LineDraw;
 
+/// The engine's debug draw category: the bones of the animated models
+/// (`docs/architecture.md` section 19), after every game's own.
+pub(crate) const SKELETON: &str = "skeleton";
+
+/// The categories of a run: `game`'s, then [`SKELETON`].
+pub(crate) fn with_skeleton(game: &[&'static str]) -> Vec<&'static str> {
+    game.iter().copied().chain([SKELETON]).collect()
+}
+
 /// A bad `--debug-draw` value or serve `debug_draw` list: an argument
 /// error (exit code 2), whose message is the whole report.
 #[derive(Debug)]

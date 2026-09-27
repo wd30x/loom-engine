@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use glam::{Quat, Vec3};
 use loom_core::input::{ActionMap, ActionSet, ActionState};
-use loom_scene::Transform;
+use loom_scene::{Animation, NodeId, Scene};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -27,8 +28,9 @@ pub(crate) struct StateDump<G = AnyGameState> {
     pub actions: ActionSet,
     /// Every mapped axis with its value in the last tick, sorted by name.
     pub axes: BTreeMap<String, f32>,
-    /// Local transform of every scene node, keyed by path (sorted).
-    pub nodes: BTreeMap<String, Transform>,
+    /// Every scene node's local transform, and its animation if it has
+    /// one, keyed by path (sorted).
+    pub nodes: BTreeMap<String, NodeState>,
     /// The game's own state.
     pub game: G,
 }
@@ -43,7 +45,7 @@ impl StateDump {
             nodes: game
                 .scene()
                 .ids()
-                .map(|id| (game.scene().path(id), *game.scene().transform(id)))
+                .map(|id| (game.scene().path(id), NodeState::of(game.scene(), id)))
                 .collect(),
             game: game.state(),
         }
@@ -55,6 +57,76 @@ impl StateDump {
             serde_json::to_string_pretty(self).expect("state types contain only plain data");
         json.push('\n');
         json
+    }
+}
+
+/// One node in a state dump: its local transform (relative to the parent)
+/// and, for an animated model, what plays (`docs/architecture.md` section
+/// 19): the clip names and ticks, not the bones' pose.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NodeState {
+    /// `[x, y, z]`, in meters.
+    #[schemars(with = "[f32; 3]")]
+    pub position: Vec3,
+    /// A unit quaternion `[x, y, z, w]`.
+    #[schemars(with = "[f32; 4]")]
+    pub rotation: Quat,
+    /// `[x, y, z]`.
+    #[schemars(with = "[f32; 3]")]
+    pub scale: Vec3,
+    /// Only on a node with an `animation`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animation: Option<AnimationState>,
+}
+
+impl NodeState {
+    fn of(scene: &Scene, id: NodeId) -> Self {
+        let t = scene.transform(id);
+        Self {
+            position: t.position,
+            rotation: t.rotation,
+            scale: t.scale,
+            animation: scene
+                .node(id)
+                .model
+                .as_ref()
+                .and_then(|m| m.animation.as_ref())
+                .map(AnimationState::of),
+        }
+    }
+}
+
+/// What an animated model plays.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct AnimationState {
+    /// The clip playing.
+    pub clip: String,
+    /// The tick it started at.
+    pub start: u64,
+    /// The clip blended from, `null` until the first switch.
+    pub from: Option<ClipStart>,
+    /// Ticks the blend from `from` takes; 0 switches at once.
+    pub blend: u64,
+}
+
+/// A clip and the tick it started at.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct ClipStart {
+    pub clip: String,
+    pub start: u64,
+}
+
+impl AnimationState {
+    fn of(a: &Animation) -> Self {
+        Self {
+            clip: a.playing.clone(),
+            start: a.start,
+            from: a.from.as_ref().map(|(clip, start)| ClipStart {
+                clip: clip.clone(),
+                start: *start,
+            }),
+            blend: a.blend,
+        }
     }
 }
 

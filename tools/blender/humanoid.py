@@ -202,9 +202,8 @@ def build_body():
 # ---------------------------------------------------------------- scene
 
 
-def main():
-    out = sys.argv[sys.argv.index('--') + 1]
-
+def build():
+    """Builds the knight in an empty scene; returns the armature object."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
     materials = []
@@ -246,7 +245,19 @@ def main():
 
     tris = sum(len(p.vertices) - 2 for p in mesh.polygons)
     print(f'humanoid: {len(mesh.vertices)} vertices, {tris} triangles')
+    return rig
 
+
+def export(out, animations=False):
+    """Exports the scene to the .glb `out`; with `animations`, every action
+    too (tools/blender/humanoid_wave.py), sampled at every frame."""
+    extra = {}
+    if animations:
+        extra = dict(
+            export_animation_mode='ACTIONS',
+            export_force_sampling=True,
+            export_anim_single_armature=True,
+        )
     bpy.ops.export_scene.gltf(
         filepath=out,
         export_format='GLB',
@@ -261,13 +272,22 @@ def main():
         export_cameras=False,
         export_lights=False,
         export_extras=False,
-        export_animations=False,
+        export_animations=animations,
         export_skins=True,
         export_morph=False,
         export_def_bones=False,
         export_leaf_bone=False,
         export_rest_position_armature=True,
+        **extra,
     )
 
 
-main()
+def main():
+    out = sys.argv[sys.argv.index('--') + 1]
+    build()
+    export(out)
+
+
+# tools/blender/humanoid_wave.py imports this file.
+if __name__ == '__main__':
+    main()

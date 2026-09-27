@@ -5,6 +5,7 @@
 //! stderr.
 
 mod anim;
+mod clip_import;
 mod debug;
 mod games;
 mod model;
@@ -53,6 +54,9 @@ enum Command {
     /// Check a glTF binary model (.glb) by the import rules and describe
     /// it: size, materials, skins and animations.
     Model(ModelArgs),
+    /// Convert one animation of a glTF binary model (.glb) into a loom
+    /// clip file (RON), sampled at every tick.
+    Clip(ClipArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -125,6 +129,10 @@ pub(crate) struct ViewArgs {
     /// left to right in one image, animated models posed at that tick.
     #[arg(long, value_name = "T,T,...", default_value = "0", value_parser = parse_ticks)]
     ticks: Ticks,
+    /// Draw debug wireframes over every frame. Without a game the only
+    /// category is "skeleton", the bones of the animated models.
+    #[arg(long, value_name = "CATEGORIES", num_args = 0..=1, require_equals = true)]
+    debug_draw: Option<Option<String>>,
 }
 
 /// `--ticks`: 1 to [`MAX_TICKS`] ticks, in the order given.
@@ -155,6 +163,22 @@ pub(crate) struct ModelArgs {
     /// The .glb file.
     #[arg(value_name = "PATH")]
     path: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ClipArgs {
+    /// The .glb file.
+    #[arg(value_name = "PATH")]
+    path: PathBuf,
+    /// The name of the animation to convert.
+    #[arg(long, value_name = "NAME")]
+    animation: String,
+    /// Where to write the clip. Parent directories are created.
+    #[arg(long, value_name = "PATH")]
+    out: PathBuf,
+    /// Mark the clip as looping.
+    #[arg(long)]
+    looping: bool,
 }
 
 /// Render size in physical pixels, both sides non-zero.
@@ -211,6 +235,10 @@ fn main() -> ExitCode {
             Ok(())
         }
         Command::Model(args) => model::describe(&args.path).map(|r| report::emit(&r)),
+        Command::Clip(args) => {
+            clip_import::convert(&args.path, &args.animation, &args.out, args.looping)
+                .map(|r| report::emit(&r))
+        }
         // Replies are written as they go; only a startup error is reported below.
         Command::Serve(args) => serve::serve(&args),
     };

@@ -5,15 +5,16 @@
 use std::path::PathBuf;
 
 use glam::{Mat4, Quat, Vec3};
+use loom_core::debug::DebugDraw;
 use loom_render::SkinnedVertex;
 use serde_json::{Value, json};
 
 use super::*;
 use crate::model::tests::glb;
-use crate::model::{Imported, Models, Skinned, import, load_file};
+use crate::model::{Imported, Models, Skeleton, Skinned, import, load_file};
 
 /// Bone b's bind pose: 1 up from a (at the origin), turned 45° about Z.
-fn b_bind() -> Mat4 {
+pub(crate) fn b_bind() -> Mat4 {
     Mat4::from_rotation_translation(Quat::from_rotation_z(45f32.to_radians()), Vec3::Y)
 }
 
@@ -23,7 +24,7 @@ fn b_bind() -> Mat4 {
 /// indices 176, inverse bind matrices (b, a) 188, joints with an index 5
 /// on vertex 0 at 316, weights summing to 0 on vertex 0 at 332, weights
 /// (3, 1) on vertex 0 and 2 on the rest at 396; 460 in all.
-fn two_bone_bin() -> Vec<u8> {
+pub(crate) fn two_bone_bin() -> Vec<u8> {
     let mut bin: Vec<u8> = Vec::new();
     let floats =
         |bin: &mut Vec<u8>, fs: &[f32]| bin.extend(fs.iter().flat_map(|f| f.to_le_bytes()));
@@ -50,7 +51,7 @@ fn two_bone_bin() -> Vec<u8> {
 
 /// The glTF of [`two_bone_bin`]: root node `rig` with joints `a` → `b`
 /// and the skinned mesh node `body`.
-fn two_bone_gltf() -> Value {
+pub(crate) fn two_bone_gltf() -> Value {
     let (_, r, t) = b_bind().to_scale_rotation_translation();
     json!({
         "asset": {"version": "2.0"},
@@ -125,9 +126,21 @@ fn skin(v: &SkinnedVertex, m: &[Mat4]) -> Vec3 {
         .sum()
 }
 
+/// The model-space pose of `skeleton` by `clip` alone, `t` ticks in.
+fn pose_by(skeleton: &Skeleton, clip: &Clip, t: u64) -> Vec<Mat4> {
+    pose(skeleton, |bone| {
+        clip.sample(bone, t).unwrap_or((Quat::IDENTITY, Vec3::ZERO))
+    })
+}
+
+/// The joint matrices of `skeleton` posed by `clip` at tick `t`.
+fn matrices(skeleton: &Skeleton, clip: &Clip, t: u64) -> Vec<Mat4> {
+    joint_matrices(skeleton, &pose_by(skeleton, clip, t))
+}
+
 /// The skinned positions of `skinned` posed by `clip` at tick `t`.
 fn posed(skinned: &Skinned, clip: &Clip, t: u64) -> Vec<Vec3> {
-    let m = pose(&skinned.skeleton, clip, t);
+    let m = matrices(&skinned.skeleton, clip, t);
     skinned.vertices.iter().map(|v| skin(v, &m)).collect()
 }
 
@@ -155,7 +168,7 @@ fn empty_clip_gives_identity_joint_matrices_and_the_static_mesh() {
     let imported = import_two_bone(&two_bone_gltf());
     let skinned = imported.skinned.expect("the model can be skinned");
     let empty = clip("(length: 1, looping: true, bones: {})");
-    for m in pose(&skinned.skeleton, &empty, 0) {
+    for m in matrices(&skinned.skeleton, &empty, 0) {
         assert!(m.abs_diff_eq(Mat4::IDENTITY, 1e-5), "{m}");
     }
     let statics: Vec<Vec3> = imported
@@ -212,6 +225,39 @@ fn translation_offset_of_a_turned_bone_moves_along_the_model_axes() {
         Vec3::new(1.5, 2.0, 0.0),
     ];
     assert_near(&posed(&s, &c, 0), &want);
+}
+
+#[test]
+fn skeleton_draw_is_a_cross_at_each_joint_and_a_segment_to_its_parent() {
+    let s = skinned_of(&two_bone_gltf());
+    // a moved 1 up (b with it), the model 2 along X.
+    let c = clip(
+        r#"(length: 10, looping: false, bones: {"a": (translation: [(0, (0.0, 1.0, 0.0))])})"#,
+    );
+    let mut draw = DebugDraw::new();
+    let world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+    draw_skeleton(&s.skeleton, &pose_by(&s.skeleton, &c, 0), world, &mut draw);
+    let lines: Vec<(Vec3, Vec3)> = draw.lines().iter().map(|l| (l.a, l.b)).collect();
+    let (a, b) = (Vec3::new(2.0, 1.0, 0.0), Vec3::new(2.0, 2.0, 0.0));
+    let cross =
+        |p: Vec3| [Vec3::X, Vec3::Y, Vec3::Z].map(|axis| (p - axis * 0.015, p + axis * 0.015));
+    let want: Vec<(Vec3, Vec3)> = cross(a)
+        .into_iter()
+        .chain(cross(b))
+        .chain([(a, b)])
+        .collect();
+    assert_eq!(lines.len(), want.len());
+    for (got, want) in lines.iter().zip(&want) {
+        assert!(
+            got.0.abs_diff_eq(want.0, 1e-5) && got.1.abs_diff_eq(want.1, 1e-5),
+            "{got:?} != {want:?}"
+        );
+    }
+    assert!(
+        draw.lines()
+            .iter()
+            .all(|l| l.color == Vec3::new(1.0, 0.8, 0.0))
+    );
 }
 
 #[test]
@@ -367,7 +413,7 @@ fn animated_node_errors_name_the_node_the_clip_and_the_file() {
     let (model, plain) = (forward(&model), forward(&plain));
     let clips = |path: &std::path::Path| {
         format!(
-            r#"(clips: {{"idle": {:?}, "wave": {:?}}}, play: "idle")"#,
+            r#"(clips: [("idle", {:?}), ("wave", {:?})], play: "idle")"#,
             forward(&good),
             forward(path)
         )

@@ -3088,6 +3088,7 @@ E7.2 用户决定（2026-09-28）：
 **运行时状态**（`loom_scene::Animation`，模拟状态的一部分）：
 - `playing`：正在播的片段名；`start`：它的开始 tick；
 - `from`：过渡的来源 `Option<(片段名, 开始 tick)>`；`blend`：过渡的 tick 数。
+- 算偏移的纯函数是 `Animation::offsets(clip, bone, τ)`（`clip` 是「片段名 → `&Clip`」），`loom_engine::anim` 用它算 `pose`，关节矩阵和骨骼线共用同一份姿势。
 - 场景刚加载时：`playing` 是 `play`，`start` 0，`from` 无，`blend` 0。
 
 **游戏的接口**：`Scene::play_clip(id, clip, start, blend) -> Result<(), AnimationError>`。
@@ -3111,12 +3112,14 @@ E7.2 用户决定（2026-09-28）：
 ```
 
 - 只有片段名和 tick（用户决定），不导出骨骼姿势；姿势看胶片图和调试绘制。`from` 为空时是 `null`。
+- `nodes` 的每项是显式的 `NodeState` 结构（`position`、`rotation`、`scale`，再加可选的 `animation`），没有 `animation` 的节点字节和以前完全相同。
 - 轨迹、serve 的 `state` 是同一份内容，跟着变。schema 的 `state_dump` 跟着变。
 
 **调试绘制 `skeleton`**：
 - 类别列表是「游戏的类别，再加上 `skeleton`」，`skeleton` 永远在最后。所以 souls 是 `"hurtboxes", "swings", "colliders", "lock" and "skeleton"`，rogue 从 `none` 变成 `"skeleton"`；`--debug-draw` 不带值时全开，也包括 `skeleton`。
 - 画什么：每个有 `animation` 的节点，按当前 tick 的姿势（和画面同一个姿势），每个关节画一个 `cross`（0.03 m），每个有父关节的关节画一条到父关节的线段，世界坐标，颜色 `(1.0, 0.8, 0.0)`。
 - 由引擎画（引擎有骨骼和片段，游戏没有），画在游戏的调试线段之后。和其他类别一样不改变模拟。
+- 实现（E7.3）：`AnyGame::debug_categories` 一处加上 `skeleton`，`--debug-draw`、serve 的 `screenshot`、F3、`run` 报告都走它；传给游戏的类别先去掉 `skeleton`。`loom view` 的 `--debug-draw` 和 `run` 一样要写成 `--debug-draw=skeleton`。
 - `loom view` 加 `--debug-draw`：规则和 `loom run` 相同，没有游戏，所以只有 `skeleton` 一个类别（报错时写 `view has "skeleton"`）。和 `--ticks` 一起用时，每一帧都画。
 
 ### glTF 动画转片段 `loom clip`（E7.3 起）
@@ -3131,4 +3134,10 @@ E7.2 用户决定（2026-09-28）：
 - 文件开头写一行注释：从哪个文件的哪个动画转出来。格式照 ron 的 pretty 输出，`
 ` 换行（第 5 节）。
 - 报告：`{"status":"ok","path":<glb>,"animation":<名字>,"out":<ron>,"length":…,"bones":…,"keyframes":…}`。动画名不存在时报错，并列出有哪些动画。
-- **保证**：转出来的片段用 loom 播放，每个 tick 每个关节的模型空间位置和 glTF 原动画相比，误差在精简的精度内（有测试）。
+- **保证**：转出来的片段用 loom 播放，每个 tick 每个关节的模型空间位置和 glTF 原动画相比，误差在精简的精度内（有测试；E7.3 往返测试旋转最大差 0.069°）。
+- 实现（E7.3）：
+  - 写出用 `ClipFile::to_ron`（和场景规范格式同一套 ron 配置，一个关键帧一行）；数值先舍入到 2 位、4 位小数，再按 f32 最短表示写出（`12.30` 写成 `12.3`）。精简时用 `euler_degrees` 把舍入后的欧拉角还原成四元数，和播放时算的完全一样。
+  - `length = max(1, ceil(秒数 × 60 − 0.001))`，减 0.001 是为了不让 `2.0000002` 秒这类浮点噪声多出一个 tick。
+  - 多出的报错：被动画的关节没有名字；通道驱动变形目标权重；关键帧的时间和值个数对不上。报错都带 `model <路径>:` 前缀，和 `loom model` 一样。
+- **Blender 的 LINEAR 是按四元数分量线性插值（nlerp）**，不是 loom 的球面插值，而且导出器按每帧采样。所以 Blender 里一段大角度转动转成片段后，关键帧会比 Blender 里多（wave 的右臂从 4 个变成 18 个），播放结果仍在精度内，只是文件长一些。想让片段短，就在 Blender 里把大角度转动拆成几段。
+- **Blender 测试动画**：`tools/blender/humanoid_wave.py` 用 `humanoid.py` 的 `build()`、`export()` 建模型，加 2 秒的 `wave`，只输出到 `out/`，不进仓库；`--render <目录> <帧>` 用 Workbench 渲染，用来和 loom 的胶片图比姿势。Workbench 用的是视口颜色，所以比不了颜色（E7.3 审查时决定暂不处理）。

@@ -20,7 +20,8 @@ fn debug_draw_report_is_null_every_category_or_the_ones_given_in_game_order() {
                 "colliders",
                 "lock",
                 "bonfires",
-                "bloodstain"
+                "bloodstain",
+                "skeleton"
             ]),
         ),
         (
@@ -42,11 +43,11 @@ fn unknown_or_repeated_debug_draw_category_is_an_argument_error() {
     for (flag, message) in [
         (
             "--debug-draw=lock,hitboxes",
-            r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders", "lock", "bonfires" and "bloodstain""#,
+            r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders", "lock", "bonfires", "bloodstain" and "skeleton""#,
         ),
         (
             "--debug-draw=",
-            r#"unknown debug draw category "": souls has "hurtboxes", "swings", "colliders", "lock", "bonfires" and "bloodstain""#,
+            r#"unknown debug draw category "": souls has "hurtboxes", "swings", "colliders", "lock", "bonfires", "bloodstain" and "skeleton""#,
         ),
         (
             "--debug-draw=swings,swings",
@@ -65,7 +66,7 @@ fn unknown_or_repeated_debug_draw_category_is_an_argument_error() {
 }
 
 #[test]
-fn rogue_takes_debug_draw_without_a_value_and_rejects_any_category() {
+fn rogue_takes_debug_draw_of_the_skeleton_alone_and_rejects_any_other_category() {
     let run = |flag: &str| {
         run_loom_in(
             &repo_root(),
@@ -80,16 +81,18 @@ fn rogue_takes_debug_draw_without_a_value_and_rejects_any_category() {
             ],
         )
     };
-    let out = run("--debug-draw");
-    let r = report(&out);
-    assert_eq!(out.code, 0, "{r}");
-    assert_eq!(r["debug_draw"], serde_json::json!([]));
+    for flag in ["--debug-draw", "--debug-draw=skeleton"] {
+        let out = run(flag);
+        let r = report(&out);
+        assert_eq!(out.code, 0, "{r}");
+        assert_eq!(r["debug_draw"], serde_json::json!(["skeleton"]), "{flag}");
+    }
     let out = run("--debug-draw=lock");
     let r = report(&out);
     assert_eq!(out.code, 2, "{r}");
     assert_eq!(
         r["error"],
-        r#"unknown debug draw category "lock": rogue has none"#
+        r#"unknown debug draw category "lock": rogue has "skeleton""#
     );
 }
 

@@ -3,11 +3,14 @@
 //! is the one crate that knows them all, and adding a game makes the
 //! compiler point at every `match` to extend.
 
+use std::sync::LazyLock;
+
 use anyhow::{Result, bail};
 use loom_core::SimClock;
 use loom_core::debug::DebugDraw;
 use loom_core::hud::{Hud, HudView};
 
+use crate::debug;
 use crate::sheet::HudSheets;
 use loom_core::input::{ActionMap, ActionState};
 use loom_scene::Scene;
@@ -122,20 +125,35 @@ impl AnyGame {
         }
     }
 
-    /// The game's debug draw categories, in its order.
+    /// The debug draw categories of a run of this game: the game's, in its
+    /// order, then the engine's `skeleton` (`docs/architecture.md` section
+    /// 19).
     pub fn debug_categories(&self) -> &'static [&'static str] {
+        static SOULS: LazyLock<Vec<&'static str>> =
+            LazyLock::new(|| debug::with_skeleton(souls::Game::debug_categories()));
+        static ROGUE: LazyLock<Vec<&'static str>> =
+            LazyLock::new(|| debug::with_skeleton(rogue::Game::debug_categories()));
         match self {
-            Self::Souls(_) => souls::Game::debug_categories(),
-            Self::Rogue(_) => rogue::Game::debug_categories(),
+            Self::Souls(_) => &SOULS,
+            Self::Rogue(_) => &ROGUE,
         }
     }
 
-    /// Draws the `categories` given (the game's names) for the current
-    /// state. Changes nothing.
+    /// Draws the game's categories among `categories` (of
+    /// [`AnyGame::debug_categories`]) for the current state; the engine
+    /// draws `skeleton`. Changes nothing.
     pub fn debug_draw(&self, categories: &[&str], draw: &mut DebugDraw) {
+        let own: Vec<&str> = categories
+            .iter()
+            .copied()
+            .filter(|&c| c != debug::SKELETON)
+            .collect();
+        if own.is_empty() {
+            return;
+        }
         match self {
-            Self::Souls(game) => game.debug_draw(categories, draw),
-            Self::Rogue(game) => game.debug_draw(categories, draw),
+            Self::Souls(game) => game.debug_draw(&own, draw),
+            Self::Rogue(game) => game.debug_draw(&own, draw),
         }
     }
 

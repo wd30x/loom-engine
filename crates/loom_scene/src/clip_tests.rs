@@ -189,3 +189,42 @@ fn clip_files_deny_unknown_fields() {
     let e = error("(length: 10, bones: {})");
     assert!(e.contains("looping"), "{e}");
 }
+
+#[test]
+fn clip_file_writes_back_as_one_keyframe_a_line() {
+    let src = r#"(length: 30, looping: true, bones: {
+        "hips": (translation: [(0, (0.0, -0.05, 0.0)), (30, (0.0, 0.0, 0.0))]),
+        "chest": (rotation: [(0, (12.34, 0.0, -5.5))]),
+    })"#;
+    let file: ClipFile = options().from_str(src).unwrap();
+    let ron = file.to_ron();
+    assert_eq!(
+        ron,
+        concat!(
+            "(
+    length: 30,
+    looping: true,
+    bones: {
+",
+            "        \"chest\": (
+            rotation: [
+",
+            "                (0, (12.34, 0.0, -5.5)),
+            ],
+        ),
+",
+            "        \"hips\": (
+            translation: [
+",
+            "                (0, (0.0, -0.05, 0.0)),
+                (30, (0.0, 0.0, 0.0)),
+",
+            "            ],
+        ),
+    },
+)
+",
+        )
+    );
+    assert_eq!(Clip::parse(&ron).unwrap(), Clip::parse(src).unwrap());
+}

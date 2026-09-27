@@ -1168,7 +1168,7 @@ fn model_color_defaults_to_white_and_tints_like_a_mesh_color() {
 #[test]
 fn animation_is_read_with_its_clips_and_the_playing_one_from_tick_0() {
     let scene = Scene::parse(&scene_with(
-        r#"(name: "k", model: "k.glb", animation: (clips: {"walk": "w.ron", "idle": "i.ron"}, play: "walk")),"#,
+        r#"(name: "k", model: "k.glb", animation: (clips: [("walk", "w.ron"), ("idle", "i.ron")], play: "walk")),"#,
     ))
     .unwrap();
     let k = scene.find("k").unwrap();
@@ -1176,11 +1176,13 @@ fn animation_is_read_with_its_clips_and_the_playing_one_from_tick_0() {
     assert_eq!(
         animation,
         Some(Animation {
-            clips: [("idle", "i.ron"), ("walk", "w.ron")]
+            clips: [("walk", "w.ron"), ("idle", "i.ron")]
                 .map(|(n, p)| (n.to_owned(), p.to_owned()))
                 .into(),
             playing: "walk".to_owned(),
             start: 0,
+            from: None,
+            blend: 0,
         })
     );
     let plain = Scene::parse(&scene_with(r#"(name: "k", model: "k.glb"),"#)).unwrap();
@@ -1192,28 +1194,32 @@ fn animation_is_read_with_its_clips_and_the_playing_one_from_tick_0() {
 fn animation_rules_are_scene_errors_naming_the_node() {
     let cases = [
         (
-            r#"(name: "k", mesh: Cube, animation: (clips: {"idle": "i.ron"}, play: "idle")),"#,
+            r#"(name: "k", mesh: Cube, animation: (clips: [("idle", "i.ron")], play: "idle")),"#,
             "animation needs a model on the same node",
         ),
         (
-            r#"(name: "k", animation: (clips: {"idle": "i.ron"}, play: "idle")),"#,
+            r#"(name: "k", animation: (clips: [("idle", "i.ron")], play: "idle")),"#,
             "animation needs a model on the same node",
         ),
         (
-            r#"(name: "k", model: "k.glb", animation: (clips: {}, play: "idle")),"#,
+            r#"(name: "k", model: "k.glb", animation: (clips: [], play: "idle")),"#,
             "animation clips must not be empty",
         ),
         (
-            r#"(name: "k", model: "k.glb", animation: (clips: {"": "i.ron"}, play: "")),"#,
+            r#"(name: "k", model: "k.glb", animation: (clips: [("", "i.ron")], play: "")),"#,
             "animation clip name must not be empty",
         ),
         (
-            r#"(name: "k", model: "k.glb", animation: (clips: {"idle": ""}, play: "idle")),"#,
+            r#"(name: "k", model: "k.glb", animation: (clips: [("idle", "")], play: "idle")),"#,
             "animation clip path must not be empty",
         ),
         (
-            r#"(name: "k", model: "k.glb", animation: (clips: {"idle": "i.ron"}, play: "walk")),"#,
+            r#"(name: "k", model: "k.glb", animation: (clips: [("idle", "i.ron")], play: "walk")),"#,
             "animation play \"walk\" is not one of its clips",
+        ),
+        (
+            r#"(name: "k", model: "k.glb", animation: (clips: [("idle", "i.ron"), ("idle", "j.ron")], play: "idle")),"#,
+            "animation clip \"idle\" is given twice",
         ),
     ];
     for (node, problem) in cases {
