@@ -134,12 +134,14 @@ fn bars(trail: f32, hp: f32, stamina: f32) -> Vec<HudItem> {
     items
 }
 
+/// A text as souls draws every one: scale 2 with a shadow.
 fn text(x: f32, y: f32, color: Vec4, text: &str) -> HudItem {
     HudItem::Text {
         at: Vec2::new(x, y),
         scale: 2.0,
         color,
         text: text.to_owned(),
+        shadow: Some(Vec4::new(0.0, 0.0, 0.0, 0.75)),
     }
 }
 
@@ -638,4 +640,21 @@ fn boss_display_name_the_font_cannot_draw_is_rejected_with_its_character() {
     assert!(Game::from_source(&scene("", &guard)).is_ok());
     let edges = named_enemy("b", Some(" ~"), 0.0, -3.0, true);
     assert!(Game::from_source(&scene("", &edges)).is_ok());
+}
+
+#[test]
+fn every_text_has_the_text_shadow() {
+    let mut run = Run::new("", &named_enemy("b", Some("B"), 0.0, -3.0, true));
+    run.game.state.player.souls = 50;
+    let shadows: Vec<Option<Vec4>> = run
+        .hud(&view())
+        .iter()
+        .filter_map(|item| match item {
+            HudItem::Text { shadow, .. } => Some(*shadow),
+            _ => None,
+        })
+        .collect();
+    // The boss name, the flask count, the souls count.
+    assert_eq!(shadows, [Some(TEXT_SHADOW); 3]);
+    assert_eq!(TEXT_SHADOW, Vec4::new(0.0, 0.0, 0.0, 0.75));
 }

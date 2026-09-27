@@ -54,6 +54,9 @@ pub(super) const SOUL_ICON_GAP: f32 = 8.0;
 /// A boss's name, this far above its bar's top.
 pub(super) const BOSS_NAME_ABOVE: f32 = 20.0;
 pub(super) const BOSS_NAME_COLOR: Vec4 = Vec4::new(0.9, 0.88, 0.8, 1.0);
+/// Under every text (the counts and the boss names), so it reads over the
+/// pale floor.
+pub(super) const TEXT_SHADOW: Vec4 = Vec4::new(0.0, 0.0, 0.0, 0.75);
 
 /// Adds the layers of a bar at `at`, `height` high: each `(length, color)`
 /// in order, from the left end, skipping those of length 0.
@@ -126,7 +129,8 @@ impl Game {
                 );
                 if let Some(name) = &self.scene.node(e.id).display_name {
                     let at = Vec2::new(x, y - BOSS_NAME_ABOVE);
-                    hud.text(at, HUD_SCALE, BOSS_NAME_COLOR, name.as_str());
+                    hud.text(at, HUD_SCALE, BOSS_NAME_COLOR, name.as_str())
+                        .shadow(TEXT_SHADOW);
                 }
                 y -= BOSS_BAR_STEP;
             }
@@ -143,7 +147,8 @@ impl Game {
             HUD_SCALE,
             COUNT_COLOR,
             player.flask.to_string(),
-        );
+        )
+        .shadow(TEXT_SHADOW);
 
         let souls = player.souls.to_string();
         let text_x = view.width - SOULS_RIGHT_MARGIN - text_width(&souls, HUD_SCALE);
@@ -154,7 +159,8 @@ impl Game {
             HUD_SCALE,
             COUNT_COLOR,
             souls,
-        );
+        )
+        .shadow(TEXT_SHADOW);
 
         if let Some(t) = self.lock {
             let point = self.target_position(t) + Vec3::new(0.0, self.targets[t].height, 0.0);

@@ -159,15 +159,12 @@ const GLYPH_A: [&str; 7] = [
     ".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#",
 ];
 
-#[test]
-#[ignore = "needs a GPU; scripts/smoke.ps1 runs it"]
-fn glyph_scaled_twice_lights_exactly_its_pixels_blocks() {
-    // A 12x8 sheet of two 6x8 cells, the font's layout: a solid white cell,
-    // then 'A' at the second cell's top left. Nothing of the first cell or
-    // of the second's blank column and row may show.
-    const WHITE: [u8; 4] = [255; 4];
-    const NONE: [u8; 4] = [0; 4];
-    let mut texels = vec![NONE; 12 * 8];
+const WHITE: [u8; 4] = [255; 4];
+
+/// A 12x8 sheet of two 6x8 cells, the font's layout: a solid white cell,
+/// then 'A' at the second cell's top left, at `[6, 0, 5, 7]`.
+fn glyph_a_sheet() -> Vec<[u8; 4]> {
+    let mut texels = vec![[0; 4]; 12 * 8];
     for y in 0..8 {
         for x in 0..6 {
             texels[y * 12 + x] = WHITE;
@@ -178,6 +175,23 @@ fn glyph_scaled_twice_lights_exactly_its_pixels_blocks() {
             }
         }
     }
+    texels
+}
+
+/// Whether pixel `(x, y)` is lit by 'A' scaled twice with its top-left
+/// corner at `(x0, y0)`.
+fn a_lights(x0: u32, y0: u32, x: u32, y: u32) -> bool {
+    (x0..x0 + 10).contains(&x)
+        && (y0..y0 + 14).contains(&y)
+        && GLYPH_A[(y - y0) as usize / 2].as_bytes()[(x - x0) as usize / 2] == b'#'
+}
+
+#[test]
+#[ignore = "needs a GPU; scripts/smoke.ps1 runs it"]
+fn glyph_scaled_twice_lights_exactly_its_pixels_blocks() {
+    // Nothing of the sheet's first cell or of the second's blank column
+    // and row may show.
+    let texels = glyph_a_sheet();
     let pixels = render_with(|r| {
         let texture = texture(r, 12, &texels);
         vec![HudDraw::Image {
@@ -190,13 +204,65 @@ fn glyph_scaled_twice_lights_exactly_its_pixels_blocks() {
     });
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
-            let lit = (10..20).contains(&x)
-                && (4..18).contains(&y)
-                && GLYPH_A[(y as usize - 4) / 2].as_bytes()[(x as usize - 10) / 2] == b'#';
-            let want = if lit { WHITE } else { clear() };
+            let want = if a_lights(10, 4, x, y) {
+                WHITE
+            } else {
+                clear()
+            };
             assert!(near(pixel(&pixels, x, y), want), "({x}, {y})");
         }
     }
+}
+
+#[test]
+#[ignore = "needs a GPU; scripts/smoke.ps1 runs it"]
+fn glyph_shadow_shows_only_where_the_glyph_does_not_cover_it() {
+    // What the engine draws for 'A' at scale 2 with a shadow: the shadow
+    // 2 pixels right and down, then the glyph.
+    let texels = glyph_a_sheet();
+    let body = Vec4::new(1.0, 0.8, 0.2, 1.0);
+    let pixels = render_with(|r| {
+        let texture = texture(r, 12, &texels);
+        let glyph = |at: Vec2, color| HudDraw::Image {
+            texture,
+            min: at,
+            size: Vec2::new(10.0, 14.0),
+            rect: [6, 0, 5, 7],
+            color,
+        };
+        vec![
+            glyph(Vec2::new(12.0, 6.0), Vec4::new(0.0, 0.0, 0.0, 0.75)),
+            glyph(Vec2::new(10.0, 4.0), body),
+        ]
+    });
+    let body = [srgb(1.0), srgb(0.8), srgb(0.2), 255];
+    // A quarter of the background shows through the shadow.
+    let shadow = [
+        srgb(0.25 * CLEAR_COLOR.r),
+        srgb(0.25 * CLEAR_COLOR.g),
+        srgb(0.25 * CLEAR_COLOR.b),
+        255,
+    ];
+    let (mut bodies, mut shadows) = (0, 0);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let want = if a_lights(10, 4, x, y) {
+                bodies += 1;
+                body
+            } else if a_lights(12, 6, x, y) {
+                shadows += 1;
+                shadow
+            } else {
+                clear()
+            };
+            let got = pixel(&pixels, x, y);
+            assert!(near(got, want), "({x}, {y}): {got:?}, want {want:?}");
+        }
+    }
+    // 'A' has 18 lit glyph pixels: 72 screen pixels; its shadow shows on
+    // some of its own 72.
+    assert_eq!(bodies, 72);
+    assert!(shadows > 0 && shadows < 72, "{shadows}");
 }
 
 #[test]

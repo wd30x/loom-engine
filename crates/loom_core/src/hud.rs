@@ -59,12 +59,15 @@ pub enum HudItem {
     },
     /// One line in the engine's font: `at` is the first character's cell's
     /// top-left corner, each character advances `6 × scale`, glyph pixels
-    /// are `color`. Characters the font lacks are drawn as `?`.
+    /// are `color`. Characters the font lacks are drawn as `?`. With a
+    /// `shadow`, every glyph is first drawn in that color `scale` units
+    /// right and down, then every glyph in `color` over the shadows.
     Text {
         at: Vec2,
         scale: f32,
         color: Vec4,
         text: String,
+        shadow: Option<Vec4>,
     },
     /// The first frame of `tag` in the sprite sheet `sheet` (which the
     /// game declares in its `hud_sheets()`), its top-left corner at `at`,
@@ -111,13 +114,26 @@ impl Hud {
         });
     }
 
-    pub fn text(&mut self, at: Vec2, scale: f32, color: Vec4, text: impl Into<String>) {
+    /// Adds a line of text without a shadow; call [`TextItem::shadow`] on
+    /// the result to give it one.
+    pub fn text(
+        &mut self,
+        at: Vec2,
+        scale: f32,
+        color: Vec4,
+        text: impl Into<String>,
+    ) -> TextItem<'_> {
         self.items.push(HudItem::Text {
             at,
             scale,
             color,
             text: text.into(),
+            shadow: None,
         });
+        let Some(HudItem::Text { shadow, .. }) = self.items.last_mut() else {
+            unreachable!("the text was just added");
+        };
+        TextItem { shadow }
     }
 
     pub fn image(
@@ -140,6 +156,20 @@ impl Hud {
     /// See [`text_width`].
     pub fn text_width(text: &str, scale: f32) -> f32 {
         text_width(text, scale)
+    }
+}
+
+/// The text [`Hud::text`] just added. Not `#[must_use]`: a text without a
+/// shadow needs nothing more.
+#[derive(Debug)]
+pub struct TextItem<'a> {
+    shadow: &'a mut Option<Vec4>,
+}
+
+impl TextItem<'_> {
+    /// Draws the text with a `color` shadow, one glyph pixel right and down.
+    pub fn shadow(self, color: Vec4) {
+        *self.shadow = Some(color);
     }
 }
 
@@ -284,6 +314,7 @@ mod tests {
                     scale: 2.0,
                     color: Vec4::ONE,
                     text: "Hi".to_owned(),
+                    shadow: None,
                 },
                 HudItem::Image {
                     sheet: "s.json",
@@ -293,6 +324,43 @@ mod tests {
                     color: Vec4::ONE,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn shadow_sets_only_the_text_just_added() {
+        let black = Vec4::new(0.0, 0.0, 0.0, 0.75);
+        let mut hud = Hud::new();
+        hud.text(Vec2::ZERO, 2.0, Vec4::ONE, "a");
+        hud.text(Vec2::ONE, 2.0, Vec4::ONE, "b").shadow(black);
+        hud.rect(Vec2::ZERO, Vec2::ONE, Vec4::ONE);
+        hud.text(Vec2::ONE, 2.0, Vec4::ONE, "c");
+        let shadows: Vec<Option<Vec4>> = hud
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                HudItem::Text { shadow, .. } => Some(*shadow),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shadows, [None, Some(black), None]);
+        assert_eq!(
+            hud.items()[1],
+            HudItem::Text {
+                at: Vec2::ONE,
+                scale: 2.0,
+                color: Vec4::ONE,
+                text: "b".to_owned(),
+                shadow: Some(black),
+            }
+        );
+        assert_eq!(
+            hud.items()[2],
+            HudItem::Rect {
+                min: Vec2::ZERO,
+                size: Vec2::ONE,
+                color: Vec4::ONE,
+            }
         );
     }
 }

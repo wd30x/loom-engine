@@ -121,22 +121,31 @@ fn hud_draws(
                 scale,
                 color,
                 text,
+                shadow,
             } => {
                 let Some(texture) = font else {
                     log::error!("HUD text {text:?} is not drawn: there is no font");
                     continue;
                 };
-                for (i, c) in text.chars().enumerate() {
-                    let [col, row] = glyph_cell(c);
-                    let x = at.x + (i as f32) * cell_w as f32 * scale;
-                    draws.push(HudDraw::Image {
-                        texture,
-                        min: Vec2::new(x, at.y) * px,
-                        // The glyph, without the blank column and row.
-                        size: Vec2::new((cell_w - 1) as f32, (cell_h - 1) as f32) * *scale * px,
-                        rect: [col * cell_w, row * cell_h, cell_w - 1, cell_h - 1],
-                        color: *color,
-                    });
+                // Every glyph's shadow, one glyph pixel right and down,
+                // then every glyph over them.
+                let layers = shadow
+                    .map(|shadow| (Vec2::splat(*scale), shadow))
+                    .into_iter()
+                    .chain([(Vec2::ZERO, *color)]);
+                for (offset, color) in layers {
+                    for (i, c) in text.chars().enumerate() {
+                        let [col, row] = glyph_cell(c);
+                        let x = at.x + (i as f32) * cell_w as f32 * scale;
+                        draws.push(HudDraw::Image {
+                            texture,
+                            min: (Vec2::new(x, at.y) + offset) * px,
+                            // The glyph, without the blank column and row.
+                            size: Vec2::new((cell_w - 1) as f32, (cell_h - 1) as f32) * *scale * px,
+                            rect: [col * cell_w, row * cell_h, cell_w - 1, cell_h - 1],
+                            color,
+                        });
+                    }
                 }
             }
             &HudItem::Image {
@@ -363,6 +372,7 @@ mod tests {
             scale: 2.0,
             color,
             text: "A1é".to_owned(),
+            shadow: None,
         }];
         // 'A' (65) is in column 1, row 2; '1' (49) in column 1, row 1; 'é'
         // is drawn as '?' (63): column 15, row 1. Each glyph is the 5x7 at
@@ -385,8 +395,37 @@ mod tests {
             scale: 2.0,
             color,
             text: String::new(),
+            shadow: Some(Vec4::ZERO),
         }];
         assert!(draws(&empty, 720).is_empty());
+    }
+
+    #[test]
+    fn shadowed_text_draws_every_shadow_first_one_glyph_pixel_down_right() {
+        let color = Vec4::new(0.9, 0.8, 0.7, 1.0);
+        let shadow = Vec4::new(0.0, 0.0, 0.0, 0.75);
+        let items = [HudItem::Text {
+            at: Vec2::new(80.0, 657.0),
+            scale: 2.0,
+            color,
+            text: "AB".to_owned(),
+            shadow: Some(shadow),
+        }];
+        // 'A' is in column 1, row 2; 'B' in column 2, row 2.
+        let (a, b) = ([6, 16, 5, 7], [12, 16, 5, 7]);
+        assert_eq!(
+            draws(&items, 720),
+            [
+                glyph(82.0, 659.0, 2.0, a, shadow),
+                glyph(94.0, 659.0, 2.0, b, shadow),
+                glyph(80.0, 657.0, 2.0, a, color),
+                glyph(92.0, 657.0, 2.0, b, color),
+            ]
+        );
+        // Twice the pixels at twice the height: 4 pixels off.
+        let big = draws(&items, 1440);
+        assert_eq!(big[0], glyph(164.0, 1318.0, 4.0, a, shadow));
+        assert_eq!(big[2], glyph(160.0, 1314.0, 4.0, a, color));
     }
 
     #[test]
@@ -442,6 +481,7 @@ mod tests {
                 scale: 2.0,
                 color: Vec4::ONE,
                 text: "0".to_owned(),
+                shadow: Some(Vec4::ZERO),
             },
             rect,
         ];
