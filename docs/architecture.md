@@ -1476,6 +1476,195 @@ player_hit(s):
   - 当前锁定的目标：再画一个大小 0.5 的黄 `(1.0, 0.9, 0.1)` `cross`，加一条从相机 pivot（角色位置加 `pivot_height`）到锁定点的黄线。
   - 角色脚下画 `lock_range` 的圆，蓝 `(0.3, 0.5, 1.0)`；锁定中再画 `lock_break_range` 的圆，暗蓝 `(0.2, 0.3, 0.6)`。
 
+### 敌人和 Boss（G4.1 起）
+
+用户决定（2026-09-27）：
+- **四种招式**：横扫、下劈、突进、连击。都复用「命中判定」的扇形，前摇有预警。
+- **按距离加权随机**：每招有适用的距离范围和权重，在能用的招里按权重随机选。随机数带种子，种子写在场景里，同样的输入永远同样的结果。
+- **移动**：离得远就走过来，始终以有限的速度转向玩家（绕到背后有机会）；每招之后有一段休息，是玩家还手的窗口；和角色一样用碰撞，不穿墙。
+- **单独的 Boss 场景** `assets/scenes/boss.ron`，内置演示场景不变。
+
+规划者决定：
+- 会自己行动的节点叫**敌人**（enemy）：带 prop `enemy_speed` 的根节点。Boss 就是一个敌人，只是招式参数调得大一些。G4.1 只有这一种敌人。
+- 敌人的受击、血量、锁定沿用已有的节点 props：它同时是受击判定、受伤方、锁定目标，`hp_bar`、`arm` 子节点的规则同前。敌人的受击圆柱也是它的碰撞圆柱。
+- 招式种类写死在 `souls` 里（`sweep`、`cleave`、`lunge`、`combo`），数值都是节点 props，有默认值。
+
+**敌人的 props**：接在节点 props 的后面。除 `enemy_speed` 外都可以省略；写了其中任何一个，都必须写 `enemy_speed`。
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `enemy_speed` | 无 | 米/秒，> 0。写了它才是敌人。每 tick 的步长 `enemy_speed / 60` 必须小于 `hurt_radius` |
+| `enemy_turn_speed` | 180 | 度/秒，> 0。走路、休息、准备出招时的转向速度 |
+| `enemy_face_angle` | 30 | 度，0 < v ≤ 180。朝向和玩家方向的夹角不超过它才出招 |
+| `enemy_rest_ticks` | 40 | 整数 ≥ 0。每招结束后休息多少 tick |
+| `enemy_aggro_range` | 15 | 米，> 0。玩家的水平距离超过它时，敌人原地待着 |
+| `enemy_seed` | 1 | 整数 ≥ 0。随机数种子 |
+| `enemy_swing_low`、`enemy_swing_high` | 0.3、2.4 | 米，`0 ≤ low < high`。所有招式共用的挥砍高度范围，相对敌人的脚 |
+
+每种招式 `m`（`sweep`、`cleave`、`lunge`、`combo`）有下面 11 个 prop，名字是 `m_` 加表里的后缀：
+
+| 后缀 | 规则 | `sweep` | `cleave` | `lunge` | `combo` | 说明 |
+|---|---|---|---|---|---|---|
+| `damage` | > 0 | 25 | 45 | 30 | 20 | 每次命中的伤害 |
+| `impact` | ≥ 0 | 20 | 40 | 30 | 15 | 冲击值 |
+| `startup_ticks` | 整数 ≥ 1 | 30 | 45 | 35 | 25 | 前摇 |
+| `active_ticks` | 整数 ≥ 1 | 8 | 4 | 10 | 5 | 出招（连击是每一刀的） |
+| `recovery_ticks` | 整数 ≥ 1 | 30 | 40 | 35 | 45 | 后摇 |
+| `reach` | > 0 | 3.0 | 4.0 | 2.5 | 2.8 | 扇形半径 |
+| `arc` | 0 < v ≤ 360 | 160 | 20 | 90 | 140 | 扇形角度 |
+| `min_range` | ≥ 0 | 0 | 0 | 4 | 0 | 玩家的水平距离在 `[min_range, max_range]` 里才能选这招 |
+| `max_range` | > 0 | 3.0 | 4.0 | 9.0 | 2.8 | 必须 ≥ `min_range` |
+| `weight` | 整数 ≥ 0 | 3 | 2 | 2 | 2 | 随机选招的权重，0 表示不用这招 |
+| `track_speed` | ≥ 0 | 90 | 150 | 180 | 90 | 度/秒，前摇里转向玩家的速度 |
+
+另有 3 个：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `lunge_distance` | 5 | 米，> 0。突进在出招的几个 tick 里匀速向前冲的总距离；每 tick 的步长必须小于 `hurt_radius` |
+| `combo_hits` | 3 | 整数 ≥ 1。连击的刀数 |
+| `combo_gap_ticks` | 12 | 整数 ≥ 0。连击两刀之间的准备时间（下一刀的前摇） |
+
+- 换算：角度转弧度；`slice = arc / active_ticks`；速度、距离换成每 tick 的步长。和前面一样，先 `as f32` 再算。
+- 节点 props 从 17 个变成 70 个。`unknown prop` 的报错不再列出全部名字，改成 `the node "<路径>": unknown prop "<p>" (see loom schema: games.souls.props.node)`（G4.1 起；原来列名单的文案作废）。
+- 新的报错：
+  - `the node "<路径>": prop "<p>" needs enemy_speed`
+  - `the node "<路径>": needs <m>_min_range <= <m>_max_range`
+  - `the node "<路径>": needs enemy_swing_low < enemy_swing_high`
+  - `the enemy "<路径>" needs hurt_radius, hurt_height, hp and lock_height`
+  - `the enemy "<路径>" cannot also be a swinger`
+  - `the enemy "<路径>" must be a root node, and not the camera`
+  - `the enemy "<路径>": <enemy|lunge> moves d m per tick, which must be less than hurt_radius r`
+  - `the enemy "<路径>" must not have a collider in its subtree: colliders are static`
+  - `enemy_face_angle` 的取值用新规则的文案 `must be greater than 0 and at most 180`；其余用已有文案。
+- 检查顺序：接在原有 10 步之后：
+  1. 敌人的 props 有没有 `enemy_speed`；
+  2. 四个招式的 `min_range <= max_range`（按 `sweep`、`cleave`、`lunge`、`combo`）；
+  3. `enemy_swing_low < enemy_swing_high`；
+  4. 敌人要有 hurt、`hp`、`lock_height`；
+  5. 不能同时是挥砍者；
+  6. 根节点；
+  7. 每 tick 步长（先 `enemy`，再 `lunge`）；
+  8. 子树里没有碰撞体。
+
+**随机数**：每个敌人一个 SplitMix64，状态是 u64，加载时等于 `enemy_seed`。取一个数：
+
+```text
+state = state + 0x9E3779B97F4A7C15（回绕加）
+z = state
+z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9（回绕乘）
+z = (z ^ (z >> 27)) * 0x94D049BB133111EB（回绕乘）
+return z ^ (z >> 31)
+```
+
+只在选招时取数，每次选招恰好取一个。
+
+**状态**：`game.enemies`，每个敌人一项，按先序，放在 `swingers` 后面：
+
+```json
+"enemies": [ { "node": "boss", "state": "attack", "move": "combo", "move_tick": 37, "phase": "active", "hit": 2, "facing": 3.1, "rest": 0, "rng": 1234567 } ]
+```
+
+- `state`：`"idle"`（待着或者原地转向）、`"chase"`（走过来）、`"attack"`、`"rest"`、`"stagger"`、`"dead"`。
+- `move`：`"sweep"`、`"cleave"`、`"lunge"`、`"combo"`，不在攻击中时是 `null`。
+- `move_tick`：这一招的第几个 tick，从 1 数，不在攻击中时是 0。
+- `phase`：`"startup"`、`"active"`、`"recovery"` 或 `null`。连击两刀之间的准备算 `startup`。
+- `hit`：连击的第几刀（1 到 `combo_hits`），其余是 0。
+- `facing`：同角色的 `facing`。
+- `rest`：还要休息几个 tick。
+- `rng`：随机数的状态（JSON 整数，最大可以到 2^64 - 1）。
+- 位置看 `nodes`，血量看 `hurtboxes`。
+- 加载时：`idle`，`facing` 由节点的旋转算（同挥砍者），`rng` 等于种子，其余是 0 或 `null`。
+
+**一招的时间线**，`S`、`A`、`R` 是这招的前摇、出招、后摇：
+- 横扫、下劈、突进：`move_tick` 1..S 是前摇，S+1..S+A 是出招，之后 R 个 tick 是后摇，一共 `S + A + R`。
+- 连击：
+  - 先 S 个 tick 前摇，然后第 1 刀出招 A 个 tick；
+  - 之后每一刀先准备 `combo_gap_ticks` 个 tick（`phase` 是 `startup`），再出招 A 个 tick；
+  - 最后一刀之后是 R 个 tick 后摇。
+  - 一共 `S + hits * A + (hits - 1) * gap + R`。
+- 前摇（包括连击的准备）里按这招的 `track_speed` 转向玩家；出招、后摇里不转。
+- 出招的第 k 个 tick 扫扇形的一段，和「命中判定」用同一个公式，高度用 `enemy_swing_low`、`enemy_swing_high`。
+  - 连击的偶数刀方向相反，从左往右扫：`lo`、`hi` 取相反数再互换。
+- 突进：出招的每个 tick，先沿 `facing` 前进 `lunge_distance / A`（带碰撞，见下），再做命中检查。
+- 每一刀（连击的每一刀分开算）对角色最多命中一次。命中、无敌、死亡的规则和挥砍者完全相同：走同一个 `player_hit`，`hit` 事件的 `attack` 是招式名，`dodged` 照发。
+
+**每个 tick**：第 5c 步先处理敌人（先序），再处理挥砍者。对每个敌人：
+
+```text
+d = hdist(敌人, 角色)
+if 敌人（作为受伤方）的 state 是 stagger 或 dead:
+    state 跟受伤方一样; move = null; move_tick = 0; phase = null; hit = 0; rest = 0
+    continue                                     // 招式被打断
+if state 原来是 stagger 或 dead: state = idle        // 刚恢复，从 idle 开始
+if (角色死了 || d > enemy_aggro_range) && state != attack:
+    state = idle; continue                       // 进行中的招照常做完
+match state:
+  attack: move_tick += 1; 按时间线做这一 tick
+          最后一个 tick 做完后：move = null, move_tick = 0, phase = null, hit = 0
+          enemy_rest_ticks > 0 时 state = rest, rest = enemy_rest_ticks；否则 state = idle
+  rest:   朝玩家转（enemy_turn_speed）; rest -= 1; if rest == 0 { state = idle }
+  idle 或 chase:
+      候选 = weight > 0 且 min_range <= d <= max_range 的招，按 sweep、cleave、lunge、combo 的顺序
+      a = |wrap(bearing(敌人, 角色) - facing)|
+      if 候选不为空 && a <= enemy_face_angle:
+          total = 候选的权重之和; r = rng.next() % total
+          按顺序累加权重，选第一个累加值 > r 的招
+          发 enemy_move 事件; state = attack; move = 它; move_tick = 1; 按时间线做第 1 个 tick
+      else:
+          朝玩家转（enemy_turn_speed）
+          if 候选为空: 朝玩家的水平方向走 enemy_speed / 60（带碰撞）; state = chase
+          else: state = idle
+```
+
+- 转向用 `turn()`，和角色相同。`d == 0` 时不转也不走。
+- 敌人被角色打出硬直或打死，发生在第 4 步（角色的攻击）里；第 5c 步看到的已经是新的 state，这个 tick 敌人不再出手。
+- 角色死了：进行中的招做完，然后原地待着，直到角色复活。
+- 敌人死了照受伤方的规则躺着，按 `revive_ticks` 原地复活。复活后从 `idle` 开始，`rng` 不重置。
+
+**碰撞**：敌人和角色都是竖直圆柱，互相推开。
+- 角色的 `resolve`：每一轮先处理碰撞体，再把角色推出每个**活着的**敌人的圆（XZ 平面，两个半径之和 = 胶囊体半径 + `hurt_radius`）。推的方向是从敌人中心指向角色中心；两者重合时沿 +X。
+- 敌人移动（走路、突进）时的 `resolve`：碰撞体照旧（把 `hurt_radius`、`hurt_height` 当胶囊体），再推出角色的圆（角色死了也推）。敌人之间不互相推（G4.1 只有一个敌人）。
+- 没有敌人的场景，`resolve` 的结果和原来逐位相同。
+- 敌人死了以后，角色不再被它推开。这和假人的「尸体仍然挡路」不同：敌人没有碰撞体子节点。
+
+**事件**：新增一种：
+
+| `type` | 字段 | 什么时候发 |
+|---|---|---|
+| `enemy_move` | `by`、`move`、`distance`、`candidates` | 敌人选定一招的那个 tick，排在这招第 1 个 tick 的其他事件之前。`distance` 是 `d`，`candidates` 是候选招名的列表 |
+
+**表现**：
+- 敌人节点的旋转：`ok` 时是 `Quat::from_rotation_y(facing)`；硬直、死亡时按受伤方「姿势」的公式，`base` 换成 `Quat::from_rotation_y(facing)`。
+- 手臂（`arm`）：规则同挥砍者。
+  - 前摇时在 `-half`（连击的偶数刀在 `+half`）；
+  - 出招时在这个 tick 扫到的位置；
+  - 其余时候回到中线。
+  - 前摇时是预警色。
+- 颜色（闪白、变暗）和血条：同受伤方。
+
+**调试绘制**：`hurtboxes` 已经包括敌人（它是受击判定）。`swings` 加上敌人的招式，规则同挥砍者：前摇画橙色的整个扇形，出招画亮红的当前一段。
+
+**Boss 场景** `assets/scenes/boss.ron`（`game: "souls"`）：
+- 40×40 的地面，四根柱子；光源、环绕相机同演示场景。
+- 角色在 `(0, 0, 8)`，props 写出全部 50 个（值等于默认值，照抄演示场景的注释）。
+- `boss` 在 `(0, 0, -4)`，`rotation: (0, 180, 0)`（面朝 +Z，看着角色）：
+  - props：
+    - `lock_height` 2.0，`hurt_radius` 0.7，`hurt_height` 3.0；
+    - `hp` 600，`poise` 80，`stagger_ticks` 40，`revive_ticks` 300；
+    - `enemy_speed` 2.5，`enemy_seed` 7；
+    - 其余敌人和招式的 props 全部写出，值等于默认值，每个带英文注释。
+  - 子节点：
+    - `body`：`Capsule(radius: 0.7, height: 3.0)`，深色；
+    - `arm`：`Cube`，位置 `(0, 1.8, -1.9)`，缩放 `(0.15, 0.15, 2.8)`；
+    - `hp_bar`：位置 `(0, 3.4, 0)`，缩放 `(1.6, 0.1, 0.1)`。
+
+**已知限制**（G4.1）：
+- 只有一种敌人；敌人之间不互相推开。
+- 下劈的扇形也是水平的，只是很窄、很远，没有竖直方向的判定。
+- 敌人不检查视线，也不寻路：隔着柱子也会直线走过来，被柱子挡住就沿着柱子滑。
+- 招式没有动画，只有手臂的转动和预警色。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
