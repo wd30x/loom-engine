@@ -436,7 +436,7 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | `scale` | `(x, y, z)` | `(1, 1, 1)` | 每个分量必须 > 0 |
 | `mesh` | `Cube` / `Plane` / `Sphere` / `Capsule(radius, height)` | 无 | 前三种都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调。`Capsule` 带参数（非均匀缩放会把半球压扁）：`height` 是含两端半球的总高，**原点在底部**（占 y ∈ [0, height]），方便角色站在地面上 |
 | `model` | 字符串 | 无 | glTF 模型 `.glb` 的路径（E7.1 起，第 19 节）。不能和 `mesh`、`sprite`、`tilemap` 同时写 |
-| `animation` | `(clips, play)` | 无 | 模型的动画片段（E7.2 起，第 19 节「骨骼和动画片段」）：`clips` 是片段名到 RON 片段文件的表，`play` 是一开始播的片段。只能和 `model` 一起写 |
+| `animation` | `(clips, play)` | 无 | 模型的动画片段（E7.2 起，第 19 节「骨骼和动画片段」）：`clips` 是 `(片段名, RON 片段文件)` 的列表（E7.3 起，原来是表），`play` 是一开始播的片段。只能和 `model` 一起写 |
 | `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)`；有 `model` 时是 `(1, 1, 1)` | 只有带 `mesh` 或 `model` 时才有意义；分量在 0 到 1 之间。对模型是染色（乘在顶点颜色上） |
 | `camera` | `(fov_y, near, far)` 或 `(ortho: (height), near, far)` | 无 | 相机看向自己的 -Z。`fov_y` 是透视相机的垂直视场角（度）。`ortho` 是正交相机（E4.2 起），`height` 是画面竖直方向覆盖的世界长度，宽度按画面比例算。`fov_y` 和 `ortho` 必须**恰好写一个** |
 | `sprite` | `(sheet, tag)` 或 `(sheet, tag, alternates)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名。`alternates`（E4.4 起，可省略）是游戏运行中可以换成的其他 tag，例如 `["corpse"]` |
@@ -2724,6 +2724,7 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 - serve 的 `debug_draw: []` 等于 `false`，不报错：JSON 数组不会有命令行那种「写了逗号漏了名字」的问题（E5.2 审查时定）。
 - 窗口模式退出时，如果 F3 是在最后一帧之后才按的，先按当前的开关补画一帧，再存 `--screenshot`（E5.2 实现时定）。
 - `rogue` 目前没有类别：`--debug-draw` 不带值时什么都不画；带值时都是未知类别。
+- E7.3 起引擎在每个游戏的类别后面加上 `skeleton`（第 19 节「播放和过渡」），所以 rogue 的类别是 `"skeleton"`，souls 的列表末尾多一个 `"skeleton"`；`loom view` 也有 `--debug-draw`，只有这一个类别。
 - `loom view` 不跑游戏，没有 `--debug-draw`。
 - **F3**（只在窗口模式）：在「命令行给的类别」（没给 `--debug-draw` 时是全部类别）和「全关」之间切换。启动时：给了 `--debug-draw` 是开，没给是关。F3 是引擎保留的键，和 Esc 一样不能绑定，不进录制，热重载后保持当前的开关。
 - 窗口模式退出时的 `--screenshot` 按退出那一刻的开关画。
@@ -3011,11 +3012,12 @@ E7.2 用户决定（2026-09-28）：
 
 ```ron
 (name: "knight", model: "assets/models/humanoid.glb",
-    animation: (clips: {"idle": "assets/anims/humanoid/idle.ron", "walk": "assets/anims/humanoid/walk.ron"}, play: "idle")),
+    animation: (clips: [("idle", "assets/anims/humanoid/idle.ron"), ("walk", "assets/anims/humanoid/walk.ron")], play: "idle")),
 ```
 
-- `clips`：片段名到片段文件路径（相对工作目录）的表，至少一项；名字和路径都不能是空串。
-- `play`：一开始播哪个片段，必须是 `clips` 里的名字。从 tick 0 开始播。E7.2 里片段不会换；E7.3 加游戏的播放接口。
+- `clips`：`(片段名, 片段文件路径)` 的列表（路径相对工作目录），至少一项；名字和路径都不能是空串，名字不能重复（`animation clip "idle" is given twice`）。
+  - E7.2 时是表 `{"idle": "…"}`，ron 遇到重复的键会静默保留后一个，查不出来；E7.3 改成列表（用户决定 2026-09-28，和 props 当初的理由一样）。不同名字可以指向同一个文件。
+- `play`：一开始播哪个片段，必须是 `clips` 里的名字。从 tick 0 开始播，没有过渡。之后由游戏换（下文「播放」）。
 - `loom_scene` 只检查字段本身；片段文件在加载场景时由 `loom_engine` 读和检查（同一个路径只读一次，报错写出节点路径、片段名、文件路径和原因），和模型一样。
 - 没有 `animation` 的模型节点和 E7.1 一样，按绑定姿势画静态网格，截图不变。
 
@@ -3047,6 +3049,7 @@ E7.2 用户决定（2026-09-28）：
     局部平移 = T_j + B_p⁻¹ * d
     ```
     父关节没有动时，关节在模型空间里正好是「绕自己的位置、按模型的轴转 `q`，再平移 `d`」。
+  - 各骨骼绕哪根轴转是什么动作，见 `assets/anims/README.md` 的对照表（用胶片图实拍核对过）。
   - 不支持缩放通道。
 - 文件格式用 `deny_unknown_fields`，结构进 `loom schema`（第 17 节，顶层新增 `clip`，在 `scene` 后面）。
 
@@ -3074,3 +3077,58 @@ E7.2 用户决定（2026-09-28）：
 - 用来让 AI 一眼看完一段动作：选小一点的 `--size`，例如 `320x360`。
 
 **`loom run` 和 serve**：有 `animation` 的节点按游戏时钟的 tick 画，从 tick 0 开始循环。热重载、`reset`、`load_scene` 后从新的 tick 0 开始。
+
+### 播放和过渡（E7.3 起）
+
+用户决定（2026-09-28）：
+- **过渡时长由游戏每次切换时给**，单位 tick；0 就是直接切。
+- **打断过渡时从旧的目标片段开始过渡**：只记住上一个片段，不记一串。连续快速切换时画面可能跳一下，换来状态格式简单。
+- **骨骼的调试绘制是引擎自带的类别 `skeleton`**，所有游戏都有，`loom view` 也能用。
+
+**运行时状态**（`loom_scene::Animation`，模拟状态的一部分）：
+- `playing`：正在播的片段名；`start`：它的开始 tick；
+- `from`：过渡的来源 `Option<(片段名, 开始 tick)>`；`blend`：过渡的 tick 数。
+- 场景刚加载时：`playing` 是 `play`，`start` 0，`from` 无，`blend` 0。
+
+**游戏的接口**：`Scene::play_clip(id, clip, start, blend) -> Result<(), AnimationError>`。
+- `clip` 必须是这个节点 `clips` 里的名字，否则报错、什么都不改（和 `set_sprite_tag` 一样只能换成加载时检查过的片段）；节点没有 `animation` 也报错。
+- 调用后：`from = Some((旧的 playing, 旧的 start))`，`playing = clip`，`start = start`，`blend = blend`。旧的 `from` 丢掉（用户决定：打断时从旧的目标开始过渡）。
+- 换成正在播的同一个片段也照常执行，也就是从 `start` 重新开始，并从旧的播放进度过渡过来。游戏不想重播就别调用。
+- `start` 通常是游戏当前的 tick。`start` 大于当前 tick 时，片段时间按 0 算，过渡也还没开始（权重 0）。
+
+**画某个 tick `τ` 的姿势**：
+- 新片段的偏移：用 `playing` 在 `τ - start` 采样（小于 0 时按 0）；
+- `from` 为空，或 `blend` 为 0，或 `τ - start >= blend`：就用新片段的偏移；
+- 否则权重 `w = (τ - start) / blend`（`τ < start` 时 w = 0），来源片段在 `τ - from.start` 采样（照常循环或停住），每根骨骼的偏移按 `w` 混合：旋转 `slerp(q_from, q_new, w)`，平移 `lerp(d_from, d_new, w)`。某个片段没列出的骨骼，它的偏移按单位旋转、零平移算。
+- 混合在偏移上做，再按「骨骼和动画片段」的公式得到关节矩阵，所以两个片段都没动的骨骼保持绑定姿势。
+- 过渡结束后 `from` 不清掉（场景不知道现在是哪个 tick），画的时候按上面的规则自然不用它；下一次 `play_clip` 时被替换。
+
+**状态导出**：`nodes` 里有 `animation` 的节点多一个字段（没有的节点不变，已有的期望值都不变）：
+
+```json
+"knight": { "position": […], "rotation": […], "scale": […],
+            "animation": { "clip": "walk", "start": 120, "from": { "clip": "idle", "start": 0 }, "blend": 6 } }
+```
+
+- 只有片段名和 tick（用户决定），不导出骨骼姿势；姿势看胶片图和调试绘制。`from` 为空时是 `null`。
+- 轨迹、serve 的 `state` 是同一份内容，跟着变。schema 的 `state_dump` 跟着变。
+
+**调试绘制 `skeleton`**：
+- 类别列表是「游戏的类别，再加上 `skeleton`」，`skeleton` 永远在最后。所以 souls 是 `"hurtboxes", "swings", "colliders", "lock" and "skeleton"`，rogue 从 `none` 变成 `"skeleton"`；`--debug-draw` 不带值时全开，也包括 `skeleton`。
+- 画什么：每个有 `animation` 的节点，按当前 tick 的姿势（和画面同一个姿势），每个关节画一个 `cross`（0.03 m），每个有父关节的关节画一条到父关节的线段，世界坐标，颜色 `(1.0, 0.8, 0.0)`。
+- 由引擎画（引擎有骨骼和片段，游戏没有），画在游戏的调试线段之后。和其他类别一样不改变模拟。
+- `loom view` 加 `--debug-draw`：规则和 `loom run` 相同，没有游戏，所以只有 `skeleton` 一个类别（报错时写 `view has "skeleton"`）。和 `--ticks` 一起用时，每一帧都画。
+
+### glTF 动画转片段 `loom clip`（E7.3 起）
+
+`loom clip <model.glb> --animation <名字> --out <片段.ron> [--looping]`：把 glTF 里的一个动画按 loom 的片段格式写成 RON，stdout 输出一个 JSON 报告。
+
+- 模型要能蒙皮（「蒙皮」一节的检查）；动画的通道只能指向这个 skin 的关节，否则报错。`CUBICSPLINE` 插值报错（不支持）；`LINEAR`、`STEP` 按 glTF 的规则采样。有缩放通道时，缩放和绑定姿势的差超过 1e-4 就报错（片段没有缩放）。
+- 采样：tick `k` 对应时间 `k / 60` 秒，`k` 从 0 到 `ceil(动画时长 × 60)`，`length` 就是最后一个 `k`。每个 tick 按 glTF 算出关节的局部旋转 `R'`、平移 `T'`，反推偏移：`q = B * R⁻¹ * R' * B⁻¹`，`d = B_p * (T' - T)`（和「骨骼和动画片段」的公式互逆）。
+- 旋转写成 YXZ 欧拉角（度），保留 2 位小数；平移保留 4 位小数（米）。
+- **精简关键帧**：从第一个关键帧开始，尽量往后找下一个关键帧，要求中间每个 tick 用 loom 的采样规则插出来的值，和原来的值相差不超过 0.1°（旋转）、0.5 mm（平移）。算法固定，所以同一个输入得到同一个文件。
+- 一根骨骼在整个动画里偏移都是零（在上面的精度内）的通道不写；两个通道都不写的骨骼不写。
+- 文件开头写一行注释：从哪个文件的哪个动画转出来。格式照 ron 的 pretty 输出，`
+` 换行（第 5 节）。
+- 报告：`{"status":"ok","path":<glb>,"animation":<名字>,"out":<ron>,"length":…,"bones":…,"keyframes":…}`。动画名不存在时报错，并列出有哪些动画。
+- **保证**：转出来的片段用 loom 播放，每个 tick 每个关节的模型空间位置和 glTF 原动画相比，误差在精简的精度内（有测试）。
