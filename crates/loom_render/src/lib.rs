@@ -11,8 +11,8 @@ use std::sync::mpsc;
 
 use wgpu::util::DeviceExt;
 
-pub use frame::{DirectionalLight, DrawItem, Frame, Projection, SpriteDraw};
-use frame::{GpuDraw, GpuGlobals, GpuSprite};
+pub use frame::{DirectionalLight, DrawItem, Frame, LineDraw, Projection, SpriteDraw};
+use frame::{GpuDraw, GpuGlobals, GpuSprite, LineVertex, line_vertices};
 pub use mesh::MeshKind;
 
 /// Format of the offscreen color target. Readback returns its bytes as-is,
@@ -204,6 +204,32 @@ impl DrawBuffer {
         if len > self.capacity {
             let capacity = len.next_power_of_two();
             *self = Self::new(device, layout, globals, self.label, self.stride, capacity);
+        }
+    }
+}
+
+/// The vertex buffer of the debug lines. Grows as needed, never shrinks.
+struct LineBuffer {
+    buffer: wgpu::Buffer,
+    /// In vertices.
+    capacity: usize,
+}
+
+impl LineBuffer {
+    fn new(device: &wgpu::Device, capacity: usize) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("debug lines"),
+            size: (capacity * std::mem::size_of::<LineVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { buffer, capacity }
+    }
+
+    /// Replaces the buffer with a larger one if `len` vertices do not fit.
+    fn reserve(&mut self, device: &wgpu::Device, len: usize) {
+        if len > self.capacity {
+            *self = Self::new(device, len.next_power_of_two());
         }
     }
 }
@@ -409,6 +435,8 @@ impl Presenter {
 
 /// Draw items the per-draw buffer holds before it first has to grow.
 const INITIAL_DRAW_CAPACITY: usize = 64;
+/// Debug line vertices the first line buffer holds (two per line).
+const INITIAL_LINE_VERTICES: usize = 1024;
 
 /// Vertex and index buffers of one mesh.
 struct GpuMesh {
@@ -460,6 +488,10 @@ pub struct Renderer {
     sprite_pipeline: wgpu::RenderPipeline,
     texture_layout: wgpu::BindGroupLayout,
     sprites: DrawBuffer,
+    line_pipeline: wgpu::RenderPipeline,
+    /// Binds only the globals, for the line pipeline.
+    line_bind_group: wgpu::BindGroup,
+    lines: LineBuffer,
     /// Bind groups of the textures, each binding one as group 1 of the
     /// sprite pipeline; indexed by [`TextureId`], never removed.
     textures: Vec<wgpu::BindGroup>,
@@ -671,6 +703,70 @@ impl Renderer {
             cache: None,
         });
 
+        // Debug lines: world-space vertices, the globals' view-projection,
+        // no depth test and no depth writes, drawn last.
+        let line_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/line.wgsl"));
+        let line_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("debug lines"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let line_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("debug lines"),
+            layout: &line_bind_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buffer.as_entire_binding(),
+            }],
+        });
+        let line_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("debug lines"),
+            bind_group_layouts: &[Some(&line_bind_layout)],
+            immediate_size: 0,
+        });
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("debug lines"),
+            layout: Some(&line_layout),
+            vertex: wgpu::VertexState {
+                module: &line_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(LineVertex::layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            // Same pass as the meshes, so the same depth format, but the
+            // depth buffer is neither tested nor written.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &line_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(COLOR_FORMAT.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let lines = LineBuffer::new(&device, INITIAL_LINE_VERTICES);
+
         let meshes = MeshKind::BUILT_IN
             .iter()
             .map(|&kind| (kind, GpuMesh::new(&device, kind)))
@@ -691,6 +787,9 @@ impl Renderer {
             sprite_pipeline,
             texture_layout,
             sprites,
+            line_pipeline,
+            line_bind_group,
+            lines,
             textures: Vec::new(),
             meshes,
             size: (0, 0),
@@ -719,6 +818,9 @@ impl Renderer {
             sprite_pipeline,
             texture_layout,
             sprites,
+            line_pipeline,
+            line_bind_group,
+            lines,
             textures,
             meshes,
             size: _,
@@ -731,6 +833,7 @@ impl Renderer {
                 offscreen,
                 draws,
                 sprites,
+                (lines, line_bind_group, line_pipeline),
                 textures,
                 meshes,
                 pipeline,
@@ -885,6 +988,12 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.sprites.buffer, 0, bytemuck::cast_slice(&sprites));
         }
+        let line_vertices = line_vertices(frame.lines);
+        if !line_vertices.is_empty() {
+            self.lines.reserve(&self.device, line_vertices.len());
+            self.queue
+                .write_buffer(&self.lines.buffer, 0, bytemuck::cast_slice(&line_vertices));
+        }
 
         let mut encoder = self
             .device
@@ -947,6 +1056,14 @@ impl Renderer {
                     pass.draw(0..6, start..end);
                     start = end;
                 }
+            }
+            if !line_vertices.is_empty() {
+                pass.set_pipeline(&self.line_pipeline);
+                pass.set_bind_group(0, &self.line_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.lines.buffer.slice(..));
+                let count =
+                    u32::try_from(line_vertices.len()).expect("line vertex count fits in u32");
+                pass.draw(0..count, 0..1);
             }
         }
 

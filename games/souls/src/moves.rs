@@ -4328,4 +4328,321 @@ mod tests {
             assert_eq!(events, []);
         }
     }
+
+    // -------------------------------------------------------------- debug draw
+
+    mod debug_draw {
+        use loom_core::debug::{DebugDraw, DebugLine};
+
+        use super::*;
+
+        // The colors of docs/architecture.md section 11, "调试绘制".
+        const DEAD: Vec3 = Vec3::new(0.4, 0.4, 0.4);
+        const STAGGER: Vec3 = Vec3::new(1.0, 0.9, 0.1);
+        const INVULNERABLE: Vec3 = Vec3::new(0.1, 0.9, 1.0);
+        const GREEN: Vec3 = Vec3::new(0.2, 1.0, 0.2);
+        const ORANGE: Vec3 = Vec3::new(1.0, 0.55, 0.1);
+        const DARK_RED: Vec3 = Vec3::new(0.5, 0.1, 0.1);
+        const RED: Vec3 = Vec3::new(1.0, 0.15, 0.15);
+        const LIGHT_GRAY: Vec3 = Vec3::new(0.8, 0.8, 0.8);
+        const WHITE: Vec3 = Vec3::new(0.9, 0.9, 0.9);
+        const YELLOW: Vec3 = Vec3::new(1.0, 0.9, 0.1);
+        const BLUE: Vec3 = Vec3::new(0.3, 0.5, 1.0);
+        const DARK_BLUE: Vec3 = Vec3::new(0.2, 0.3, 0.6);
+
+        /// Lines of a cylinder, and of a sector of `degrees` (two radii and
+        /// an arc of up to 11.25° a segment).
+        const CYLINDER: usize = 32 + 32 + 4;
+        fn sector_lines(degrees: f32) -> usize {
+            2 + (degrees / 11.25 - 1e-4).ceil() as usize
+        }
+
+        fn lines(run: &Run, categories: &[&str]) -> Vec<DebugLine> {
+            let mut draw = DebugDraw::new();
+            run.game.debug_draw(categories, &mut draw);
+            draw.lines().to_vec()
+        }
+
+        fn near(a: f32, b: f32) -> bool {
+            (a - b).abs() < 1e-5
+        }
+
+        /// Checks that `lines` is a cylinder standing on `base`.
+        fn assert_cylinder(lines: &[DebugLine], base: Vec3, radius: f32, height: f32) {
+            assert_eq!(lines.len(), CYLINDER);
+            for l in &lines[..32] {
+                assert!(near(l.a.distance(base), radius), "{:?}", l.a);
+                assert_eq!(l.a.y, base.y);
+            }
+            let top = base + Vec3::new(0.0, height, 0.0);
+            for l in &lines[32..64] {
+                assert!(near(l.a.distance(top), radius), "{:?}", l.a);
+            }
+            for l in &lines[64..] {
+                // Upright, from the bottom circle to the top one.
+                assert_eq!((l.a.x, l.a.z), (l.b.x, l.b.z));
+                assert!(near(l.b.y - l.a.y, height));
+            }
+        }
+
+        /// The angle of a radius's outer end as seen from `center`, in the
+        /// `bearing` convention.
+        fn angle(center: Vec3, l: &DebugLine) -> f32 {
+            libm::atan2f(-(l.b.x - center.x), -(l.b.z - center.z))
+        }
+
+        #[test]
+        fn every_hurtbox_then_the_character_gets_a_green_cylinder_where_hits_check() {
+            let mut run = dummy_run(r#"("hp", 10)"#);
+            run.tick(false, &NONE);
+            let l = lines(&run, &["hurtboxes"]);
+            assert_eq!(l.len(), 2 * CYLINDER);
+            assert_cylinder(&l[..CYLINDER], Vec3::new(0.0, 0.0, -1.5), 0.25, 1.8);
+            assert_cylinder(&l[CYLINDER..], Vec3::ZERO, 0.35, 1.8);
+            assert!(l.iter().all(|l| l.color == GREEN));
+        }
+
+        #[test]
+        fn hurtbox_cylinders_are_yellow_staggered_gray_dead_and_the_character_cyan_invulnerable() {
+            // Poise 0: the hit on tick 2 staggers.
+            let mut run = dummy_run(r#"("hp", 10)"#);
+            press_on(&mut run, ATTACK, &[1], 2, &NONE);
+            let l = lines(&run, &["hurtboxes"]);
+            assert!(l[..CYLINDER].iter().all(|l| l.color == STAGGER));
+            assert!(l[CYLINDER..].iter().all(|l| l.color == GREEN));
+            // hp 3: the same hit kills.
+            let mut run = dummy_run(r#"("hp", 3)"#);
+            press_on(&mut run, ATTACK, &[1], 2, &NONE);
+            assert!(
+                lines(&run, &["hurtboxes"])[..CYLINDER]
+                    .iter()
+                    .all(|l| l.color == DEAD)
+            );
+            // Rolling, invulnerable from its first tick.
+            let mut run = Run::new(PROPS);
+            run.tick(true, &NONE);
+            let s = run.tick(false, &FORWARD);
+            assert!(s.player.invulnerable);
+            assert!(
+                lines(&run, &["hurtboxes"])
+                    .iter()
+                    .all(|l| l.color == INVULNERABLE)
+            );
+        }
+
+        #[test]
+        fn character_hit_by_a_swing_shows_yellow_and_killed_gray() {
+            let mut run = every_third_tick(r#"("hp", 100)"#, 1);
+            run.ticks(2, false, &NONE);
+            assert_eq!(run.game.state().player.health.state, Condition::Stagger);
+            let l = lines(&run, &["hurtboxes"]);
+            // The swinger has no hurtbox: the character's cylinder only.
+            assert_eq!(l.len(), CYLINDER);
+            assert!(l.iter().all(|l| l.color == STAGGER));
+            let mut run = every_third_tick(r#"("hp", 3)"#, 1);
+            run.ticks(2, false, &NONE);
+            assert!(lines(&run, &["hurtboxes"]).iter().all(|l| l.color == DEAD));
+        }
+
+        #[test]
+        fn dead_dummy_lying_down_keeps_an_upright_cylinder_on_its_node() {
+            let mut run = dummy_run(r#"("hp", 3)"#);
+            press_on(&mut run, ATTACK, &[1], 3, &NONE);
+            // The mesh lies flat...
+            assert!(up_of(&run, "d").y.abs() < 1e-5);
+            // ...the cylinder stands where the node is.
+            let l = lines(&run, &["hurtboxes"]);
+            assert_cylinder(&l[..CYLINDER], Vec3::new(0.0, 0.0, -1.5), 0.25, 1.8);
+        }
+
+        #[test]
+        fn attack_startup_draws_the_whole_sector_in_orange_at_both_band_heights() {
+            // attack_props: startup ticks 1-4, 120° wide, reach 2.
+            let mut run = Run::new(&attack_props());
+            press_on(&mut run, ATTACK, &[1], 1, &NONE);
+            let l = lines(&run, &["swings"]);
+            let n = sector_lines(120.0);
+            assert_eq!(l.len(), 2 * n);
+            assert!(l.iter().all(|l| l.color == ORANGE));
+            // Heights 0.3 and 1.6 (swing_low and swing_high), radii at ±60°.
+            for (sector, y) in [(&l[..n], 0.3), (&l[n..], 1.6)] {
+                let center = Vec3::new(0.0, y, 0.0);
+                assert_eq!(sector[0].a, center);
+                assert!(near(angle(center, &sector[0]), -60f32.to_radians()));
+                assert!(near(angle(center, &sector[1]), 60f32.to_radians()));
+                assert!(near(sector[0].b.distance(center), 2.0));
+            }
+        }
+
+        #[test]
+        fn active_attack_draws_dark_red_then_this_ticks_slice_in_bright_red() {
+            // Active ticks 5-8 of attack_props sweep 30° each from the right:
+            // tick 6 is [-30°, 0°], as the hit check (`slice_of`) has it.
+            let mut run = Run::new(&attack_props());
+            let states = press_on(&mut run, ATTACK, &[1], 6, &NONE);
+            let p = &states[5].player;
+            assert_eq!(
+                (p.attack_phase, p.action_tick),
+                (Some(AttackPhase::Active), 6)
+            );
+            let l = lines(&run, &["swings"]);
+            let (full, slice) = (sector_lines(120.0), sector_lines(30.0));
+            assert_eq!(l.len(), 2 * full + 2 * slice);
+            assert!(l[..2 * full].iter().all(|l| l.color == DARK_RED));
+            assert!(l[2 * full..].iter().all(|l| l.color == RED));
+            // The character slid 0.125 forward on each active tick so far.
+            let at = p.position;
+            for (k, y) in [(0, 0.3), (1, 1.6)] {
+                let s = &l[2 * full + k * slice..];
+                let center = at + Vec3::new(0.0, y, 0.0);
+                assert_eq!(s[0].a, center);
+                assert!(near(angle(center, &s[0]), -30f32.to_radians()));
+                assert!(near(angle(center, &s[1]), 0.0));
+            }
+            // Recovery (ticks 9-14) draws nothing.
+            press_on(&mut run, ATTACK, &[], 3, &NONE);
+            assert_eq!(
+                run.game.state().player.attack_phase,
+                Some(AttackPhase::Recovery)
+            );
+            assert!(lines(&run, &["swings"]).is_empty());
+        }
+
+        #[test]
+        fn swinger_rounds_draw_orange_then_its_slice_and_nothing_in_recovery() {
+            // RHYTHM: 180° in two 90° slices; startup 1-2, active 3-4,
+            // recovery 5-6. Far away, facing -Z, band 0.3-1.6 (defaults).
+            let at = Vec3::new(0.0, 0.0, -20.0);
+            let mut run = hit_run("", &swinger("s", (0.0, 0.0, -20.0), RHYTHM));
+            let n = sector_lines(180.0);
+            run.tick(false, &NONE);
+            let l = lines(&run, &["swings"]);
+            assert_eq!(l.len(), 2 * n);
+            assert!(l.iter().all(|l| l.color == ORANGE));
+            assert_eq!(l[0].a, at + Vec3::new(0.0, 0.3, 0.0));
+            assert_eq!(l[n].a, at + Vec3::new(0.0, 1.6, 0.0));
+            run.ticks(3, false, &NONE); // tick 4: the second slice, [0°, 90°]
+            let l = lines(&run, &["swings"]);
+            let slice = sector_lines(90.0);
+            assert_eq!(l.len(), 2 * n + 2 * slice);
+            let s = &l[2 * n..2 * n + slice];
+            assert!(s.iter().all(|l| l.color == RED));
+            let center = at + Vec3::new(0.0, 0.3, 0.0);
+            assert!(near(angle(center, &s[0]), 0.0));
+            assert!(near(angle(center, &s[1]), 90f32.to_radians()));
+            run.tick(false, &NONE); // tick 5: recovery
+            assert!(lines(&run, &["swings"]).is_empty());
+        }
+
+        #[test]
+        fn demo_scene_colliders_are_light_gray_boxes_the_stake_block_among_them() {
+            let run = Run::on(include_str!("demo.scene.ron"));
+            let l = lines(&run, &["colliders"]);
+            // Three pillars, the wall, three dummy blocks and the stake's.
+            assert_eq!(l.len(), 8 * 12);
+            assert!(l.iter().all(|l| l.color == LIGHT_GRAY));
+            // The stake at (6, 0, 2), its block 0.3 x 1.6 x 0.3 at 0.8 up.
+            for end in l[7 * 12..].iter().flat_map(|l| [l.a, l.b]) {
+                let d = end - Vec3::new(6.0, 0.8, 2.0);
+                assert!(
+                    near(d.x.abs(), 0.15) && near(d.y.abs(), 0.8) && near(d.z.abs(), 0.15),
+                    "{end}"
+                );
+            }
+        }
+
+        #[test]
+        fn lock_draws_target_crosses_and_the_range_then_the_locked_one_in_yellow() {
+            let mut run = Run::on(&scene_with("", &three_targets()));
+            run.tick(false, &NONE);
+            let l = lines(&run, &["lock"]);
+            assert_eq!(l.len(), 3 * 3 + 32);
+            assert!(l[..9].iter().all(|l| l.color == WHITE));
+            // The mid target's lock point, 1.5 m up, with a 0.3 cross.
+            let mid = Vec3::new(0.0, 1.5, -10.0);
+            assert!(near(((l[3].a + l[3].b) * 0.5).distance(mid), 0.0));
+            assert!(near(l[3].a.distance(l[3].b), 0.3));
+            assert!(
+                l[9..]
+                    .iter()
+                    .all(|l| l.color == BLUE && near(l.a.length(), 15.0))
+            );
+
+            run.hold(&[LOCK], &NONE);
+            let l = lines(&run, &["lock"]);
+            assert_eq!(l.len(), 9 + 3 + 1 + 32 + 32);
+            assert!(l[9..13].iter().all(|l| l.color == YELLOW));
+            assert!(near(l[9].a.distance(l[9].b), 0.5));
+            // The line from the camera pivot (1.5 m up) to the lock point.
+            assert_eq!(l[12].a, Vec3::new(0.0, 1.5, 0.0));
+            assert!(near(l[12].b.distance(mid), 0.0));
+            assert!(l[13..45].iter().all(|l| l.color == BLUE));
+            assert!(
+                l[45..]
+                    .iter()
+                    .all(|l| l.color == DARK_BLUE && near(l.a.length(), 20.0))
+            );
+        }
+
+        #[test]
+        fn dead_lock_target_gets_a_gray_cross() {
+            let mut run = dummy_run(r#"("hp", 3)"#);
+            press_on(&mut run, ATTACK, &[1], 2, &NONE);
+            let l = lines(&run, &["lock"]);
+            assert!(l[..3].iter().all(|l| l.color == DEAD));
+        }
+
+        #[test]
+        fn only_the_categories_given_are_drawn() {
+            let mut run = dummy_run(r#"("hp", 10)"#);
+            press_on(&mut run, ATTACK, &[1], 1, &NONE);
+            let lock_colors = [WHITE, DEAD, YELLOW, BLUE, DARK_BLUE];
+            let l = lines(&run, &["lock"]);
+            assert!(!l.is_empty());
+            assert!(l.iter().all(|l| lock_colors.contains(&l.color)));
+            assert!(lines(&run, &[]).is_empty());
+            // Every category, in their order: the hurtboxes' lines first.
+            let all = lines(&run, &crate::DEBUG_CATEGORIES);
+            assert_eq!(&all[..2 * CYLINDER], &lines(&run, &["hurtboxes"])[..]);
+            assert_eq!(
+                all.len(),
+                ["hurtboxes", "swings", "colliders", "lock"]
+                    .iter()
+                    .map(|c| lines(&run, &[*c]).len())
+                    .sum::<usize>()
+            );
+        }
+
+        #[test]
+        fn drawing_every_tick_changes_no_state() {
+            // The demo scene: walk to dummy_b locked on, attack, and stand in
+            // reach of nothing while the stake swings.
+            let input = |t: u32| -> (Vec<&'static str>, Vec<(&'static str, f32)>) {
+                match t {
+                    1 => (vec![LOCK], vec![(MOVE_Y, 1.0)]),
+                    2..=94 => (vec![], vec![(MOVE_Y, 1.0)]),
+                    100 | 115 | 190 => (vec![ATTACK], vec![]),
+                    _ => (vec![], vec![]),
+                }
+            };
+            let run_all = |draw: bool| {
+                let mut run = Run::on(include_str!("demo.scene.ron"));
+                (1..=300)
+                    .map(|t| {
+                        let (actions, axes) = input(t);
+                        let s = run.hold(&actions, &axes);
+                        if draw {
+                            assert!(!lines(&run, &crate::DEBUG_CATEGORIES).is_empty());
+                        }
+                        (s, run.game.scene().clone())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let (plain, drawn) = (run_all(false), run_all(true));
+            for (t, (a, b)) in plain.iter().zip(&drawn).enumerate() {
+                assert!(a.0 == b.0, "tick {}", t + 1);
+                assert!(a.1 == b.1, "tick {}: the scene differs", t + 1);
+            }
+        }
+    }
 }

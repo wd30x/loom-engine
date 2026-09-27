@@ -6,6 +6,7 @@
 
 use glam::Vec3;
 use loom_core::SimClock;
+use loom_core::debug::DebugDraw;
 use loom_core::input::{ActionMap, ActionState};
 use loom_scene::{Node, NodeId, Scene, SceneError};
 use serde::Serialize;
@@ -550,6 +551,15 @@ impl Game {
     pub fn events(&self) -> &[Event] {
         &self.events
     }
+
+    /// The debug draw categories: none yet (`docs/architecture.md`
+    /// section 16).
+    pub fn debug_categories() -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Draws nothing: rogue has no debug draw categories.
+    pub fn debug_draw(&self, _categories: &[&str], _draw: &mut DebugDraw) {}
 
     pub fn clock(&self) -> SimClock {
         self.clock

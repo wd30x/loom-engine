@@ -5,6 +5,7 @@
 //! simulation can run (and be tested) fully headless and deterministically.
 //! See `docs/architecture.md`.
 
+pub mod debug;
 pub mod input;
 pub mod time;
 

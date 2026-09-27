@@ -54,6 +54,11 @@ pub trait WindowApp {
     fn escape_pressed(&mut self) -> AppControl {
         AppControl::Exit
     }
+    /// F3 was pressed: toggle the debug draw. Reserved for the engine like
+    /// Escape, never a [`Key`]. Defaults to doing nothing.
+    fn debug_draw_toggled(&mut self) -> AppControl {
+        AppControl::Continue
+    }
     /// A bindable key went down or up. OS key repeats are not reported.
     fn key(&mut self, _key: Key, _down: bool) -> AppControl {
         AppControl::Continue
@@ -176,6 +181,16 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
+                        physical_key: PhysicalKey::Code(KeyCode::F3),
+                        state: ElementState::Pressed,
+                        repeat: false,
+                        ..
+                    },
+                ..
+            } => self.app.debug_draw_toggled(),
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
                         physical_key: PhysicalKey::Code(code),
                         state,
                         repeat: false,
@@ -259,7 +274,7 @@ fn client_center(size: PhysicalSize<u32>) -> PhysicalPosition<u32> {
 }
 
 /// Translates a winit key code into a bindable [`Key`]. `Escape` (reserved
-/// for quitting) and keys outside the supported range give `None`.
+/// for quitting), `F3` (the debug draw toggle) and keys outside the supported range give `None`.
 pub fn translate_key(code: KeyCode) -> Option<Key> {
     Some(match code {
         KeyCode::KeyA => Key::KeyA,
@@ -349,6 +364,11 @@ mod tests {
         assert_eq!(translate_key(KeyCode::ShiftLeft), Some(Key::ShiftLeft));
         assert_eq!(translate_key(KeyCode::Escape), None);
         assert_eq!(translate_key(KeyCode::F5), None);
+    }
+
+    #[test]
+    fn f3_is_reserved_for_the_debug_draw_and_never_a_bindable_key() {
+        assert_eq!(translate_key(KeyCode::F3), None);
     }
 
     #[test]

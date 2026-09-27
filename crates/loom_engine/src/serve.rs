@@ -20,16 +20,32 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::debug;
 use crate::games::AnyEvent;
 use crate::report::RunAdapter;
 use crate::run::save_screenshot;
 use crate::sim::{LoadedScene, Sim};
 use crate::{ServeArgs, Size};
 
+/// Closing the trace failed once every reply was sent (`quit` or the end of
+/// stdin): the process exits with an error, but writes nothing more to
+/// stdout, which only ever holds one reply per line.
+#[derive(Debug)]
+pub(crate) struct AfterReplies(pub anyhow::Error);
+
+impl std::fmt::Display for AfterReplies {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for AfterReplies {}
+
 /// Runs a session until stdin ends or a `quit` request. A bad `--scene` is
 /// an error before any request is read; after that, errors are replies and
 /// the session goes on. Only failing to read stdin or write stdout ends it
-/// with an error.
+/// with an error, or failing to close the trace at the end
+/// ([`AfterReplies`]).
 pub(crate) fn serve(args: &ServeArgs) -> Result<()> {
     let sim = match &args.scene {
         Some(path) => sim_from_file(path)?,
@@ -48,7 +64,8 @@ pub(crate) fn serve(args: &ServeArgs) -> Result<()> {
     }
     // `quit` or the end of stdin: write out the trace, if any.
     let traced = session.sim.stop_trace();
-    result.and(traced.map(|_| ()))
+    result?;
+    traced.map_err(|e| AfterReplies(e).into()).map(|_| ())
 }
 
 struct Session {
@@ -203,7 +220,21 @@ impl Session {
             }
             "screenshot" => {
                 let start = Instant::now();
-                let ScreenshotParams { path, size } = parse_params(params)?;
+                let ScreenshotParams {
+                    path,
+                    size,
+                    debug_draw,
+                } = parse_params(params)?;
+                let game = self.sim.game();
+                let categories = match debug_draw {
+                    None | Some(DebugDrawParam::All(false)) => Vec::new(),
+                    Some(DebugDrawParam::All(true)) => game.debug_categories().to_vec(),
+                    Some(DebugDrawParam::Only(names)) => {
+                        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                        debug::select(game.name(), game.debug_categories(), &names)
+                            .map_err(|e| ServeError::InvalidParams(anyhow!(e)))?
+                    }
+                };
                 let (width, height) = match size {
                     None => (self.size.width, self.size.height),
                     Some([w, h]) if w > 0 && h > 0 => (w, h),
@@ -214,7 +245,7 @@ impl Session {
                     }
                 };
                 let (path, adapter) = self
-                    .screenshot(&path, width, height)
+                    .screenshot(&path, width, height, &categories)
                     .map_err(ServeError::Engine)?;
                 let render_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 reply(
@@ -302,13 +333,14 @@ impl Session {
         path: &Path,
         width: u32,
         height: u32,
+        categories: &[&str],
     ) -> Result<(String, AdapterSummary)> {
         if self.renderer.is_none() {
             self.renderer = Some(Renderer::new_headless(width, height)?);
         }
         let renderer = self.renderer.as_mut().expect("created just above");
         renderer.resize(width, height)?;
-        self.sim.render(renderer)?;
+        self.sim.render(renderer, categories)?;
         let saved = save_screenshot(renderer, path)?;
         Ok((saved, renderer.adapter_summary()))
     }
@@ -538,6 +570,15 @@ fn one_tick() -> u64 {
 struct ScreenshotParams {
     path: PathBuf,
     size: Option<[u32; 2]>,
+    debug_draw: Option<DebugDrawParam>,
+}
+
+/// `true` for every category, `false` for none, or the names.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DebugDrawParam {
+    All(bool),
+    Only(Vec<String>),
 }
 
 #[derive(Deserialize)]

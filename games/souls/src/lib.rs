@@ -17,8 +17,8 @@ mod moves;
 pub use demo::{bindings, demo_scene};
 pub use events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
 pub use game::{
-    ATTACK, CameraState, Game, GameError, GameState, HEAVY, HurtboxState, LOCK, LOOK_X, LOOK_Y,
-    LastHit, MOVE_X, MOVE_Y, PlayerHit, PlayerState, ROLL, SwingerState,
+    ATTACK, CameraState, DEBUG_CATEGORIES, Game, GameError, GameState, HEAVY, HurtboxState, LOCK,
+    LOOK_X, LOOK_Y, LastHit, MOVE_X, MOVE_Y, PlayerHit, PlayerState, ROLL, SwingerState,
 };
 pub use health::{Condition, HealthState};
 pub use moves::{Action, AttackPhase, Buffered};

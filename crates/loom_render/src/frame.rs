@@ -25,6 +25,18 @@ pub struct Frame<'a> {
     /// same depth buffer. Unlit and alpha-tested, so the order does not
     /// change the result.
     pub sprites: &'a [SpriteDraw],
+    /// Debug lines, drawn last in this order, over everything: no depth
+    /// test. Nothing is drawn for an empty list.
+    pub lines: &'a [LineDraw],
+}
+
+/// One debug line segment in world space, 1 pixel wide, opaque.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineDraw {
+    pub a: Vec3,
+    pub b: Vec3,
+    /// Linear RGB.
+    pub color: Vec3,
 }
 
 /// How view space maps to clip space. Both look along -Z with depth 0..1.
@@ -148,9 +160,77 @@ impl GpuSprite {
     }
 }
 
+/// One end of a debug line; matches `VertexIn` in `shaders/line.wgsl`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
+pub(crate) struct LineVertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl LineVertex {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LineVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
+/// The vertices of `lines` for a line list: both ends of each, in order.
+pub(crate) fn line_vertices(lines: &[LineDraw]) -> Vec<LineVertex> {
+    lines
+        .iter()
+        .flat_map(|l| {
+            let color = l.color.to_array();
+            [l.a, l.b].map(|p| LineVertex {
+                position: p.to_array(),
+                color,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_vertices_are_both_ends_of_each_line_with_its_color() {
+        let lines = [
+            LineDraw {
+                a: Vec3::new(1.0, 2.0, 3.0),
+                b: Vec3::new(4.0, 5.0, 6.0),
+                color: Vec3::new(1.0, 0.0, 0.0),
+            },
+            LineDraw {
+                a: Vec3::ZERO,
+                b: Vec3::Y,
+                color: Vec3::new(0.2, 1.0, 0.2),
+            },
+        ];
+        let v = line_vertices(&lines);
+        assert_eq!(v.len(), 4);
+        assert_eq!(
+            (v[0].position, v[0].color),
+            ([1.0, 2.0, 3.0], [1.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            (v[1].position, v[1].color),
+            ([4.0, 5.0, 6.0], [1.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            (v[3].position, v[3].color),
+            ([0.0, 1.0, 0.0], [0.2, 1.0, 0.2])
+        );
+        // 24 bytes a vertex, as the shader's two vec3 attributes.
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&v).len(), 4 * 24);
+        assert!(line_vertices(&[]).is_empty());
+    }
 
     #[test]
     #[allow(deprecated)]

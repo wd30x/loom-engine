@@ -939,3 +939,99 @@ fn trace_starts_stops_and_starts_over_on_reset_and_load_scene() {
     assert_eq!(ticks(&a), [0, 1]);
     assert_eq!(ticks(&b), [0]);
 }
+
+// ---------------------------------------------------------------- debug draw
+
+#[test]
+fn screenshot_with_a_bad_debug_draw_is_invalid_params_before_any_rendering() {
+    // Rejected before the renderer is created: this needs no GPU. The
+    // renders themselves are checked by smoke (H10).
+    let dir = test_dir("screenshot_with_a_bad_debug_draw_is_invalid_params_before_any_rendering");
+    let shot = dir.join("never.png");
+    let path = path_str(&shot);
+    let replies = serve_in(
+        &repo_root(),
+        &[
+            req(
+                1,
+                "screenshot",
+                json!({"path": path, "debug_draw": ["lock", "hitboxes"]}),
+            ),
+            req(
+                2,
+                "screenshot",
+                json!({"path": path, "debug_draw": ["lock", "lock"]}),
+            ),
+            req(3, "screenshot", json!({"path": path, "debug_draw": "lock"})),
+            req(4, "load_scene", json!({"path": "assets/scenes/rogue.ron"})),
+            req(
+                5,
+                "screenshot",
+                json!({"path": path, "debug_draw": ["lock"]}),
+            ),
+        ],
+    );
+    let message = |reply: &Value| reply["error"]["message"].as_str().unwrap_or("").to_owned();
+    for i in [0, 1, 2, 4] {
+        assert_eq!(error_code(&replies[i]), -32602, "{}", replies[i]);
+    }
+    assert_eq!(
+        message(&replies[0]),
+        r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders" and "lock""#
+    );
+    assert_eq!(
+        message(&replies[1]),
+        r#"debug draw category "lock" is given twice"#
+    );
+    assert_eq!(
+        message(&replies[4]),
+        r#"unknown debug draw category "lock": rogue has none"#
+    );
+    assert!(!shot.exists());
+}
+
+// Windows only: elsewhere file locks are advisory and the write succeeds.
+#[cfg(windows)]
+#[test]
+fn trace_that_fails_to_close_after_quit_exits_1_without_another_stdout_line() {
+    use std::io::{BufRead, BufReader};
+
+    // Another handle locks the whole trace file while its first line is
+    // still buffered: on Windows the lock is mandatory, so writing it out
+    // at `quit` fails.
+    let dir = test_dir("trace_that_fails_to_close_after_quit_exits_1_without_another_stdout_line");
+    let trace = dir.join("t.jsonl");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .arg("serve")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the loom binary can be started");
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
+    let mut reply = String::new();
+    writeln!(
+        stdin,
+        "{}",
+        req(1, "trace", json!({"path": path_str(&trace)}))
+    )
+    .expect("loom serve reads its stdin");
+    stdout.read_line(&mut reply).expect("a reply");
+    assert!(reply.contains(r#""result":{"path""#), "{reply}");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&trace)
+        .expect("the trace file exists");
+    lock.lock().expect("the trace file can be locked");
+    writeln!(stdin, "{}", req(2, "quit", json!({}))).expect("loom serve reads its stdin");
+    drop(stdin);
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut stdout, &mut rest).expect("stdout is UTF-8");
+    let status = child.wait().expect("loom serve can be waited for");
+    drop(lock);
+    assert_eq!(rest, "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n");
+    assert_eq!(status.code(), Some(1));
+}

@@ -8,7 +8,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec3};
 use loom_render::{
-    DirectionalLight, DrawItem, Frame, Projection, RenderError, Renderer, SpriteDraw,
+    DirectionalLight, DrawItem, Frame, LineDraw, Projection, RenderError, Renderer, SpriteDraw,
 };
 use loom_scene::{NodeId, Scene};
 
@@ -17,13 +17,15 @@ use crate::report::ViewReport;
 use crate::run::{millis_since, save_screenshot};
 use crate::sheet::Sheets;
 
-/// Draws `scene` from its camera. `sheets` must have been loaded for `scene`
-/// ([`Sheets::load`]) and only ever be drawn with `renderer`. Returns
-/// `false` if the frame was skipped (zero render size).
+/// Draws `scene` from its camera, with the debug `lines` on top. `sheets`
+/// must have been loaded for `scene` ([`Sheets::load`]) and only ever be
+/// drawn with `renderer`. Returns `false` if the frame was skipped (zero
+/// render size).
 pub(crate) fn render_scene(
     renderer: &mut Renderer,
     scene: &Scene,
     sheets: &mut Sheets,
+    lines: &[LineDraw],
 ) -> Result<bool, RenderError> {
     let draws = mesh_draws(scene);
     let sprites = sprite_draws(renderer, scene, sheets)?;
@@ -57,6 +59,7 @@ pub(crate) fn render_scene(
         light,
         draws: &draws,
         sprites: &sprites,
+        lines,
     })
 }
 
@@ -162,7 +165,7 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
         Sheets::load(&scene).with_context(|| format!("invalid scene {}", path.display()))?;
     let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
     let renderer_init_ms = millis_since(started);
-    render_scene(&mut renderer, &scene, &mut sheets)?;
+    render_scene(&mut renderer, &scene, &mut sheets, &[])?;
     let screenshot = save_screenshot(&renderer, &args.screenshot)?;
     let adapter = renderer.adapter_summary();
     renderer.shutdown();

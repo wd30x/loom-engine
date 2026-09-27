@@ -5,6 +5,7 @@
 
 use anyhow::{Result, bail};
 use loom_core::SimClock;
+use loom_core::debug::DebugDraw;
 use loom_core::input::{ActionMap, ActionState};
 use loom_scene::Scene;
 use serde::Serialize;
@@ -115,6 +116,23 @@ impl AnyGame {
         match self {
             Self::Souls(game) => game.tick(input),
             Self::Rogue(game) => game.tick(input),
+        }
+    }
+
+    /// The game's debug draw categories, in its order.
+    pub fn debug_categories(&self) -> &'static [&'static str] {
+        match self {
+            Self::Souls(_) => souls::Game::debug_categories(),
+            Self::Rogue(_) => rogue::Game::debug_categories(),
+        }
+    }
+
+    /// Draws the `categories` given (the game's names) for the current
+    /// state. Changes nothing.
+    pub fn debug_draw(&self, categories: &[&str], draw: &mut DebugDraw) {
+        match self {
+            Self::Souls(game) => game.debug_draw(categories, draw),
+            Self::Rogue(game) => game.debug_draw(categories, draw),
         }
     }
 

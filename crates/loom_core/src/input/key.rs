@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// `code` for them.
 ///
 /// `Escape` is deliberately absent: it is reserved for quitting the engine
-/// and cannot be bound.
+/// and cannot be bound. So is `F3`, which toggles the debug draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Key {
     KeyA,

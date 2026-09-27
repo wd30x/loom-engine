@@ -59,7 +59,8 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
         Some(path) => {
             let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
             let init_ms = millis_since(started);
-            sim.render(&mut renderer)?;
+            let debug = sim.debug_draw().map(<[_]>::to_vec).unwrap_or_default();
+            sim.render(&mut renderer, &debug)?;
             let saved = save_screenshot(&renderer, path)?;
             let adapter = renderer.adapter_summary();
             renderer.shutdown();
@@ -81,6 +82,7 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
         input: sim.input_report(),
         scene: sim.scene_path(),
         game: sim.game().name(),
+        debug_draw: sim.debug_draw().map(<[_]>::to_vec),
         reloads: 0,
         reload_errors: 0,
         adapter,
@@ -126,6 +128,11 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
     let watcher = sim
         .scene_source()
         .map(|src| SceneWatcher::new(Instant::now(), modified, src.to_owned()));
+    // F3 switches between these and none; on at start with --debug-draw.
+    let (debug_categories, debug_on) = match sim.debug_draw() {
+        Some(categories) => (categories.to_vec(), true),
+        None => (sim.game().debug_categories().to_vec(), false),
+    };
     let mut app = WindowRun {
         args,
         started,
@@ -136,6 +143,9 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
         watcher,
         reloads: 0,
         reload_errors: 0,
+        debug_categories,
+        debug_on,
+        drawn_debug: false,
         timestep: FixedTimestep::new(),
         last_frame: None,
         frames: 0,
@@ -182,6 +192,7 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
         input: app.sim.input_report(),
         scene: app.sim.scene_path(),
         game: app.sim.game().name(),
+        debug_draw: app.sim.debug_draw().map(<[_]>::to_vec),
         reloads: app.reloads,
         reload_errors: app.reload_errors,
         adapter: Some(adapter.into()),
@@ -203,6 +214,12 @@ struct WindowRun<'a> {
     watcher: Option<SceneWatcher>,
     reloads: u64,
     reload_errors: u64,
+    /// The categories F3 turns on and off.
+    debug_categories: Vec<&'static str>,
+    /// Whether the debug draw is on now.
+    debug_on: bool,
+    /// Whether the last rendered frame had the debug draw on.
+    drawn_debug: bool,
     timestep: FixedTimestep,
     last_frame: Option<Instant>,
     /// Frames actually rendered (minimized frames are not counted).
@@ -258,6 +275,21 @@ impl WindowRun<'_> {
         let Some(path) = &args.screenshot else {
             return AppControl::Exit;
         };
+        // F3 pressed after the last frame: the screenshot shows it anyway.
+        if self.has_frame
+            && self.drawn_debug != self.debug_on
+            && let Some(renderer) = &mut self.renderer
+        {
+            let categories: &[&str] = if self.debug_on {
+                &self.debug_categories
+            } else {
+                &[]
+            };
+            match self.sim.render(renderer, categories) {
+                Ok(_) => self.drawn_debug = self.debug_on,
+                Err(e) => return self.fail(e.into()),
+            }
+        }
         match &self.renderer {
             Some(renderer) if self.has_frame => match save_screenshot(renderer, path) {
                 Ok(saved) => self.screenshot = Some(saved),
@@ -331,9 +363,15 @@ impl WindowRun<'_> {
             .renderer
             .as_mut()
             .expect("checked at the top of frame()");
-        if !self.sim.render(renderer)? {
+        let categories: &[&str] = if self.debug_on {
+            &self.debug_categories
+        } else {
+            &[]
+        };
+        if !self.sim.render(renderer, categories)? {
             return Ok(AppControl::Continue);
         }
+        self.drawn_debug = self.debug_on;
         self.frames += 1;
         self.has_frame = true;
         let (w, h) = renderer.size();
@@ -394,6 +432,12 @@ impl WindowApp for WindowRun<'_> {
 
     fn escape_pressed(&mut self) -> AppControl {
         self.finish()
+    }
+
+    fn debug_draw_toggled(&mut self) -> AppControl {
+        self.debug_on = !self.debug_on;
+        log::info!("debug draw {}", if self.debug_on { "on" } else { "off" });
+        AppControl::Continue
     }
 
     fn key(&mut self, key: Key, down: bool) -> AppControl {

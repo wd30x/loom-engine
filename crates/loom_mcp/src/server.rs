@@ -23,7 +23,10 @@ and `step` to advance time, then `state` (JSON state dump) or `screenshot` (PNG,
 inline and saved to a file). Time only advances on `step`, in fixed 1/60 s ticks, so the \
 same calls always give the same results. `record` writes the input so far as a script that \
 `loom run --headless --frames <tick> --input <script> --dump-state <file>` replays to the \
-same state, which makes a regression test. Relative paths are relative to the repository root.";
+same state, which makes a regression test. `step` also returns the events of the ticks it \
+ran (hits, dropped presses, actions starting and ending, ...); `trace` writes every tick's events \
+and full state to a JSONL file; `screenshot` can overlay debug wireframes (`debug_draw`: hit \
+shapes, attack sectors, colliders, lock-on). Relative paths are relative to the repository root.";
 
 /// The first line of a result after the previous session died.
 const NEW_SESSION_NOTE: &str = "note: new loom session, tick starts at 0";
@@ -78,6 +81,19 @@ pub struct ScreenshotArgs {
     /// [width, height] in pixels. Default: the session's size (1280x720 unless configured).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<[u32; 2]>,
+    /// Debug wireframes drawn over the image, on top of everything: true for every category
+    /// of the game, false (the default) for none, or a list of category names (souls:
+    /// "hurtboxes", "swings", "colliders", "lock").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_draw: Option<DebugDrawArg>,
+}
+
+/// `true`, `false`, or category names.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum DebugDrawArg {
+    All(bool),
+    Only(Vec<String>),
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

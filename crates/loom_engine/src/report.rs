@@ -27,6 +27,9 @@ pub(crate) struct RunReport {
     pub scene: Option<String>,
     /// Which game ran: the scene's top-level `game`, `"souls"` or `"rogue"`.
     pub game: &'static str,
+    /// `--debug-draw`: the categories it turned on, in the game's order;
+    /// `None` without it. What was given, whatever F3 did.
+    pub debug_draw: Option<Vec<&'static str>>,
     /// Successful scene hot reloads (window mode with `--scene` only).
     pub reloads: u64,
     /// Scene reloads that failed to parse or validate.
@@ -162,6 +165,7 @@ mod tests {
             }),
             scene: None,
             game: "souls",
+            debug_draw: None,
             reloads: 0,
             reload_errors: 0,
             adapter,
@@ -178,7 +182,7 @@ mod tests {
         }));
         assert_eq!(
             serde_json::to_string(&report).unwrap(),
-            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"trace":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"game":"souls","reloads":0,"reload_errors":0,"adapter":{"name":"gpu","backend":"Dx12","driver":"d"},"renderer_init_ms":null}"#
+            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"trace":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"game":"souls","debug_draw":null,"reloads":0,"reload_errors":0,"adapter":{"name":"gpu","backend":"Dx12","driver":"d"},"renderer_init_ms":null}"#
         );
     }
 
@@ -186,7 +190,7 @@ mod tests {
     fn report_without_gpu_has_null_adapter() {
         assert_eq!(
             serde_json::to_string(&headless_report(None)).unwrap(),
-            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"trace":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"game":"souls","reloads":0,"reload_errors":0,"adapter":null,"renderer_init_ms":null}"#
+            r#"{"status":"ok","mode":"headless","frames":60,"ticks":60,"sim_time":1.0,"size":[1280,720],"screenshot":null,"state":"out/s.json","record":null,"trace":null,"input":{"path":"in.ron","events":3,"applied":2},"scene":null,"game":"souls","debug_draw":null,"reloads":0,"reload_errors":0,"adapter":null,"renderer_init_ms":null}"#
         );
     }
 }

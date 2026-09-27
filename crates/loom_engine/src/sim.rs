@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use loom_core::debug::DebugDraw;
 use loom_core::input::{
     ActionMap, ActionState, InputCollector, InputRecorder, InputScript, Key, ScriptPlayer,
     TickInput, canonical_axis_value,
@@ -14,6 +15,7 @@ use loom_render::{RenderError, Renderer};
 use loom_scene::Scene;
 
 use crate::RunArgs;
+use crate::debug;
 use crate::games::AnyGame;
 use crate::output::ensure_parent_dir;
 use crate::report::{InputReport, TraceReport};
@@ -74,6 +76,8 @@ pub(crate) struct Sim {
     recorder: Option<InputRecorder>,
     /// `--trace`, or serve's `trace`: a line after every tick.
     trace: Option<Trace>,
+    /// `--debug-draw`: the categories it turned on; `None` without it.
+    debug_draw: Option<Vec<&'static str>>,
     /// `--scene` as given; `None` for the built-in scene.
     scene_path: Option<String>,
     /// Source text of the scene as loaded (`--scene`, or a scene a serve
@@ -94,6 +98,15 @@ impl Sim {
                 (loaded, Some(src))
             }
             None => (LoadedScene::builtin()?, None),
+        };
+        // The categories are the game's, so they are checked after the scene.
+        let debug_draw = match &args.debug_draw {
+            Some(value) => Some(debug::select_cli(
+                loaded.game.name(),
+                loaded.game.debug_categories(),
+                value.as_deref(),
+            )?),
+            None => None,
         };
         // The script names this game's actions, so it is read after the scene.
         let bindings = loaded.game.bindings();
@@ -117,6 +130,7 @@ impl Sim {
             source,
             recorder: args.record.is_some().then(InputRecorder::new),
             trace: None,
+            debug_draw,
             scene_path: args.scene.as_ref().map(|p| p.display().to_string()),
             scene_source,
         };
@@ -143,6 +157,7 @@ impl Sim {
             source: InputSource::Held(TickInput::default()),
             recorder: Some(InputRecorder::new()),
             trace: None,
+            debug_draw: None,
             scene_path,
             scene_source,
         }
@@ -305,10 +320,25 @@ impl Sim {
     }
 
     /// Draws the current state with `renderer`, which must be the only
-    /// renderer this `Sim` ever draws with (it owns the sheets' textures).
+    /// renderer this `Sim` ever draws with (it owns the sheets' textures),
+    /// with the debug draw of `categories` (the game's names) on top.
     /// Returns `false` if the frame was skipped (zero render size).
-    pub fn render(&mut self, renderer: &mut Renderer) -> Result<bool, RenderError> {
-        render_scene(renderer, self.game.scene(), &mut self.sheets)
+    pub fn render(
+        &mut self,
+        renderer: &mut Renderer,
+        categories: &[&str],
+    ) -> Result<bool, RenderError> {
+        let mut draw = DebugDraw::new();
+        if !categories.is_empty() {
+            self.game.debug_draw(categories, &mut draw);
+        }
+        let lines = debug::line_draws(draw.lines());
+        render_scene(renderer, self.game.scene(), &mut self.sheets, &lines)
+    }
+
+    /// `--debug-draw`: the categories it turned on; `None` without it.
+    pub fn debug_draw(&self) -> Option<&[&'static str]> {
+        self.debug_draw.as_deref()
     }
 
     pub fn bindings(&self) -> &ActionMap {

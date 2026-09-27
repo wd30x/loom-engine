@@ -97,7 +97,7 @@ public static class SmokeImage {
 $WM_KEYDOWN = 0x0100; $WM_KEYUP = 0x0101; $WM_CLOSE = 0x0010
 $SW_MINIMIZE = 6; $SW_RESTORE = 9
 # Virtual-key code and scan code; winit reads the physical key from the scan code.
-$keyCodes = @{ W = @(0x57, 0x11); A = @(0x41, 0x1E); D = @(0x44, 0x20); L = @(0x4C, 0x26); Q = @(0x51, 0x10); Space = @(0x20, 0x39); Esc = @(0x1B, 0x01) }
+$keyCodes = @{ W = @(0x57, 0x11); A = @(0x41, 0x1E); D = @(0x44, 0x20); L = @(0x4C, 0x26); Q = @(0x51, 0x10); Space = @(0x20, 0x39); F3 = @(0x72, 0x3D); Esc = @(0x1B, 0x01) }
 # opengl32.dll is not listed: like dxgi.dll it is a static import of loom.exe
 # (wgpu's GL backend links it), so it is always loaded. It is only the GL
 # loader; the actual GL driver DLL is caught by the vendor prefixes below.
@@ -550,6 +550,35 @@ Test-Check 'H9' 'rogue run moves, fights and leaves a corpse' {
     Assert-TileCell "$out/h9.png" 192 128 $floor $null 'start cell (column 3, row 2)'
 }
 
+Test-Check 'H10' 'debug draw screenshots are byte-identical, differ from plain ones, and serve draws the same' {
+    Assert-True (Test-Path "$out/h1_a.png") 'no screenshot from H1'
+    foreach ($n in 'a', 'b') {
+        $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--debug-draw', '--screenshot', "$out/h10_$n.png")
+        Assert-ExitOk $r
+        Assert-True (($r.Json.debug_draw -join ',') -eq 'hurtboxes,swings,colliders,lock') "debug_draw is $($r.Json.debug_draw -join ',')"
+    }
+    Assert-SameBytes "$out/h10_a.png" "$out/h10_b.png"
+    Assert-True ((Get-FileHash "$out/h10_a.png").Hash -ne (Get-FileHash "$out/h1_a.png").Hash) 'the debug draw changed nothing'
+    $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--debug-draw=colliders', '--screenshot', "$out/h10_colliders.png")
+    Assert-ExitOk $r
+    $requests = @(
+        '{"jsonrpc":"2.0","id":1,"method":"step","params":{"ticks":60}}'
+        "{`"jsonrpc`":`"2.0`",`"id`":2,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h10_serve_all.png`",`"debug_draw`":true}}"
+        "{`"jsonrpc`":`"2.0`",`"id`":3,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h10_serve_off.png`",`"debug_draw`":false}}"
+        "{`"jsonrpc`":`"2.0`",`"id`":4,`"method`":`"screenshot`",`"params`":{`"path`":`"$out/h10_serve_colliders.png`",`"debug_draw`":[`"colliders`"]}}"
+        '{"jsonrpc":"2.0","id":5,"method":"quit"}'
+    )
+    $lines = @($requests | & $exe serve 2>$null)
+    Assert-True ($LASTEXITCODE -eq 0) "loom serve exit code $LASTEXITCODE"
+    foreach ($line in $lines) {
+        Assert-True ($null -eq ($line | ConvertFrom-Json).PSObject.Properties['error']) "error reply: $line"
+    }
+    Assert-SameBytes "$out/h10_a.png" "$out/h10_serve_all.png"
+    Assert-SameBytes "$out/h1_a.png" "$out/h10_serve_off.png"
+    Assert-SameBytes "$out/h10_colliders.png" "$out/h10_serve_colliders.png"
+    $script:detail = "sha256 $((Get-FileHash "$out/h10_a.png").Hash)"
+}
+
 # ---------------------------------------------------------------- W: window
 
 if (-not $HeadlessOnly) {
@@ -851,6 +880,32 @@ if (-not $HeadlessOnly) {
         $script:detail = "$tick ticks, events: $($types -join ' ')"
         Assert-True ($types -contains 'lock') 'no lock event in the trace'
         Assert-True ($types -contains 'action_start') 'no action_start event in the trace'
+    }
+
+    Test-Check 'W12' 'F3 turns the debug draw on as headless --debug-draw draws it, and is not recorded' {
+        $run = Start-LoomWindow 'w12' @('--record', "$out/w12.ron", '--dump-state', "$out/w12.json", '--screenshot', "$out/w12.png")
+        try {
+            Start-Sleep -Milliseconds 700
+            Send-Key $run 'F3' $true; Send-Key $run 'F3' $false
+            Start-Sleep -Milliseconds 500
+            Send-Key $run 'Esc' $true
+            $r = Wait-Loom $run
+            Assert-ExitOk $r
+        } finally {
+            Stop-Loom $run
+        }
+        Assert-True ($null -eq $r.Json.debug_draw) "debug_draw is $($r.Json.debug_draw), expected null without --debug-draw"
+        $recording = Get-Content "$out/w12.ron" -Raw
+        Assert-True ($recording -match 'events: \[\]') "the recording has events: $recording"
+        $tick = (Get-Content "$out/w12.json" -Raw | ConvertFrom-Json).tick
+        $size = "$($r.Json.size[0])x$($r.Json.size[1])"
+        $h = Invoke-Loom @('run', '--headless', '--frames', "$tick", '--input', "$out/w12.ron", '--size', $size, '--debug-draw', '--screenshot', "$out/w12_replay.png")
+        Assert-ExitOk $h
+        Assert-SameBytes "$out/w12.png" "$out/w12_replay.png"
+        $p = Invoke-Loom @('run', '--headless', '--frames', "$tick", '--input', "$out/w12.ron", '--size', $size, '--screenshot', "$out/w12_plain.png")
+        Assert-ExitOk $p
+        Assert-True ((Get-FileHash "$out/w12.png").Hash -ne (Get-FileHash "$out/w12_plain.png").Hash) 'F3 changed nothing in the window'
+        $script:detail = "$tick ticks, $size"
     }
 }
 

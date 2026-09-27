@@ -4,6 +4,7 @@
 //! `loom serve`, whose stdout is one JSON-RPC reply per line; logs go to
 //! stderr.
 
+mod debug;
 mod games;
 mod output;
 mod reload;
@@ -74,6 +75,10 @@ pub(crate) struct RunArgs {
     /// Load a scene file instead of the built-in demo scene.
     #[arg(long, value_name = "PATH")]
     scene: Option<PathBuf>,
+    /// Draw debug wireframes over the frame: every category of the game, or
+    /// only the comma-separated ones given. F3 toggles them in a window.
+    #[arg(long, value_name = "CATEGORIES", num_args = 0..=1, require_equals = true)]
+    debug_draw: Option<Option<String>>,
     /// Window mode: do not capture the mouse (no lock, pointer stays visible)
     /// and ignore mouse motion, so axes come from keys only.
     #[arg(long, conflicts_with = "headless")]
@@ -157,6 +162,18 @@ fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        // A bad --debug-draw is only found once the scene says which game
+        // runs; it is still an argument error.
+        // The replies are out: stdout gets nothing more.
+        Err(e) if e.downcast_ref::<serve::AfterReplies>().is_some() => {
+            log::error!("{e:#}");
+            ExitCode::from(1)
+        }
+        Err(e) if e.downcast_ref::<debug::DebugDrawError>().is_some() => {
+            log::error!("{e:#}");
+            report::emit(&ErrorReport::new(&format!("{e:#}")));
+            ExitCode::from(2)
+        }
         Err(e) => {
             log::error!("{e:#}");
             report::emit(&ErrorReport::new(&format!("{e:#}")));

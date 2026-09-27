@@ -274,3 +274,35 @@ fn trace_tool_starts_a_trace_file_and_stops_it_without_a_path() {
     );
     assert_eq!(mcp.close(), 0);
 }
+
+#[test]
+fn screenshot_tool_takes_debug_draw_as_true_or_names_and_forwards_it() {
+    let loom = loom_exe();
+    let mut mcp = Mcp::start(&loom);
+    let list = mcp.request("tools/list", json!({}));
+    let screenshot = list["result"]["tools"]
+        .as_array()
+        .expect("tools is an array")
+        .iter()
+        .find(|t| t["name"] == "screenshot")
+        .expect("a screenshot tool");
+    let schema = screenshot["inputSchema"].to_string();
+    assert!(schema.contains("debug_draw"), "{schema}");
+    assert!(
+        schema.contains("boolean") && schema.contains("array"),
+        "{schema}"
+    );
+    // A bad name reaches loom serve, which rejects it before rendering:
+    // no GPU needed.
+    let path = std::env::temp_dir().join("loom-mcp-tests-never.png");
+    let (is_error, text) = mcp.call(
+        "screenshot",
+        json!({"path": path, "debug_draw": ["hitboxes"]}),
+    );
+    assert!(is_error, "{text}");
+    assert!(
+        text.starts_with(r#"error -32602: unknown debug draw category "hitboxes""#),
+        "{text}"
+    );
+    assert_eq!(mcp.close(), 0);
+}
