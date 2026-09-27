@@ -2465,6 +2465,201 @@
               },
               "unit": "ticks",
               "description": "The most ticks one approach walks."
+            },
+            {
+              "name": "approach_weight_max",
+              "default": 4.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "weight",
+              "description": "The most the approach's weight can be; 0 never approaches."
+            },
+            {
+              "name": "phase2_at",
+              "default": null,
+              "rule": {
+                "kind": "between",
+                "min": 0.0,
+                "max": 1.0
+              },
+              "unit": "fraction of full health",
+              "description": "Makes a phase 2: entered, roaring, once a hit leaves at most this much of its full health."
+            },
+            {
+              "name": "phase2_speed_scale",
+              "default": 0.75,
+              "rule": {
+                "kind": "positive_at_most",
+                "max": 1.0
+              },
+              "unit": "time scale",
+              "description": "Phase 2: startups, the combo's gap and the rest times this, rounded; walking, turning and tracking divided by it."
+            },
+            {
+              "name": "phase2_combo_hits",
+              "default": 4.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "cuts",
+              "description": "Phase 2: how many cuts the combo has."
+            },
+            {
+              "name": "roar_ticks",
+              "default": 70.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "How long the roar on entering phase 2 lasts, invulnerable."
+            },
+            {
+              "name": "roar_blast_tick",
+              "default": 20.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "tick",
+              "description": "The tick of the roar with the blast all around; at most roar_ticks."
+            },
+            {
+              "name": "roar_damage",
+              "default": 30.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Health the blast takes off the character."
+            },
+            {
+              "name": "roar_impact",
+              "default": 40.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "What the blast adds up against the character's poise."
+            },
+            {
+              "name": "roar_reach",
+              "default": 4.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "The radius of the blast."
+            },
+            {
+              "name": "spin_damage",
+              "default": 40.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Spin, a full turn on the spot, only in phase 2: health each hit takes off the character."
+            },
+            {
+              "name": "spin_impact",
+              "default": 40.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "Spin, a full turn on the spot, only in phase 2: what each hit adds up against the character's poise."
+            },
+            {
+              "name": "spin_startup_ticks",
+              "default": 50.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Spin, a full turn on the spot, only in phase 2: the warning before the swing, turning to the character at track_speed."
+            },
+            {
+              "name": "spin_active_ticks",
+              "default": 12.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Spin, a full turn on the spot, only in phase 2: the swing (for a combo, each cut's)."
+            },
+            {
+              "name": "spin_recovery_ticks",
+              "default": 40.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Spin, a full turn on the spot, only in phase 2: after the swing (for a combo, the last cut's)."
+            },
+            {
+              "name": "spin_reach",
+              "default": 3.5,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Spin, a full turn on the spot, only in phase 2: radius of the swept sector."
+            },
+            {
+              "name": "spin_arc",
+              "default": 360.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Spin, a full turn on the spot, only in phase 2: angle swept, right to left, centered on the facing."
+            },
+            {
+              "name": "spin_min_range",
+              "default": 0.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Spin, a full turn on the spot, only in phase 2: chosen only with the character at least this far, horizontally."
+            },
+            {
+              "name": "spin_max_range",
+              "default": 3.5,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Spin, a full turn on the spot, only in phase 2: chosen only with the character at most this far; at least min_range."
+            },
+            {
+              "name": "spin_weight",
+              "default": 2.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "weight",
+              "description": "Spin, a full turn on the spot, only in phase 2: how likely it is chosen, against the weights of the other moves in range; 0: never."
+            },
+            {
+              "name": "spin_track_speed",
+              "default": 0.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "degrees per second",
+              "description": "Spin, a full turn on the spot, only in phase 2: how fast the enemy turns to the character during the startup."
             }
           ],
           "requires": [
@@ -2472,17 +2667,19 @@
             "hp: needs hurt_radius and hurt_height",
             "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
             "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, swing_high: need swing_damage",
-            "every enemy_*, sweep_*, cleave_*, lunge_*, combo_* and approach_* prop but enemy_speed: needs enemy_speed"
+            "every enemy_*, sweep_*, cleave_*, lunge_*, combo_*, approach_*, phase2_*, roar_* and spin_* prop but enemy_speed: needs enemy_speed",
+            "phase2_speed_scale, phase2_combo_hits, roar_ticks, roar_blast_tick, roar_damage, roar_impact, roar_reach: need phase2_at"
           ],
           "constraints": [
             "a swinger: swing_low < swing_high",
             "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
             "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
             "a swinger or an enemy: its child named arm, if any, needs a mesh",
-            "an enemy (a node with enemy_speed): <move>_min_range <= <move>_max_range for sweep, cleave, lunge and combo",
+            "an enemy (a node with enemy_speed): <move>_min_range <= <move>_max_range for sweep, cleave, lunge, combo and spin",
+            "an enemy: roar_blast_tick <= roar_ticks",
             "an enemy: enemy_swing_low < enemy_swing_high",
             "an enemy needs hurt_radius, hurt_height, hp and lock_height, and is not a swinger",
-            "an enemy: enemy_speed / 60 and lunge_distance / lunge_active_ticks are less than hurt_radius",
+            "an enemy: enemy_speed / 60, lunge_distance / lunge_active_ticks and, with phase2_at, enemy_speed / 60 / phase2_speed_scale are less than hurt_radius",
             "an enemy has no collider in its subtree"
           ]
         }
@@ -2666,6 +2863,11 @@
                 "description": "Lying dead: its hurtbox's health says so.",
                 "type": "string",
                 "const": "dead"
+              },
+              {
+                "description": "Roaring on entering phase 2: invulnerable, with a blast around it.",
+                "type": "string",
+                "const": "roar"
               }
             ]
           },
@@ -2702,7 +2904,7 @@
                 ]
               },
               "move_tick": {
-                "description": "Which tick of the move, from 1; 0 outside `attack`.",
+                "description": "Which tick of the move or roar, from 1; 0 outside `attack` and\n`roar`.",
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
@@ -2712,7 +2914,7 @@
                 "type": "string"
               },
               "phase": {
-                "description": "The part of the move; the wait between two cuts of a combo is\n`startup`. `None` outside `attack`.",
+                "description": "The part of the move; the wait between two cuts of a combo is\n`startup`. In a roar: `startup` before the blast, `active` on its\ntick, then `recovery`. `None` outside `attack` and `roar`.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/AttackPhase"
@@ -2734,12 +2936,20 @@
                 "format": "uint64",
                 "minimum": 0
               },
+              "stage": {
+                "description": "1, or 2 from its health falling to `phase2_at` until it dies.",
+                "type": "integer",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0
+              },
               "state": {
                 "$ref": "#/$defs/EnemyCondition"
               }
             },
             "required": [
               "node",
+              "stage",
               "state",
               "move",
               "move_tick",
@@ -2930,6 +3140,11 @@
                 "description": "Several cuts in a row, every other one left to right.",
                 "type": "string",
                 "const": "combo"
+              },
+              {
+                "description": "A full turn on the spot, a 360° sweep; only in phase 2.",
+                "type": "string",
+                "const": "spin"
               }
             ]
           },
@@ -3316,7 +3531,8 @@
                   "sweep",
                   "cleave",
                   "lunge",
-                  "combo"
+                  "combo",
+                  "spin"
                 ]
               },
               {
@@ -3358,6 +3574,11 @@
                 "description": "Lying dead: its hurtbox's health says so.",
                 "type": "string",
                 "const": "dead"
+              },
+              {
+                "description": "Roaring on entering phase 2: invulnerable, with a blast around it.",
+                "type": "string",
+                "const": "roar"
               }
             ]
           },
@@ -3394,7 +3615,7 @@
                 ]
               },
               "move_tick": {
-                "description": "Which tick of the move, from 1; 0 outside `attack`.",
+                "description": "Which tick of the move or roar, from 1; 0 outside `attack` and\n`roar`.",
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
@@ -3404,7 +3625,7 @@
                 "type": "string"
               },
               "phase": {
-                "description": "The part of the move; the wait between two cuts of a combo is\n`startup`. `None` outside `attack`.",
+                "description": "The part of the move; the wait between two cuts of a combo is\n`startup`. In a roar: `startup` before the blast, `active` on its\ntick, then `recovery`. `None` outside `attack` and `roar`.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/AttackPhase"
@@ -3426,12 +3647,20 @@
                 "format": "uint64",
                 "minimum": 0
               },
+              "stage": {
+                "description": "1, or 2 from its health falling to `phase2_at` until it dies.",
+                "type": "integer",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0
+              },
               "state": {
                 "$ref": "#/$defs/EnemyCondition"
               }
             },
             "required": [
               "node",
+              "stage",
               "state",
               "move",
               "move_tick",
@@ -3732,6 +3961,32 @@
                   "distance",
                   "candidates"
                 ]
+              },
+              {
+                "description": "An enemy entered a stage (step 4), right after the hit that took it\nthere; it roars.",
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "description": "The enemy's node path.",
+                    "type": "string"
+                  },
+                  "stage": {
+                    "description": "Always 2.",
+                    "type": "integer",
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "stage"
+                  }
+                },
+                "required": [
+                  "type",
+                  "by",
+                  "stage"
+                ]
               }
             ]
           },
@@ -3823,15 +4078,25 @@
           },
           "HitAttack": {
             "description": "What hit: the character's light or heavy attack, a swinger, or an\nenemy's move.",
-            "type": "string",
-            "enum": [
-              "attack",
-              "heavy",
-              "swing",
-              "sweep",
-              "cleave",
-              "lunge",
-              "combo"
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "attack",
+                  "heavy",
+                  "swing",
+                  "sweep",
+                  "cleave",
+                  "lunge",
+                  "combo",
+                  "spin"
+                ]
+              },
+              {
+                "description": "The blast of an enemy's roar on entering phase 2.",
+                "type": "string",
+                "const": "roar"
+              }
             ]
           },
           "HurtboxState": {
@@ -3964,6 +4229,11 @@
                 "description": "Several cuts in a row, every other one left to right.",
                 "type": "string",
                 "const": "combo"
+              },
+              {
+                "description": "A full turn on the spot, a 360° sweep; only in phase 2.",
+                "type": "string",
+                "const": "spin"
               }
             ]
           },
@@ -4534,6 +4804,32 @@
               "distance",
               "candidates"
             ]
+          },
+          {
+            "description": "An enemy entered a stage (step 4), right after the hit that took it\nthere; it roars.",
+            "type": "object",
+            "properties": {
+              "by": {
+                "description": "The enemy's node path.",
+                "type": "string"
+              },
+              "stage": {
+                "description": "Always 2.",
+                "type": "integer",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "stage"
+              }
+            },
+            "required": [
+              "type",
+              "by",
+              "stage"
+            ]
           }
         ],
         "$defs": {
@@ -4635,7 +4931,8 @@
                   "sweep",
                   "cleave",
                   "lunge",
-                  "combo"
+                  "combo",
+                  "spin"
                 ]
               },
               {
@@ -4647,15 +4944,25 @@
           },
           "HitAttack": {
             "description": "What hit: the character's light or heavy attack, a swinger, or an\nenemy's move.",
-            "type": "string",
-            "enum": [
-              "attack",
-              "heavy",
-              "swing",
-              "sweep",
-              "cleave",
-              "lunge",
-              "combo"
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "attack",
+                  "heavy",
+                  "swing",
+                  "sweep",
+                  "cleave",
+                  "lunge",
+                  "combo",
+                  "spin"
+                ]
+              },
+              {
+                "description": "The blast of an enemy's roar on entering phase 2.",
+                "type": "string",
+                "const": "roar"
+              }
             ]
           },
           "Input": {

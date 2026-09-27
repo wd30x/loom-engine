@@ -153,6 +153,28 @@
                 ("approach_min_range", 2),       // meters: walking up is a choice only farther than this
                 ("approach_weight_per_meter", 2), // its weight: this per meter beyond, rounded down
                 ("approach_ticks", 30),          // the most ticks one walk up lasts
+                ("approach_weight_max", 4),      // ... and the most its weight can be
+                // Phase 2, from half its health on: a roar, then faster, with the spin.
+                ("phase2_at", 0.5),              // the fraction of full health a hit takes it down to
+                ("phase2_speed_scale", 0.75),    // startups, gaps and the rest times this; speeds divided by it
+                ("phase2_combo_hits", 4),        // cuts in the combo in phase 2
+                ("roar_ticks", 70),              // the roar entering phase 2, invulnerable
+                ("roar_blast_tick", 20),         // the tick of the roar with the blast all around
+                ("roar_damage", 30),             // hp the blast takes off the character
+                ("roar_impact", 40),             // added up against the character's poise
+                ("roar_reach", 4),               // meters: radius of the blast
+                // Spin: a full turn on the spot, only in phase 2.
+                ("spin_damage", 40),             // hp each hit takes off the character
+                ("spin_impact", 40),             // added up against the character's poise
+                ("spin_startup_ticks", 50),      // the warning before the swing, the arm out in orange
+                ("spin_active_ticks", 12),       // the swing, all the way around
+                ("spin_recovery_ticks", 40),     // after the swing
+                ("spin_reach", 3.5),             // meters: radius of the swept circle
+                ("spin_arc", 360),               // degrees swept, right to left, from behind
+                ("spin_min_range", 0),           // meters: chosen only with the character at least this far
+                ("spin_max_range", 3.5),         // meters: ... and at most this far
+                ("spin_weight", 2),              // how likely it is chosen among the moves in range
+                ("spin_track_speed", 0),         // degrees per second it turns to the character during startup
             ],
             children: [
                 (name: "body", mesh: Capsule(radius: 0.7, height: 3.0), color: (0.28, 0.24, 0.3)),

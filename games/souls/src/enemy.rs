@@ -21,11 +21,19 @@ pub enum MoveKind {
     Lunge,
     /// Several cuts in a row, every other one left to right.
     Combo,
+    /// A full turn on the spot, a 360° sweep; only in phase 2.
+    Spin,
 }
 
 impl MoveKind {
     /// In the order they are checked, chosen and written in props.
-    pub(crate) const ALL: [MoveKind; 4] = [Self::Sweep, Self::Cleave, Self::Lunge, Self::Combo];
+    pub(crate) const ALL: [MoveKind; 5] = [
+        Self::Sweep,
+        Self::Cleave,
+        Self::Lunge,
+        Self::Combo,
+        Self::Spin,
+    ];
 
     /// The prefix of its props, as in `sweep_damage`.
     pub(crate) fn name(self) -> &'static str {
@@ -34,6 +42,7 @@ impl MoveKind {
             Self::Cleave => "cleave",
             Self::Lunge => "lunge",
             Self::Combo => "combo",
+            Self::Spin => "spin",
         }
     }
 }
@@ -47,6 +56,7 @@ pub enum EnemyChoice {
     Cleave,
     Lunge,
     Combo,
+    Spin,
     /// Walking up to the character for at most `approach_ticks`.
     Approach,
 }
@@ -58,6 +68,7 @@ impl From<MoveKind> for EnemyChoice {
             MoveKind::Cleave => Self::Cleave,
             MoveKind::Lunge => Self::Lunge,
             MoveKind::Combo => Self::Combo,
+            MoveKind::Spin => Self::Spin,
         }
     }
 }
@@ -78,6 +89,8 @@ pub enum EnemyCondition {
     Stagger,
     /// Lying dead: its hurtbox's health says so.
     Dead,
+    /// Roaring on entering phase 2: invulnerable, with a blast around it.
+    Roar,
 }
 
 /// An enemy in the state dump (`game.enemies`).
@@ -85,14 +98,18 @@ pub enum EnemyCondition {
 pub struct EnemyState {
     /// The node's path.
     pub node: String,
+    /// 1, or 2 from its health falling to `phase2_at` until it dies.
+    pub stage: u8,
     pub state: EnemyCondition,
     /// The move being done; `None` outside `attack`.
     #[serde(rename = "move")]
     pub r#move: Option<MoveKind>,
-    /// Which tick of the move, from 1; 0 outside `attack`.
+    /// Which tick of the move or roar, from 1; 0 outside `attack` and
+    /// `roar`.
     pub move_tick: u32,
     /// The part of the move; the wait between two cuts of a combo is
-    /// `startup`. `None` outside `attack`.
+    /// `startup`. In a roar: `startup` before the blast, `active` on its
+    /// tick, then `recovery`. `None` outside `attack` and `roar`.
     pub phase: Option<AttackPhase>,
     /// Which cut of a combo, from 1; 0 for the other moves and outside
     /// `attack`.
@@ -162,7 +179,9 @@ pub(crate) struct EnemyParams {
     pub low: f32,
     pub high: f32,
     /// In [`MoveKind::ALL`]'s order.
-    pub moves: [MoveParams; 4],
+    pub moves: [MoveParams; 5],
+    /// Whether the spin is a choice: only in phase 2.
+    pub spin: bool,
     /// Meters per active tick of the lunge: `lunge_distance / active`.
     pub lunge_step: f32,
     pub combo_hits: u32,
@@ -173,6 +192,8 @@ pub(crate) struct EnemyParams {
     pub approach_per_meter: f32,
     /// The most ticks one approach walks.
     pub approach_ticks: u32,
+    /// The most the approach's weight can be.
+    pub approach_max: u32,
 }
 
 impl EnemyParams {
@@ -182,13 +203,42 @@ impl EnemyParams {
 
     /// The approach's weight at the character's horizontal distance `d`:
     /// `floor(approach_per_meter * (d - approach_min))` farther than
-    /// `approach_min`, else 0.
+    /// `approach_min`, else 0; at most `approach_max`.
     pub fn approach_weight(&self, d: f32) -> u32 {
         if d > self.approach_min {
             // Not negative here; `as` saturates a huge one.
-            libm::floorf(self.approach_per_meter * (d - self.approach_min)) as u32
+            let w = libm::floorf(self.approach_per_meter * (d - self.approach_min)) as u32;
+            w.min(self.approach_max)
         } else {
             0
+        }
+    }
+
+    /// Whether `kind` can be chosen at all: the spin only in phase 2.
+    pub fn has(&self, kind: MoveKind) -> bool {
+        kind != MoveKind::Spin || self.spin
+    }
+
+    /// These parameters in phase 2, with the time scale `s`
+    /// (`phase2_speed_scale`): every startup `max(1, round(t * s))`, the
+    /// combo's gap and the rest `round(t * s)`, the walk, turn and track
+    /// speeds divided by `s`, `combo_hits` cuts and the spin a choice;
+    /// `round(x)` is `floor(x + 0.5)`, all in `f32`.
+    pub fn phase2(&self, s: f32, combo_hits: u32) -> EnemyParams {
+        let round = |t: u32| libm::floorf(t as f32 * s + 0.5) as u32;
+        EnemyParams {
+            step: self.step / s,
+            turn: self.turn / s,
+            rest_ticks: round(self.rest_ticks),
+            moves: self.moves.map(|m| MoveParams {
+                startup: round(m.startup).max(1),
+                track: m.track / s,
+                ..m
+            }),
+            spin: true,
+            combo_hits,
+            combo_gap: round(self.combo_gap),
+            ..*self
         }
     }
 
@@ -196,7 +246,7 @@ impl EnemyParams {
     fn cuts(&self, kind: MoveKind) -> u32 {
         match kind {
             MoveKind::Combo => self.combo_hits,
-            MoveKind::Sweep | MoveKind::Cleave | MoveKind::Lunge => 1,
+            MoveKind::Sweep | MoveKind::Cleave | MoveKind::Lunge | MoveKind::Spin => 1,
         }
     }
 
@@ -216,7 +266,7 @@ impl EnemyParams {
         // Only the combo counts its cuts.
         let hit = |n: u64| match kind {
             MoveKind::Combo => n as u32,
-            MoveKind::Sweep | MoveKind::Cleave | MoveKind::Lunge => 0,
+            MoveKind::Sweep | MoveKind::Cleave | MoveKind::Lunge | MoveKind::Spin => 0,
         };
         let strikes = s + cuts * a + (cuts - 1) * g;
         let length = strikes + r;
@@ -317,14 +367,79 @@ mod tests {
             seed: 1,
             low: 0.0,
             high: 2.0,
-            moves: [m; 4],
+            moves: [m; 5],
+            spin: false,
             lunge_step: 0.1,
             combo_hits: hits,
             combo_gap: gap,
             approach_min: 0.0,
             approach_per_meter: 0.0,
             approach_ticks: 1,
+            approach_max: 0,
         }
+    }
+
+    #[test]
+    fn phase2_parameters_round_half_ticks_up_with_a_startup_of_at_least_one() {
+        // round(x) = floor(x + 0.5): 22.5 goes up to 23, 0.5 to 1, 0.25
+        // down to 0, which the startup keeps at 1 but the gap and rest not.
+        let mut p = params(30, 2, 7, 3, 2);
+        p.rest_ticks = 3;
+        let q = p.phase2(0.75, 4);
+        assert_eq!(q.moves.map(|m| m.startup), [23; 5]);
+        assert_eq!((q.combo_gap, q.rest_ticks), (2, 2));
+        let q = params(2, 2, 2, 3, 2).phase2(0.25, 4);
+        assert_eq!((q.moves[0].startup, q.combo_gap, q.rest_ticks), (1, 1, 1));
+        let q = params(1, 2, 2, 3, 1).phase2(0.25, 4);
+        assert_eq!((q.moves[0].startup, q.combo_gap, q.rest_ticks), (1, 0, 1));
+        let mut p = params(1, 2, 2, 3, 1);
+        p.rest_ticks = 1;
+        let q = p.phase2(0.25, 4);
+        assert_eq!((q.moves[0].startup, q.combo_gap, q.rest_ticks), (1, 0, 0));
+    }
+
+    #[test]
+    fn phase2_parameters_divide_the_speeds_and_add_the_cuts_and_the_spin() {
+        let mut p = params(4, 2, 7, 3, 2);
+        p.moves[1].track = 0.3;
+        assert!(!p.has(MoveKind::Spin) && p.has(MoveKind::Combo));
+        let q = p.phase2(0.5, 4);
+        assert_eq!((q.step, q.turn, q.moves[1].track), (0.2, 0.2, 0.6));
+        assert_eq!(q.combo_hits, 4);
+        assert!(q.has(MoveKind::Spin));
+        // The rest is kept: active and recovery ticks, damage, ranges.
+        assert_eq!(
+            (q.moves[1].active, q.moves[1].recovery, q.moves[1].damage),
+            (2, 7, 1.0)
+        );
+        assert_eq!((q.moves[1].max_range, q.moves[1].weight), (1.0, 1));
+        assert_eq!(
+            (q.aggro_range, q.lunge_step, q.face_angle),
+            (10.0, 0.1, 0.5)
+        );
+    }
+
+    #[test]
+    fn approach_weight_is_capped_by_its_max() {
+        let mut p = params(1, 1, 1, 1, 0);
+        p.approach_min = 2.0;
+        p.approach_per_meter = 2.0;
+        p.approach_max = 4;
+        // floor(2 * (d - 2)): 3 at 3.5 m, 16 at 10 m, cut to 4.
+        assert_eq!(p.approach_weight(3.5), 3);
+        assert_eq!(p.approach_weight(4.0), 4);
+        assert_eq!(p.approach_weight(10.0), 4);
+        p.approach_max = 0;
+        assert_eq!(p.approach_weight(10.0), 0);
+    }
+
+    #[test]
+    fn spin_is_a_single_sweep_of_its_own_timeline() {
+        let p = params(2, 3, 1, 3, 2);
+        assert_eq!(
+            timeline(&p, MoveKind::Spin, 6),
+            ["S/0", "S/0", "A1/0", "A2/0", "A3/0", "R/0!"]
+        );
     }
 
     /// `(phase, hit, active, reversed, last)` for every tick of a move.

@@ -32,8 +32,9 @@ fn scene(player: &str, nodes: &str) -> String {
 }
 
 /// The test enemy's props with `overrides` changed or added: a hurtbox of
-/// radius 0.5 with 100 hp, 0.1 m and 3° a tick, rest 3, every move 2
-/// ticks of each part and of weight 0, a lunge of 0.1 m a tick.
+/// radius 0.5 with 100 hp, 0.1 m and 3° a tick, rest 3, every move (the
+/// spin too) 2 ticks of each part and of weight 0, a lunge of 0.1 m a
+/// tick.
 fn enemy_props(overrides: &[(&str, f64)]) -> String {
     let mut props: Vec<(String, f64)> = [
         ("lock_height", 1.0),
@@ -48,7 +49,7 @@ fn enemy_props(overrides: &[(&str, f64)]) -> String {
     .iter()
     .map(|&(n, v)| (n.to_owned(), v))
     .collect();
-    for m in ["sweep", "cleave", "lunge", "combo"] {
+    for m in ["sweep", "cleave", "lunge", "combo", "spin"] {
         for (suffix, v) in [
             ("weight", 0.0),
             ("startup_ticks", 2.0),
@@ -1002,7 +1003,7 @@ fn approach_weight_is_rounded_down_and_needs_one() {
             (EnemyChoice::Sweep, vec![EnemyChoice::Sweep])
         };
         assert_eq!(chosen(&run), want, "{d} m");
-        assert_eq!(run.enemy().params.approach_weight(d), weight, "{d} m");
+        assert_eq!(run.enemy().params().approach_weight(d), weight, "{d} m");
     }
 }
 
@@ -1229,4 +1230,558 @@ fn staggered_resting_enemy_has_no_rest_left() {
         (s.enemies[0].state, s.enemies[0].rest),
         (EnemyCondition::Stagger, 0)
     );
+}
+
+// ---------------------------------------------------------------- phase 2
+
+/// The test enemy with a phase 2 at half of 40 hp: one light attack (20)
+/// takes it there.
+const PHASE2: [(&str, f64); 2] = [("hp", 40.0), ("phase2_at", 0.5)];
+
+/// A roar over at once, its blast reaching nobody.
+const SHORT_ROAR: [(&str, f64); 3] = [
+    ("roar_ticks", 1.0),
+    ("roar_blast_tick", 1.0),
+    ("roar_reach", 0.01),
+];
+
+/// `PHASE2`, then `more`.
+fn phase2(more: &[(&'static str, f64)]) -> Vec<(&'static str, f64)> {
+    PHASE2.iter().chain(more).copied().collect()
+}
+
+/// The last tick's `hit` events on the enemy and `stage` events, as
+/// `type target-or-by result`.
+fn hits_and_stages(run: &Run) -> Vec<String> {
+    run.game
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Hit { target, result, .. } if target == "e" => {
+                Some(format!("hit {target} {result:?}"))
+            }
+            Event::Stage { by, stage } => Some(format!("stage {by} {stage}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Attacks the enemy on tick 1 and runs until the tick it is hit; its
+/// events.
+fn hit_once(run: &mut Run) -> Vec<String> {
+    run.hold(&[ATTACK], &[]);
+    for _ in 0..40 {
+        let events = hits_and_stages(run);
+        if !events.is_empty() {
+            return events;
+        }
+        run.idle();
+    }
+    panic!("never hit");
+}
+
+#[test]
+fn hit_reaching_the_threshold_enters_phase_2_with_a_roar_for_its_stagger() {
+    // 40 hp, a threshold of 20: a light attack (20) leaves exactly 20;
+    // from 30 it leaves 10. Poise 0: the hit would stagger it.
+    for hp in [40.0, 30.0] {
+        let mut run = Run::new(
+            "",
+            &enemy(0.0, -1.2, 180.0, &[("hp", hp), ("phase2_at", 0.5)]),
+        );
+        assert_eq!(
+            hit_once(&mut run),
+            ["hit e Stagger", "stage e 2"],
+            "{hp} hp"
+        );
+        let s = run.game.state();
+        let health = s.hurtboxes[0].health.unwrap();
+        assert_eq!(health.hp, hp as f32 - 20.0);
+        assert_eq!(
+            (
+                health.state,
+                health.state_ticks,
+                health.impact,
+                health.impact_wait
+            ),
+            (Condition::Ok, 0, 0.0, 0)
+        );
+        let e = &s.enemies[0];
+        // Step 5c of the same tick: the roar's first tick.
+        assert_eq!(
+            (e.stage, e.state, e.move_tick, e.phase),
+            (2, EnemyCondition::Roar, 1, Some(AttackPhase::Startup))
+        );
+    }
+    // From 50 the hit leaves 30, above the threshold of 25.
+    let mut run = Run::new(
+        "",
+        &enemy(0.0, -1.2, 180.0, &[("hp", 50.0), ("phase2_at", 0.5)]),
+    );
+    assert_eq!(hit_once(&mut run), ["hit e Stagger"]);
+    assert_eq!(run.game.state().enemies[0].stage, 1);
+}
+
+#[test]
+fn enemy_without_phase2_at_stays_in_phase_1() {
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &[("hp", 40.0)]));
+    assert_eq!(hit_once(&mut run), ["hit e Stagger"]);
+    let e = &run.game.state().enemies[0];
+    assert_eq!((e.stage, e.state), (1, EnemyCondition::Stagger));
+}
+
+#[test]
+fn killing_hit_skips_phase_2() {
+    let mut run = Run::new(
+        "",
+        &enemy(0.0, -1.2, 180.0, &[("hp", 20.0), ("phase2_at", 0.5)]),
+    );
+    assert_eq!(hit_once(&mut run), ["hit e Death"]);
+    let e = &run.game.state().enemies[0];
+    assert_eq!((e.stage, e.state), (1, EnemyCondition::Dead));
+}
+
+#[test]
+fn entering_phase_2_breaks_off_the_move() {
+    let w = phase2(&[("sweep_weight", 1.0), ("sweep_startup_ticks", 60.0)]);
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    run.idle();
+    assert_eq!(run.game.state().enemies[0].r#move, Some(MoveKind::Sweep));
+    hit_once(&mut run);
+    let e = &run.game.state().enemies[0];
+    assert_eq!(
+        (e.state, e.r#move, e.hit, e.rest, e.chase),
+        (EnemyCondition::Roar, None, 0, 0, 0)
+    );
+}
+
+#[test]
+fn roar_blasts_all_around_on_its_tick_then_idles() {
+    // A roar of 6 ticks with the blast on the third; the character stands
+    // behind the enemy's facing, 1.2 m off, within the 4 m reach.
+    let w = phase2(&[
+        ("roar_ticks", 6.0),
+        ("roar_blast_tick", 3.0),
+        ("roar_damage", 7.0),
+        ("roar_impact", 0.0),
+        ("enemy_face_angle", 180.0),
+    ]);
+    let mut run = Run::new(r#"("hp", 100)"#, &enemy(0.0, -1.2, 0.0, &w));
+    hit_once(&mut run);
+    // The hit's tick was the roar's first.
+    let mut seen = Vec::new();
+    for _ in 2..=6 {
+        let s = run.idle();
+        let e = &s.enemies[0];
+        let hit = run.game.events().iter().any(|ev| {
+            matches!(ev, Event::Hit { by, attack: HitAttack::Roar, damage: Some(d), .. }
+                if by == "e" && *d == 7.0)
+        });
+        seen.push((e.state, e.move_tick, e.phase, hit, s.player.health.hp));
+    }
+    use AttackPhase::{Active, Recovery, Startup};
+    use EnemyCondition::{Idle, Roar};
+    assert_eq!(
+        seen,
+        [
+            (Roar, 2, Some(Startup), false, 100.0),
+            (Roar, 3, Some(Active), true, 93.0),
+            (Roar, 4, Some(Recovery), false, 93.0),
+            (Roar, 5, Some(Recovery), false, 93.0),
+            (Idle, 0, None, false, 93.0),
+        ]
+    );
+}
+
+#[test]
+fn roaring_enemy_is_neither_hit_nor_struck() {
+    // A long roar; attacks on it only swing through.
+    let w = phase2(&[("roar_ticks", 200.0), ("roar_blast_tick", 200.0)]);
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    hit_once(&mut run);
+    // The swing that hit it has struck it; wait for its end.
+    while run.game.state().player.action != Action::Idle {
+        run.idle();
+    }
+    let before = run.game.state().hurtboxes[0].clone();
+    for t in 0..60 {
+        let actions: &[&str] = if t % 20 == 0 { &[ATTACK] } else { &[] };
+        run.hold(actions, &[]);
+        assert!(hits_and_stages(&run).is_empty(), "tick {t}");
+        assert!(run.game.struck.is_empty(), "tick {t}");
+    }
+    let after = run.game.state().hurtboxes[0].clone();
+    assert_eq!(after.hits, before.hits);
+    assert_eq!(after.health.unwrap().hp, 20.0);
+    assert_eq!(run.game.state().enemies[0].state, EnemyCondition::Roar);
+}
+
+#[test]
+fn backstep_through_the_blast_dodges_it() {
+    // The hit's tick is the roar's first, so tick t after it is the
+    // roar's t. The attack ends on 19; a backstep pressed on 25 is
+    // invulnerable on 26-33, around the blast on 28.
+    let w = phase2(&[("roar_blast_tick", 28.0)]);
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    hit_once(&mut run);
+    let mut dodged = Vec::new();
+    for t in 2..=40 {
+        let actions: &[&str] = if t == 25 { &[ROLL] } else { &[] };
+        let s = run.hold(actions, &[]);
+        for e in run.game.events() {
+            match e {
+                Event::Dodged { by, .. } => dodged.push((t, by.clone(), s.player.invulnerable)),
+                Event::Hit { by, .. } if by == "e" => panic!("hit on tick {t}"),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(dodged, [(28, "e".to_owned(), true)]);
+}
+
+#[test]
+fn blast_misses_beyond_its_reach() {
+    // The enemy walked up to the character before the hit: 0.85 m apart,
+    // the character's circle (0.35) 0.4 m off the center. A reach of 0.45
+    // misses it by 0.05 m, one of 0.55 hits it.
+    for (reach, hp) in [(0.45, 100.0), (0.55, 70.0)] {
+        let w = phase2(&[
+            ("roar_ticks", 3.0),
+            ("roar_blast_tick", 2.0),
+            ("roar_reach", reach),
+        ]);
+        let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+        hit_once(&mut run);
+        assert!((run.position().z + 0.85).abs() < 1e-5, "{}", run.position());
+        for _ in 0..3 {
+            run.idle();
+        }
+        assert_eq!(run.game.state().player.health.hp, hp, "reach {reach}");
+    }
+}
+
+/// The enemy hit into phase 2 by the attack on tick 1, its roar over at
+/// once, then run until it is `Attack`ing; the phases of that move.
+fn phase2_move(run: &mut Run) -> Vec<(AttackPhase, u32)> {
+    hit_once(run);
+    let mut t = 0;
+    while run.game.state().enemies[0].state != EnemyCondition::Attack {
+        run.idle();
+        t += 1;
+        assert!(t < 100, "no move");
+    }
+    let mut phases = Vec::new();
+    loop {
+        let s = run.game.state();
+        let e = &s.enemies[0];
+        if e.state != EnemyCondition::Attack {
+            return phases;
+        }
+        assert_eq!(e.stage, 2);
+        phases.push((e.phase.unwrap(), e.hit));
+        run.idle();
+    }
+}
+
+#[test]
+fn phase_2_moves_start_sooner() {
+    // A sweep of startup 20: 15 in phase 2 (scale 0.75); active and
+    // recovery kept at 2 each, the last tick already resting.
+    let mut w = phase2(&SHORT_ROAR);
+    w.extend([
+        ("sweep_weight", 1.0),
+        ("sweep_startup_ticks", 20.0),
+        ("sweep_damage", 1.0),
+        ("sweep_impact", 0.0),
+    ]);
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    let phases = phase2_move(&mut run);
+    let count = |p: AttackPhase| phases.iter().filter(|&&(q, _)| q == p).count();
+    assert_eq!(
+        (
+            count(AttackPhase::Startup),
+            count(AttackPhase::Active),
+            count(AttackPhase::Recovery)
+        ),
+        (15, 2, 1)
+    );
+}
+
+#[test]
+fn phase_2_combo_has_its_extra_cut() {
+    let mut w = phase2(&SHORT_ROAR);
+    w.extend([
+        ("combo_weight", 1.0),
+        ("combo_damage", 1.0),
+        ("combo_impact", 0.0),
+        ("combo_gap_ticks", 2.0),
+    ]);
+    let mut run = Run::new(r#"("hp", 1000)"#, &enemy(0.0, -1.2, 180.0, &w));
+    let phases = phase2_move(&mut run);
+    let mut cuts: Vec<u32> = phases
+        .iter()
+        .filter(|&&(p, _)| p == AttackPhase::Active)
+        .map(|&(_, hit)| hit)
+        .collect();
+    cuts.dedup();
+    assert_eq!(cuts, [1, 2, 3, 4]);
+}
+
+#[test]
+fn spin_is_a_choice_only_in_phase_2() {
+    let mut w = phase2(&SHORT_ROAR);
+    w.extend([
+        ("spin_weight", 1.0),
+        ("spin_damage", 1.0),
+        ("spin_impact", 0.0),
+    ]);
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    // Phase 1: nothing to choose within 2 m, so it stands.
+    for _ in 0..5 {
+        let s = run.idle();
+        assert!(run.moves().is_empty());
+        assert_eq!(s.enemies[0].state, EnemyCondition::Chase);
+    }
+    hit_once(&mut run);
+    let mut t = 0;
+    loop {
+        run.idle();
+        if !run.moves().is_empty() {
+            break;
+        }
+        t += 1;
+        assert!(t < 100, "no move");
+    }
+    assert_eq!(chosen(&run), (EnemyChoice::Spin, vec![EnemyChoice::Spin]));
+}
+
+#[test]
+fn phase_2_walks_farther_each_tick() {
+    // 1.5 m/s: 0.025 m a tick, 0.05 in phase 2 (scale 0.5), slower than
+    // the character walking off; nothing to choose.
+    let mut w = phase2(&SHORT_ROAR);
+    w.extend([
+        ("enemy_speed", 1.5),
+        ("phase2_speed_scale", 0.5),
+        ("approach_weight_per_meter", 0.0),
+    ]);
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    let z0 = run.position().z;
+    hit_once(&mut run);
+    // Phase 1 walked 0.025 m a tick up to the hit.
+    let walked = run.position().z - z0;
+    assert!(walked > 0.0 && (walked / 0.025 - libm::roundf(walked / 0.025)).abs() < 1e-3);
+    // Back off, then stand, and watch it walk up.
+    for _ in 0..60 {
+        run.hold(&[], &[(MOVE_Y, -1.0)]);
+    }
+    let mut z = run.position().z;
+    for t in 0..5 {
+        run.idle();
+        let now = run.position().z;
+        assert!((now - z - 0.05).abs() < 1e-5, "tick {t}: {z} to {now}");
+        z = now;
+    }
+}
+
+#[test]
+fn approach_weight_max_of_0_never_approaches() {
+    let w = [("approach_weight_max", 0.0)];
+    let mut run = Run::new("", &enemy(0.0, -5.0, 180.0, &w));
+    for t in 1..=5 {
+        let s = run.idle();
+        assert_eq!(
+            (s.enemies[0].state, s.enemies[0].chase),
+            (EnemyCondition::Chase, 0),
+            "tick {t}"
+        );
+        assert!(run.moves().is_empty(), "tick {t}");
+    }
+}
+
+/// The test enemy at `(0, 0, z)` facing +Z with a body of color
+/// `(0.5, 0.5, 0.5)` and its arm.
+fn enemy_with_body(z: f32, overrides: &[(&str, f64)]) -> String {
+    let props = enemy_props(overrides);
+    format!(
+        r#"(name: "e", position: (0.0, 0.0, {z:?}), rotation: (0.0, 180.0, 0.0),
+            props: [{props}],
+            children: [(name: "body", mesh: Capsule(radius: 0.5, height: 2.0),
+                    color: (0.5, 0.5, 0.5)),
+                (name: "arm", position: (0.0, 1.0, -1.0), scale: (0.1, 0.1, 2.0),
+                    mesh: Cube, color: (0.4, 0.3, 0.2))]),"#
+    )
+}
+
+fn body_color(run: &Run) -> Vec3 {
+    let scene = run.game.scene();
+    scene
+        .node(scene.find("e/body").unwrap())
+        .mesh
+        .unwrap()
+        .color
+}
+
+#[test]
+fn enemy_colors_rank_dead_flash_roar_warning_then_phase_2_red() {
+    let body = Vec3::splat(0.5);
+    let red = body * Vec3::new(1.0, 0.3, 0.3);
+    let w = phase2(&[
+        ("roar_ticks", 30.0),
+        ("roar_blast_tick", 20.0),
+        ("roar_reach", 0.01),
+        ("revive_ticks", 10.0),
+    ]);
+    let mut run = Run::new("", &enemy_with_body(-1.2, &w));
+    run.idle();
+    assert_eq!(body_color(&run), body);
+    // The hit's tick flashes, over the warning.
+    hit_once(&mut run);
+    assert_eq!(body_color(&run), FLASH_COLOR);
+    // After the flash, the warning until the blast (roar tick 20).
+    for _ in 1..FLASH_TICKS {
+        run.idle();
+    }
+    assert_eq!(body_color(&run), FLASH_COLOR);
+    run.idle();
+    assert_eq!(body_color(&run), WARN_COLOR);
+    while run.game.state().enemies[0].move_tick < 19 {
+        run.idle();
+        assert_eq!(body_color(&run), WARN_COLOR);
+    }
+    // From the blast on, dark red.
+    run.idle();
+    assert_eq!(run.game.state().enemies[0].phase, Some(AttackPhase::Active));
+    assert_eq!(body_color(&run), red);
+    while run.game.state().enemies[0].state == EnemyCondition::Roar {
+        run.idle();
+        assert_eq!(body_color(&run), red);
+    }
+    // Killed in phase 2: dimmed from its scene color; revived in phase 1.
+    let first = hit_once(&mut run);
+    assert_eq!(first, ["hit e Death"]);
+    assert_eq!(body_color(&run), body * DEAD_DIM);
+    assert_eq!(run.game.state().enemies[0].stage, 2);
+    // Revived after 10 ticks, past the killing hit's flash.
+    for _ in 0..10 {
+        run.idle();
+    }
+    let s = run.game.state();
+    assert_eq!(s.enemies[0].stage, 1);
+    assert_ne!(s.enemies[0].state, EnemyCondition::Dead);
+    assert_eq!(s.hurtboxes[0].health.unwrap().hp, 40.0);
+    assert_eq!(body_color(&run), body);
+    // The arm keeps its own colors throughout.
+    let scene = run.game.scene();
+    assert_eq!(
+        scene.node(scene.find("e/arm").unwrap()).mesh.unwrap().color,
+        Vec3::new(0.4, 0.3, 0.2)
+    );
+}
+
+#[test]
+fn phase_2_props_are_checked_in_order_with_exact_messages() {
+    let full = r#"("lock_height", 1), ("hurt_radius", 0.7), ("hurt_height", 2), ("hp", 10),
+        ("enemy_speed", 6)"#;
+    let node = |props: &str| format!(r#"(name: "t", props: [{props}]),"#);
+    for (props, message) in [
+        // The enemy_speed check comes first.
+        (
+            r#"("phase2_at", 0.5), ("roar_ticks", 3)"#.to_owned(),
+            "the node \"t\": prop \"phase2_at\" needs enemy_speed",
+        ),
+        (
+            format!(r#"{full}, ("roar_ticks", 3)"#),
+            "the node \"t\": prop \"roar_ticks\" needs phase2_at",
+        ),
+        (
+            format!(r#"{full}, ("phase2_at", 1)"#),
+            "the node \"t\": prop \"phase2_at\" must be greater than 0 and less than 1, got 1",
+        ),
+        (
+            format!(
+                r#"{full}, ("spin_min_range", 4), ("phase2_at", 0.5), ("roar_blast_tick", 71)"#
+            ),
+            "the node \"t\": needs spin_min_range <= spin_max_range",
+        ),
+        (
+            format!(
+                r#"{full}, ("phase2_at", 0.5), ("roar_blast_tick", 71), ("enemy_swing_low", 3)"#
+            ),
+            "the node \"t\": needs roar_blast_tick <= roar_ticks",
+        ),
+        // The walk in phase 2 comes after the lunge.
+        (
+            format!(
+                r#"{full}, ("phase2_at", 0.5), ("phase2_speed_scale", 0.1), ("lunge_distance", 50)"#
+            ),
+            "the enemy \"t\": lunge moves 5 m per tick, which must be less than hurt_radius 0.7",
+        ),
+        (
+            format!(r#"{full}, ("phase2_at", 0.5), ("phase2_speed_scale", 0.125)"#),
+            "the enemy \"t\": enemy in phase 2 moves 0.8 m per tick, which must be less than \
+             hurt_radius 0.7",
+        ),
+    ] {
+        assert_eq!(error_of(&node(&props)), message, "{props}");
+    }
+    // Without phase2_at the scale is not checked against the radius, and
+    // the spin's props go without it.
+    assert!(
+        Game::from_source(&scene(
+            "",
+            &node(&format!(r#"{full}, ("spin_weight", 3), ("spin_reach", 2)"#))
+        ))
+        .is_ok()
+    );
+}
+
+#[test]
+fn debug_swings_draw_the_roar_as_a_whole_circle_orange_then_red_on_the_blast() {
+    // The blast on the roar's 8th tick, when the character's own swing is
+    // long over (it is in recovery from the roar's 5th).
+    let w = phase2(&[
+        ("roar_ticks", 10.0),
+        ("roar_blast_tick", 8.0),
+        ("roar_reach", 0.01),
+    ]);
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    let colors = |run: &Run| {
+        let mut draw = DebugDraw::new();
+        run.game.debug_draw(&["swings"], &mut draw);
+        let mut colors: Vec<Vec3> = draw.lines().iter().map(|l| l.color).collect();
+        colors.dedup();
+        colors
+    };
+    hit_once(&mut run);
+    for t in 2..=9 {
+        run.idle();
+        let want: &[Vec3] = match t {
+            8 => &[DEBUG_ACTIVE, DEBUG_SLICE],
+            9 => &[],
+            _ => &[DEBUG_STARTUP],
+        };
+        if t >= 5 {
+            assert_eq!(colors(&run), want, "roar tick {t}");
+        }
+    }
+    // The whole circle: the startup's lines run all the way around.
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    hit_once(&mut run);
+    for _ in 2..=6 {
+        run.idle();
+    }
+    let mut draw = DebugDraw::new();
+    run.game.debug_draw(&["swings"], &mut draw);
+    let at = run.position();
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    for l in draw.lines() {
+        for p in [l.a, l.b] {
+            let a = libm::atan2f(p.x - at.x, p.z - at.z);
+            lo = lo.min(a);
+            hi = hi.max(a);
+        }
+    }
+    // Drawn in segments of about 11°: the ends come within one of ±π.
+    assert!(lo < -2.9 && hi > 2.9, "{lo} {hi}");
 }

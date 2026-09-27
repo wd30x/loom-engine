@@ -88,6 +88,14 @@ pub enum Event {
         /// What it chose from: the moves in their order, then `approach`.
         candidates: Vec<EnemyChoice>,
     },
+    /// An enemy entered a stage (step 4), right after the hit that took it
+    /// there; it roars.
+    Stage {
+        /// The enemy's node path.
+        by: String,
+        /// Always 2.
+        stage: u8,
+    },
 }
 
 /// What hit: the character's light or heavy attack, a swinger, or an
@@ -102,6 +110,9 @@ pub enum HitAttack {
     Cleave,
     Lunge,
     Combo,
+    Spin,
+    /// The blast of an enemy's roar on entering phase 2.
+    Roar,
 }
 
 impl From<MoveKind> for HitAttack {
@@ -111,6 +122,7 @@ impl From<MoveKind> for HitAttack {
             MoveKind::Cleave => Self::Cleave,
             MoveKind::Lunge => Self::Lunge,
             MoveKind::Combo => Self::Combo,
+            MoveKind::Spin => Self::Spin,
         }
     }
 }

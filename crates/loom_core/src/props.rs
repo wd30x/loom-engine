@@ -24,6 +24,8 @@ pub enum PropRule {
     Arc,
     /// Greater than 0 and at most `max`.
     PositiveAtMost { max: f64 },
+    /// Greater than `min` and less than `max`.
+    Between { min: f64, max: f64 },
     /// Any number: checked only against other props (see the group's
     /// constraints).
     Any,
@@ -43,6 +45,7 @@ impl PropRule {
             Self::Below { min, max } => (min..max).contains(&value),
             Self::Arc => value > 0.0 && value <= 360.0,
             Self::PositiveAtMost { max } => value > 0.0 && value <= max,
+            Self::Between { min, max } => value > min && value < max,
             Self::Any => true,
         }
     }
@@ -63,6 +66,7 @@ impl std::fmt::Display for PropRule {
             Self::Below { min, max } => write!(f, "at least {min} and less than {max}"),
             Self::Arc => write!(f, "greater than 0 and at most 360"),
             Self::PositiveAtMost { max } => write!(f, "greater than 0 and at most {max}"),
+            Self::Between { min, max } => write!(f, "greater than {min} and less than {max}"),
             Self::Any => write!(f, "a number"),
         }
     }
@@ -99,7 +103,7 @@ mod tests {
 
     #[test]
     fn each_rule_allows_exactly_its_range() {
-        let cases: [(PropRule, &[f64], &[f64]); 7] = [
+        let cases: [(PropRule, &[f64], &[f64]); 8] = [
             (PropRule::Positive, &[0.001, 5.0], &[0.0, -1.0]),
             (PropRule::AtLeast { min: 0.0 }, &[0.0, 0.5], &[-0.001]),
             (
@@ -128,6 +132,11 @@ mod tests {
                 PropRule::PositiveAtMost { max: 180.0 },
                 &[0.1, 180.0],
                 &[0.0, 180.1],
+            ),
+            (
+                PropRule::Between { min: 0.0, max: 1.0 },
+                &[0.001, 0.5, 0.999],
+                &[0.0, 1.0, -0.5],
             ),
         ];
         for (rule, ok, bad) in cases {
@@ -169,6 +178,10 @@ mod tests {
                 PropRule::PositiveAtMost { max: 180.0 },
                 "greater than 0 and at most 180",
             ),
+            (
+                PropRule::Between { min: 0.0, max: 1.0 },
+                "greater than 0 and less than 1",
+            ),
         ];
         for (rule, text) in texts {
             assert_eq!(rule.to_string(), text);
@@ -205,6 +218,10 @@ mod tests {
         assert_eq!(
             json(PropRule::PositiveAtMost { max: 180.0 }),
             r#"{"kind":"positive_at_most","max":180.0}"#
+        );
+        assert_eq!(
+            json(PropRule::Between { min: 0.0, max: 1.0 }),
+            r#"{"kind":"between","min":0.0,"max":1.0}"#
         );
         assert_eq!(json(PropRule::Any), r#"{"kind":"any"}"#);
     }

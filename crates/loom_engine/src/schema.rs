@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(character["props"].as_array().unwrap().len(), 50);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
-            75
+            95
         );
         assert_eq!(
             prop("souls", "character", "stamina_max"),
@@ -210,13 +210,22 @@ mod tests {
             ["lunge_distance", "combo_hits", "combo_gap_ticks"]
         );
         assert_eq!(
-            node[72..],
+            node[72..75],
             [
                 "approach_min_range",
                 "approach_weight_per_meter",
                 "approach_ticks"
             ]
         );
+        assert_eq!(node[75..77], ["approach_weight_max", "phase2_at"]);
+        assert_eq!(node[83], "roar_reach");
+        assert_eq!(node[84], "spin_damage");
+        assert_eq!(node[94], "spin_track_speed");
+        assert_eq!(
+            prop("souls", "node", "phase2_at")["rule"],
+            json!({"kind": "between", "min": 0.0, "max": 1.0})
+        );
+        assert_eq!(prop("souls", "node", "spin_arc")["default"], 360.0);
         assert_eq!(
             prop("souls", "node", "enemy_face_angle")["rule"],
             json!({"kind": "positive_at_most", "max": 180.0})
@@ -235,7 +244,7 @@ mod tests {
             "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp"
         );
         assert_eq!(
-            group("souls", "node")["constraints"][8],
+            group("souls", "node")["constraints"][9],
             "an enemy has no collider in its subtree"
         );
         assert_eq!(group("rogue", "player")["requires"], json!([]));
@@ -263,7 +272,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (50 + 75 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (50 + 95 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),
@@ -346,6 +355,19 @@ mod tests {
                 hp: Some(80.0),
                 result: Outcome::Hit,
             },
+            Event::Stage {
+                by: "boss".to_owned(),
+                stage: 2,
+            },
+            Event::Hit {
+                by: "boss".to_owned(),
+                target: "player".to_owned(),
+                attack: HitAttack::Roar,
+                combo: 0,
+                damage: Some(30.0),
+                hp: Some(50.0),
+                result: Outcome::Stagger,
+            },
         ];
         for e in &events {
             match e {
@@ -358,7 +380,8 @@ mod tests {
                 | Event::Lock { .. }
                 | Event::Revive { .. }
                 | Event::Respawn { .. }
-                | Event::EnemyMove { .. } => {}
+                | Event::EnemyMove { .. }
+                | Event::Stage { .. } => {}
             }
         }
         events
@@ -377,8 +400,8 @@ mod tests {
         }
         types.sort();
         types.dedup();
-        assert_eq!(types.len(), 10);
-        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 10);
+        assert_eq!(types.len(), 11);
+        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 11);
 
         let rogue = &schema["games"]["rogue"]["event"];
         let e = rogue::Event::Hit {

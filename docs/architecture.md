@@ -1775,7 +1775,9 @@ else:                                             // 候选为空时的走路，
   - `the node "<路径>": needs roar_blast_tick <= roar_ticks`；
   - `spin_min_range <= spin_max_range` 用已有的那条文案；
   - 二阶段的走路步长（`enemy_speed / phase2_speed_scale / 60`）也必须小于 `hurt_radius`，报错里 `<enemy|lunge>` 写 `enemy in phase 2`；
-  - `phase2_at` 的取值用新规则 `must be greater than 0 and less than 1`。
+  - `phase2_at` 的取值用新规则 `must be greater than 0 and less than 1`（schema 里的规则名是 `between`，两端都不含）。
+  - 二阶段步长只在写了 `phase2_at` 时检查：没有二阶段的敌人不拿默认的 0.75 去算（G4.3 实现时定）。
+  - 二阶段的步长、转向、追踪由一阶段的每 tick 值除以 `s` 得到（不是从 prop 原值重新算），报错里的步长也是这个值（G4.3 实现时定）。
 - 检查顺序：`needs phase2_at` 接在 `needs enemy_speed` 后面；`roar_blast_tick <= roar_ticks` 接在四个招式（加上 `spin`，排在最后）的范围检查后面；二阶段步长接在原来的步长检查后面。
 
 **二阶段的参数**：加载时算好一份二阶段用的参数，`s = phase2_speed_scale`：
@@ -1833,6 +1835,7 @@ if move_tick == roar_ticks: state = idle; move_tick = 0
 - `spin` 的手臂：规则同其他招式。360° 的扇形分 `active_ticks` 段扫一整圈，手臂跟着转一圈。
 - 调试绘制：`swings` 画咆哮的冲击波，规则同招式（冲击波之前是橙色整圈，冲击波那个 tick 是亮红整圈）；`spin` 同其他招式。
 - 暗红系数是 `souls` 的常量。
+- 手臂不跟身体变橙、变暗红，保持自己的原色（闪白、变暗照常）（G4.3 实现时定）。
 
 **Boss 场景**：
 - 写上 `phase2_at` 0.5；
