@@ -444,6 +444,94 @@ fn wall_bump_gives_zombies_no_turn() {
     assert_eq!(state.zombies[0].energy, 0);
 }
 
+// ---------------------------------------------------------------- events
+
+fn hit(by: &str, target: &str, damage: i32, hp: i32, result: HitResult) -> Event {
+    Event::Hit {
+        by: by.to_owned(),
+        target: target.to_owned(),
+        damage,
+        hp,
+        result,
+    }
+}
+
+#[test]
+fn player_bumping_a_zombie_emits_one_hit_then_the_killing_one() {
+    // hp 2, the player's attack 1; speed 1: the zombie never acts.
+    let mut game = game(&OPEN, &[player(1, 2), zombie("zombie", 2, 2, 2, 1, 1)]);
+    let mut input = ActionState::new();
+    assert!(game.events().is_empty());
+    tick(&mut game, &mut input, &["move_e"]);
+    assert_eq!(
+        game.events(),
+        [hit("player", "zombie", 1, 1, HitResult::Hit)]
+    );
+    tick(&mut game, &mut input, &[]);
+    assert!(game.events().is_empty());
+    tick(&mut game, &mut input, &["move_e"]);
+    assert_eq!(
+        game.events(),
+        [hit("player", "zombie", 1, 0, HitResult::Death)]
+    );
+    assert_eq!(
+        messages(&game),
+        [
+            (1, "You hit zombie.".to_owned()),
+            (2, "You kill zombie.".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn zombie_bites_emit_a_hit_each_and_the_killing_one_a_death() {
+    // Both adjacent with speed 100, attack 3: the player (hp 10) is bitten
+    // to 7 and 4 on turn 1; on turn 2 to 1, then 0.
+    let nodes = [
+        player(2, 2),
+        zombie("zombie", 1, 2, 3, 3, 100),
+        zombie("zombie_2", 3, 2, 3, 3, 100),
+    ];
+    let mut game = game(&OPEN, &nodes);
+    let mut input = ActionState::new();
+    tick(&mut game, &mut input, &[WAIT]);
+    assert_eq!(
+        game.events(),
+        [
+            hit("zombie", "player", 3, 7, HitResult::Hit),
+            hit("zombie_2", "player", 3, 4, HitResult::Hit),
+        ]
+    );
+    tick(&mut game, &mut input, &[]);
+    tick(&mut game, &mut input, &[WAIT]);
+    assert_eq!(
+        game.events(),
+        [
+            hit("zombie", "player", 3, 1, HitResult::Hit),
+            hit("zombie_2", "player", 3, 0, HitResult::Death),
+        ]
+    );
+    assert_eq!(messages(&game).last().unwrap().1, "You die.");
+}
+
+#[test]
+fn walking_waiting_and_bumping_walls_emit_no_events() {
+    // The zombie far away steps closer on each turn but never bites.
+    let mut game = game(
+        &CORRIDOR,
+        &[player(0, 0), zombie("zombie", 19, 0, 3, 1, 100)],
+    );
+    let mut input = ActionState::new();
+    for action in ["move_w", "move_e", WAIT] {
+        tick(&mut game, &mut input, &[action]);
+        assert!(game.events().is_empty(), "{action}");
+        tick(&mut game, &mut input, &[]);
+        assert!(game.events().is_empty(), "{action}");
+    }
+    assert_eq!(game.state().turn, 2);
+    assert_eq!(zombie_cell(&game, 0), [17, 0]);
+}
+
 // ---------------------------------------------------------------- scene errors
 
 /// The OPEN map with the player on (0, 0) and one zombie on (4, 4).

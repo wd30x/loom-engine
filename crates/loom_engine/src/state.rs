@@ -98,4 +98,36 @@ mod tests {
         assert!(order.is_sorted(), "{order:?}");
         assert!(json.ends_with("\n  }\n}\n") && !json.contains('\r'));
     }
+
+    #[test]
+    fn compact_state_is_the_pretty_dump_without_its_whitespace() {
+        // The demo scene locked on to dummy_b and into a light attack:
+        // floats, nested objects, nulls and arrays of objects.
+        let mut game = AnyGame::builtin().unwrap();
+        let bindings = game.bindings();
+        let mut input = ActionState::new();
+        for tick in 1..=120 {
+            let actions = match tick {
+                1 => vec!["lock".to_owned()],
+                100 => vec!["attack".to_owned()],
+                _ => vec![],
+            };
+            let axes = if tick < 90 {
+                [("move_y".to_owned(), 1.0)].into()
+            } else {
+                Default::default()
+            };
+            input.advance(loom_core::input::TickInput {
+                actions: actions.into_iter().collect(),
+                axes,
+            });
+            game.tick(&input);
+        }
+        let state = StateDump::of(&game, &input, &bindings);
+        let pretty = state.to_json();
+        assert!(pretty.contains(r#""lock": "dummy_b""#), "{pretty}");
+        assert!(pretty.contains(r#""attack_phase": "recovery""#), "{pretty}");
+        let stripped: String = pretty.chars().filter(|c| !c.is_whitespace()).collect();
+        assert_eq!(serde_json::to_string(&state).unwrap(), stripped);
+    }
 }

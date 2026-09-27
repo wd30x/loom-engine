@@ -97,7 +97,7 @@ public static class SmokeImage {
 $WM_KEYDOWN = 0x0100; $WM_KEYUP = 0x0101; $WM_CLOSE = 0x0010
 $SW_MINIMIZE = 6; $SW_RESTORE = 9
 # Virtual-key code and scan code; winit reads the physical key from the scan code.
-$keyCodes = @{ W = @(0x57, 0x11); A = @(0x41, 0x1E); D = @(0x44, 0x20); L = @(0x4C, 0x26); Esc = @(0x1B, 0x01) }
+$keyCodes = @{ W = @(0x57, 0x11); A = @(0x41, 0x1E); D = @(0x44, 0x20); L = @(0x4C, 0x26); Q = @(0x51, 0x10); Space = @(0x20, 0x39); Esc = @(0x1B, 0x01) }
 # opengl32.dll is not listed: like dxgi.dll it is a static import of loom.exe
 # (wgpu's GL backend links it), so it is always loaded. It is only the GL
 # loader; the actual GL driver DLL is caught by the vendor prefixes below.
@@ -444,7 +444,7 @@ Test-Check 'H7' 'mcp screenshot returns the PNG inline' {
         & $send @{ jsonrpc = '2.0'; method = 'notifications/initialized' }
         & $send @{ jsonrpc = '2.0'; id = 2; method = 'tools/call'; params = @{ name = 'step'; arguments = @{ ticks = 60 } } }
         $step = & $receive 2 60
-        Assert-True (-not $step.result.isError -and $step.result.content[0].text -eq '{"tick":60}') "step: $($step | ConvertTo-Json -Compress -Depth 10)"
+        Assert-True (-not $step.result.isError -and $step.result.content[0].text -eq '{"tick":60,"events":[]}') "step: $($step | ConvertTo-Json -Compress -Depth 10)"
         & $send @{ jsonrpc = '2.0'; id = 3; method = 'tools/call'; params = @{ name = 'screenshot'; arguments = @{} } }
         $reply = & $receive 3 60
         $content = @($reply.result.content)
@@ -737,7 +737,7 @@ if (-not $HeadlessOnly) {
         [IO.File]::WriteAllText($scene, $demo, $utf8)
         [IO.File]::WriteAllText("$out/w8_good.scene.ron", $good, $utf8)
 
-        $run = Start-LoomWindow 'w8' @('--scene', $scene, '--dump-state', "$out/w8.json")
+        $run = Start-LoomWindow 'w8' @('--scene', $scene, '--dump-state', "$out/w8.json", '--trace', "$out/w8.jsonl")
         try {
             # 2 s, not 1: the window appears before the renderer is ready, and
             # the pre-edit ticks are what the restart check below relies on.
@@ -770,6 +770,11 @@ if (-not $HeadlessOnly) {
         Assert-True ($state.tick -le $maxTicks) "tick $($state.tick) is more than the $maxTicks possible since the edit: the reload did not restart from tick 0"
         $replay = Invoke-HeadlessReplayScene "$out/w8_good.scene.ron" $state.tick "$out/w8_replay.json"
         Assert-SameBytes "$out/w8.json" $replay
+        # The trace starts over too: only the final run, from its tick 0.
+        Assert-True ($r.Json.trace.lines -eq $state.tick + 1) "trace has $($r.Json.trace.lines) lines for $($state.tick) ticks"
+        $h = Invoke-Loom @('run', '--headless', '--frames', "$($state.tick)", '--scene', "$out/w8_good.scene.ron", '--trace', "$out/w8_replay.jsonl")
+        Assert-ExitOk $h
+        Assert-SameBytes "$out/w8.jsonl" "$out/w8_replay.jsonl"
     }
 
     Test-Check 'W9' 'exiting before the first frame still exits 0 with a JSON report' {
@@ -819,6 +824,33 @@ if (-not $HeadlessOnly) {
         $tick = $state.tick
         $replay = Invoke-HeadlessReplay "$out/w10.ron" $tick "$out/w10_replay.json"
         Assert-SameBytes "$out/w10.json" $replay
+    }
+
+    Test-Check 'W11' 'window trace equals the trace of its recording replayed headless' {
+        $run = Start-LoomWindow 'w11' @('--record', "$out/w11.ron", '--trace', "$out/w11.jsonl", '--dump-state', "$out/w11.json")
+        try {
+            Start-Sleep -Milliseconds 700
+            Send-Key $run 'Q' $true; Start-Sleep -Milliseconds 100
+            Send-Key $run 'Q' $false; Start-Sleep -Milliseconds 300
+            Send-Key $run 'W' $true; Start-Sleep -Milliseconds 500
+            Send-Key $run 'Space' $true; Start-Sleep -Milliseconds 100
+            Send-Key $run 'Space' $false; Start-Sleep -Milliseconds 800
+            Send-Key $run 'W' $false; Start-Sleep -Milliseconds 300
+            Send-Key $run 'Esc' $true
+            $r = Wait-Loom $run
+            Assert-ExitOk $r
+        } finally {
+            Stop-Loom $run
+        }
+        $tick = (Get-Content "$out/w11.json" -Raw | ConvertFrom-Json).tick
+        Assert-True ($r.Json.trace.lines -eq $tick + 1) "trace has $($r.Json.trace.lines) lines for $tick ticks"
+        $h = Invoke-Loom @('run', '--headless', '--frames', "$tick", '--input', "$out/w11.ron", '--trace', "$out/w11_replay.jsonl")
+        Assert-ExitOk $h
+        Assert-SameBytes "$out/w11.jsonl" "$out/w11_replay.jsonl"
+        $types = @(Get-Content "$out/w11.jsonl" | ForEach-Object { ($_ | ConvertFrom-Json).events } | ForEach-Object { $_.type })
+        $script:detail = "$tick ticks, events: $($types -join ' ')"
+        Assert-True ($types -contains 'lock') 'no lock event in the trace'
+        Assert-True ($types -contains 'action_start') 'no action_start event in the trace'
     }
 }
 

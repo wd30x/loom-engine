@@ -13,7 +13,7 @@ use loom_render::Renderer;
 use crate::RunArgs;
 use crate::output::ensure_parent_dir;
 use crate::reload::{self, Poll, SceneWatcher};
-use crate::report::{InfoReport, RunReport};
+use crate::report::{InfoReport, RunReport, TraceReport};
 use crate::sim::Sim;
 use crate::state::write_state;
 
@@ -48,9 +48,13 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
     let frames = args.frames.expect("clap requires --frames with --headless");
     let mut sim = Sim::new(args, false)?;
     for _ in 0..frames {
-        sim.tick();
+        sim.tick()?;
     }
-    let (record, state) = write_sim_outputs(args, &sim)?;
+    let SimOutputs {
+        record,
+        trace,
+        state,
+    } = write_sim_outputs(args, &mut sim)?;
     let (screenshot, adapter, renderer_init_ms) = match &args.screenshot {
         Some(path) => {
             let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
@@ -73,6 +77,7 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
         screenshot,
         state,
         record,
+        trace,
         input: sim.input_report(),
         scene: sim.scene_path(),
         game: sim.game().name(),
@@ -83,18 +88,30 @@ fn run_headless(args: &RunArgs, started: Instant) -> Result<RunReport> {
     })
 }
 
-/// Writes the recording, then the state dump, as requested. Both modes call
-/// this once the last tick has run.
-fn write_sim_outputs(args: &RunArgs, sim: &Sim) -> Result<(Option<String>, Option<String>)> {
+/// The report fields of what [`write_sim_outputs`] wrote.
+struct SimOutputs {
+    record: Option<String>,
+    trace: Option<TraceReport>,
+    state: Option<String>,
+}
+
+/// Writes the recording, closes the trace, then writes the state dump, as
+/// requested. Both modes call this once the last tick has run.
+fn write_sim_outputs(args: &RunArgs, sim: &mut Sim) -> Result<SimOutputs> {
     let record = match &args.record {
         Some(path) => Some(sim.write_record(path)?),
         None => None,
     };
+    let trace = sim.stop_trace()?;
     let state = match &args.dump_state {
         Some(path) => Some(write_state(path, &sim.state_dump())?),
         None => None,
     };
-    Ok((record, state))
+    Ok(SimOutputs {
+        record,
+        trace,
+        state,
+    })
 }
 
 fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
@@ -127,6 +144,7 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
         screenshot: None,
         state: None,
         record: None,
+        trace: None,
         error: None,
         done: false,
     };
@@ -160,6 +178,7 @@ fn run_window(args: &RunArgs, started: Instant) -> Result<RunReport> {
         screenshot: app.screenshot,
         state: app.state,
         record: app.record,
+        trace: app.trace.take(),
         input: app.sim.input_report(),
         scene: app.sim.scene_path(),
         game: app.sim.game().name(),
@@ -196,6 +215,7 @@ struct WindowRun<'a> {
     screenshot: Option<String>,
     state: Option<String>,
     record: Option<String>,
+    trace: Option<TraceReport>,
     error: Option<anyhow::Error>,
     /// Set once we decided to exit; later events are ignored.
     done: bool,
@@ -231,8 +251,8 @@ impl WindowRun<'_> {
         self.done = true;
         let args = self.args;
         // Recording and state exist even if nothing was ever rendered (minimized).
-        match write_sim_outputs(args, &self.sim) {
-            Ok((record, state)) => (self.record, self.state) = (record, state),
+        match write_sim_outputs(args, &mut self.sim) {
+            Ok(out) => (self.record, self.trace, self.state) = (out.record, out.trace, out.state),
             Err(e) => return self.fail(e),
         }
         let Some(path) = &args.screenshot else {
@@ -253,10 +273,11 @@ impl WindowRun<'_> {
     }
 
     /// Polls the scene file (every 0.5 s at most) and applies a reload.
-    /// Returns `true` if the simulation restarted on a new scene.
-    fn check_scene(&mut self, now: Instant) -> bool {
+    /// Returns `true` if the simulation restarted on a new scene; fails
+    /// only if restarting the trace does.
+    fn check_scene(&mut self, now: Instant) -> Result<bool> {
         let (Some(watcher), Some(path)) = (&mut self.watcher, &self.args.scene) else {
-            return false;
+            return Ok(false);
         };
         match watcher.poll(
             now,
@@ -268,12 +289,12 @@ impl WindowRun<'_> {
                 if let Err(e) = reload::check_same_game(running, loaded.game.name()) {
                     self.reload_errors += 1;
                     log::error!("scene {} not reloaded: {e:#}", path.display());
-                    return false;
+                    return Ok(false);
                 }
-                self.sim.restart(*loaded);
+                self.sim.restart(*loaded)?;
                 self.reloads += 1;
                 log::info!("scene {} reloaded; restarting from tick 0", path.display());
-                true
+                Ok(true)
             }
             Poll::Failed(e) => {
                 self.reload_errors += 1;
@@ -281,9 +302,9 @@ impl WindowRun<'_> {
                     "scene {} not reloaded, keeping the current scene: {e:#}",
                     path.display()
                 );
-                false
+                Ok(false)
             }
-            Poll::NotChecked | Poll::Unchanged | Poll::FailedAgain => false,
+            Poll::NotChecked | Poll::Unchanged | Poll::FailedAgain => Ok(false),
         }
     }
 
@@ -292,7 +313,7 @@ impl WindowRun<'_> {
             return Ok(AppControl::Continue);
         }
         let now = Instant::now();
-        if self.check_scene(now) {
+        if self.check_scene(now)? {
             // Restarted from tick 0: no time has passed in the new run yet.
             self.timestep = FixedTimestep::new();
             self.last_frame = Some(now);
@@ -303,7 +324,7 @@ impl WindowRun<'_> {
         self.last_frame = Some(now);
         log::trace!("frame {} dt {:.2} ms", self.frames + 1, dt * 1000.0);
         for _ in 0..self.timestep.advance(dt) {
-            self.sim.tick();
+            self.sim.tick()?;
         }
 
         let renderer = self

@@ -5,6 +5,8 @@
 use loom_scene::NodeId;
 use serde::Serialize;
 
+use crate::events::Outcome;
+
 /// Whether a hurtbox with health stands, reels or lies dead; serialized in
 /// lower case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -109,8 +111,8 @@ impl Health {
     /// A hit of `damage` and `impact` from the direction `fall` (see
     /// [`Health::fall`]): dies at 0 health, otherwise staggers once the
     /// impacts add up past the poise; either of those records `fall`.
-    /// Returns whether it died.
-    pub fn take(&mut self, damage: f32, impact: f32, fall: f32) -> bool {
+    /// Returns which of the three it was.
+    pub fn take(&mut self, damage: f32, impact: f32, fall: f32) -> Outcome {
         let now = &mut self.now;
         now.hp = f32::max(now.hp - damage, 0.0);
         if now.hp == 0.0 {
@@ -119,7 +121,7 @@ impl Health {
             now.impact = 0.0;
             now.impact_wait = 0;
             self.fall = fall;
-            true
+            Outcome::Death
         } else {
             now.impact += impact;
             now.impact_wait = self.poise_reset_ticks;
@@ -128,8 +130,10 @@ impl Health {
                 now.state_ticks = self.stagger_ticks;
                 now.impact = 0.0;
                 self.fall = fall;
+                Outcome::Stagger
+            } else {
+                Outcome::Hit
             }
-            false
         }
     }
 }

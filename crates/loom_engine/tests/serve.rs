@@ -753,3 +753,189 @@ fn souls_lock_pressed_through_held_input_locks_on_to_dummy_b_and_replays() {
         .collect();
     assert_eq!(raw, dumped);
 }
+
+// ---------------------------------------------------------------- events and traces
+
+/// The raw text of a trace line's `events` array (the state dump that
+/// follows starts with its `tick`; no event holds that).
+fn trace_events_text(line: &str) -> &str {
+    let key = r#","events":"#;
+    let rest = &line[line.find(key).expect("the line has events") + key.len()..];
+    &rest[..rest
+        .find(r#","state":{"tick":"#)
+        .expect("the line has a state")]
+}
+
+/// The raw text of a `step` reply's `events` array.
+fn step_events_text(line: &str) -> &str {
+    let key = r#","events":"#;
+    let rest = &line[line.find(key).expect("the reply has events") + key.len()..];
+    rest.strip_suffix("}}")
+        .expect("the reply ends with the result")
+}
+
+/// The events inside an array's text `[…]`, joined by commas: nothing for
+/// `[]`.
+fn inner(array: &str) -> &str {
+    array
+        .strip_prefix('[')
+        .and_then(|a| a.strip_suffix(']'))
+        .expect("an array")
+}
+
+/// Requests that play `souls_dummy_killed_while_locked_...`'s script on
+/// the built-in scene up to tick 250 (the dummy killed), ids from 1; a
+/// trace is started after tick 100, the tick the first attack starts.
+/// Returns the requests and the ids of every `step`.
+fn kill_requests(trace: &std::path::Path, record: &std::path::Path) -> (Vec<String>, Vec<u64>) {
+    let plan: [(Value, u64); 13] = [
+        (json!({"actions": {"lock": true}}), 1),
+        (
+            json!({"actions": {"lock": false}, "axes": {"move_y": 1.0}}),
+            94,
+        ),
+        (json!({"axes": {"move_y": 0.0}}), 4),
+        (json!({"actions": {"attack": true}}), 1),
+        (json!({"actions": {"attack": false}}), 14),
+        (json!({"actions": {"attack": true}}), 1),
+        (json!({"actions": {"attack": false}}), 29),
+        (json!({"actions": {"attack": true}}), 1),
+        (json!({"actions": {"attack": false}}), 44),
+        (json!({"actions": {"heavy": true}}), 1),
+        (json!({"actions": {"heavy": false}}), 49),
+        (json!({"actions": {"attack": true}}), 1),
+        (json!({"actions": {"attack": false}}), 10),
+    ];
+    let mut requests = Vec::new();
+    let mut steps = Vec::new();
+    let mut tick = 0;
+    for (input, ticks) in plan {
+        requests.push(req(requests.len() as u64 + 1, "input", input));
+        steps.push(requests.len() as u64 + 1);
+        requests.push(req(
+            requests.len() as u64 + 1,
+            "step",
+            json!({"ticks": ticks}),
+        ));
+        tick += ticks;
+        if tick == 100 {
+            let params = json!({"path": path_str(trace)});
+            requests.push(req(requests.len() as u64 + 1, "trace", params));
+        }
+    }
+    assert_eq!(tick, 250);
+    let params = json!({"path": path_str(record)});
+    requests.push(req(requests.len() as u64 + 1, "record", params));
+    (requests, steps)
+}
+
+#[test]
+fn step_events_carry_their_tick_and_the_text_the_replayed_trace_has() {
+    let dir = test_dir("step_events_carry_their_tick_and_the_text_the_replayed_trace_has");
+    let (served, record, replayed) = (
+        dir.join("served.jsonl"),
+        dir.join("rec.ron"),
+        dir.join("replayed.jsonl"),
+    );
+    let (requests, steps) = kill_requests(&served, &record);
+    let session = serve_raw(&requests);
+    assert_eq!(session.code, 0);
+    assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
+    let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .args(["run", "--headless", "--frames", "250", "--input"])
+        .arg(&record)
+        .arg("--trace")
+        .arg(&replayed)
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("loom run can be started");
+    assert!(out.status.success(), "{out:?}");
+    let replayed = fs::read_to_string(&replayed).expect("the replay traced");
+
+    // Every step's events, joined, against the replayed trace's events with
+    // a `tick` put in front of each (every event starts with its `type`).
+    let from_steps: Vec<&str> = steps
+        .iter()
+        .map(|&id| inner(step_events_text(&session.lines[id as usize - 1])))
+        .filter(|e| !e.is_empty())
+        .collect();
+    let from_trace: Vec<String> = replayed
+        .lines()
+        .enumerate()
+        .map(|(t, line)| {
+            inner(trace_events_text(line))
+                .replace(r#"{"type":"#, &format!(r#"{{"tick":{t},"type":"#))
+        })
+        .filter(|e| !e.is_empty())
+        .collect();
+    assert_eq!(from_steps.join(","), from_trace.join(","));
+    // Floats, and the hit that kills dummy_b on the last tick.
+    assert!(
+        from_steps.join(",").contains(
+            r#"{"tick":250,"type":"hit","by":"player","target":"dummy_b","attack":"attack","combo":1,"damage":20.0,"hp":0.0,"result":"death"}"#
+        ),
+        "{from_steps:?}"
+    );
+
+    // The trace started after tick 100 is the replayed one from line 100:
+    // its first line has that tick's events (the attack starting).
+    let served = fs::read_to_string(&served).expect("the session traced");
+    let replayed_lines: Vec<&str> = replayed.lines().collect();
+    assert_eq!(served.lines().collect::<Vec<_>>(), replayed_lines[100..]);
+    let first = served.lines().next().expect("a first line");
+    assert!(
+        first.starts_with(
+            r#"{"tick":100,"events":[{"type":"action_start","action":"attack","combo":1,"buffered":false}],"#
+        ),
+        "{first}"
+    );
+}
+
+#[test]
+fn trace_starts_stops_and_starts_over_on_reset_and_load_scene() {
+    let dir = test_dir("trace_starts_stops_and_starts_over_on_reset_and_load_scene");
+    let (a, b) = (dir.join("new/a.jsonl"), dir.join("b.jsonl"));
+    let replies = serve(&[
+        req(1, "step", json!({"ticks": 3})),
+        req(2, "trace", json!({"path": path_str(&a)})),
+        req(3, "step", json!({"ticks": 2})),
+        req(4, "reset", json!({})),
+        req(5, "step", json!({"ticks": 1})),
+        // Starting another trace stops this one.
+        req(6, "trace", json!({"path": path_str(&b)})),
+        req(7, "step", json!({"ticks": 2})),
+        req(8, "load_scene", json!({"source": DEMO_SCENE})),
+        req(9, "trace", json!({})),
+        req(10, "trace", json!({})),
+        req(11, "trace", json!({"path": path_str(&a), "extra": 1})),
+    ]);
+    assert_eq!(*result(&replies[0]), json!({"tick": 3, "events": []}));
+    assert_eq!(
+        *result(&replies[1]),
+        json!({"path": path_str(&a), "tick": 3})
+    );
+    assert_eq!(
+        *result(&replies[5]),
+        json!({"path": path_str(&b), "tick": 1})
+    );
+    // b: ticks 1, 2 and 3, then tick 0 of the loaded scene.
+    assert_eq!(
+        *result(&replies[8]),
+        json!({"path": path_str(&b), "lines": 1})
+    );
+    assert_eq!(*result(&replies[9]), json!({"path": null, "lines": 0}));
+    assert_eq!(error_code(&replies[10]), -32602);
+    let ticks = |path: &std::path::Path| -> Vec<u64> {
+        fs::read_to_string(path)
+            .expect("the trace was written")
+            .lines()
+            .map(|l| {
+                let l: Value = serde_json::from_str(l).expect("JSON");
+                l["tick"].as_u64().expect("a tick")
+            })
+            .collect()
+    };
+    // a: ticks 3, 4, 5, emptied by the reset, then 0 and 1.
+    assert_eq!(ticks(&a), [0, 1]);
+    assert_eq!(ticks(&b), [0]);
+}

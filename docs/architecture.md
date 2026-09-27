@@ -233,6 +233,7 @@ loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
 - 边跑边写（带缓冲），不在内存里攒着；进程正常结束时写完并关闭。写失败按运行时错误报出，退出码 1。
 - 窗口模式也能用。**热重载时文件清空，从新的 tick 0 重新写**，和录制、状态导出一样只覆盖最后一段。
 - 只看事件：`jq -c 'select(.events != []) | {tick, events}' trace.jsonl`。
+- 大小：内置演示场景约 3.7 KB/tick（13 MB/分钟），几乎全是 `nodes`。以后场景变大、轨迹太大时，再考虑只写部分字段或增量格式。
 
 **保证**：
 - 同样的输入写出逐字节相同的文件（第 4 节）。
@@ -1410,9 +1411,12 @@ player_hit(s):
   - `"staggered"`、`"dead"`：角色硬直或死亡中（锁定键只有 `"dead"`）。
   - `"no_target"`：按锁定键时范围内没有能锁的目标（`input` 是 `"lock"`）。
   - 除了 `no_stamina` 的那种情况，`buffered` 都是 false。
+  - 执行预输入的那个 tick 又有新按键：新按键算 `outranked`，被这个预输入挤掉（按键在开始动作之前判定，不按开始后的前摇、翻滚算）。
+  - 硬直或死亡清空的预输入**不发**事件：它不是这个 tick 的按键，而且从前一个 tick 的 `buffered` 加上 `action_end`（`interrupted`）看得出来（E5.1 审查时定）。
   - 同时符合几条时，按这个顺序取第一条：`dead`、`staggered`、`rolling`、`startup`、`outranked`、`no_stamina`。所以前摇里同时按轻重攻击，两个都是 `startup`。`outranked` 只用于这个 tick 本来会有一个键生效（开始动作或记下预输入）时被挤掉的那些。
   - 一个 tick 里同一个 `input` 最多发一次。按的是 tick 采样之后的动作（`just_pressed`，翻滚键是点按），两次采样之间的连按只算一次。
 - `buffer_replaced`：`old`、`new` 都是 `"attack"`、`"heavy"`、`"roll"`。第一次记下预输入（原来是 `null`）不发事件，看状态里的 `buffered`。
+  - 同一个键记两次（`old == new`）也发。这样每一次按键都有着落：生效、记下、被覆盖、被丢掉，四者必居其一（E5.1 审查时定）。
 - `action_start`：`action` 是 `"roll"`、`"backstep"`、`"attack"`、`"heavy"`、`"sprint"`；`combo` 同 `hit`；`buffered`：是不是从预输入开始的。
 - `action_end`：`reason` 是 `"finished"`（跑完了自己的 tick 数，或者冲刺停下）或 `"interrupted"`（被打出硬直或打死，第 5c 步）。
   - 一个 tick 里先结束、后开始：冲刺中按攻击，先发冲刺的 `action_end`，再发攻击的 `action_start`。
@@ -1423,6 +1427,12 @@ player_hit(s):
   - `"out_of_range"`：超过 `lock_break_range` 自动解锁；
   - `"target_died"`：锁定的目标被打死；
   - `"died"`：角色死了。
+- **同一个 tick 里的先后**（E5.1 审查时按实现定下）：
+  - 按步骤顺序：第 0b 步（`revive`、`respawn`）→ 第 1 步（锁定键的 `lock`、`input_dropped`）→ 第 4 步 → 第 5c 步。
+  - 第 4 步里被丢掉的键，按优先级排：重攻击、轻攻击、翻滚。
+  - 开始动作时：冲刺的 `action_end` → `action_start` →（只有 1 个 tick 的动作的 `action_end`）→ 被挤掉的 `outranked`。
+  - 耐力为 0 时：候选键的 `no_stamina` 在前，被它挤掉的 `outranked` 在后。
+  - 命中：`hit` → 被打断的 `action_end`（`interrupted`）→ `lock`（`target_died` 或 `died`）。
 - 发事件不改变任何状态，状态导出和 E5.1 之前逐位相同。
 
 ### 碰撞（G1.3 起）
@@ -1616,6 +1626,8 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 - **轨迹一致**（E5.1 起）：同一个会话里 `trace` 写出的文件，和用 `record` 的脚本回放时 `loom run --trace` 写出的文件，从 `trace` 开始的那个 tick 起逐行相同。
 - **能回放**：`record` 写出的脚本，用 `loom run --headless --frames <tick> --input <脚本> [--scene 同一个场景] --dump-state` 回放，得到的状态导出去掉空白后，和回放前 `state` 的 `result` 原文相同。
 - **截图和 `loom run` 一致**：同一个状态，`screenshot` 和 `loom run --headless --screenshot` 的 PNG 逐字节相同。
+- **例外：写轨迹失败**（E5.1 起）。`step` 中途写轨迹失败时回复错误，但已经跑过的 tick 不回滚，状态已经变了。写文件失败很少见，回滚的代价不值得。
+- **`quit` 之后**关闭轨迹失败时，只写 stderr 日志、退出码 1，stdout 不再输出任何东西：回复已经发出，再写一个错误 JSON 会破坏「一行一条回复」（E5.1 审查时定，E5.2 顺手改，E5.1 的实现会再写一个错误 JSON）。
 - **渲染器只建一次**：第一次 `screenshot` 时创建，之后反复使用，尺寸变了就 resize。不截图的会话完全不碰 GPU，和第 2 节的无头模式一样。
 - `render_ms` 是这一次截图的墙钟耗时（包括第一次创建渲染器），只用于诊断。
 

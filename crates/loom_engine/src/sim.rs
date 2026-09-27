@@ -16,9 +16,10 @@ use loom_scene::Scene;
 use crate::RunArgs;
 use crate::games::AnyGame;
 use crate::output::ensure_parent_dir;
-use crate::report::InputReport;
+use crate::report::{InputReport, TraceReport};
 use crate::sheet::Sheets;
 use crate::state::StateDump;
+use crate::trace::Trace;
 use crate::view::render_scene;
 
 /// A scene ready to simulate: the game its top-level `game` names and the
@@ -71,6 +72,8 @@ pub(crate) struct Sim {
     bindings: ActionMap,
     source: InputSource,
     recorder: Option<InputRecorder>,
+    /// `--trace`, or serve's `trace`: a line after every tick.
+    trace: Option<Trace>,
     /// `--scene` as given; `None` for the built-in scene.
     scene_path: Option<String>,
     /// Source text of the scene as loaded (`--scene`, or a scene a serve
@@ -106,16 +109,21 @@ impl Sim {
             None if live => InputSource::Live(InputCollector::new()),
             None => InputSource::Idle,
         };
-        Ok(Self {
+        let mut sim = Self {
             game: loaded.game,
             sheets: loaded.sheets,
             actions: ActionState::new(),
             bindings,
             source,
             recorder: args.record.is_some().then(InputRecorder::new),
+            trace: None,
             scene_path: args.scene.as_ref().map(|p| p.display().to_string()),
             scene_source,
-        })
+        };
+        if let Some(path) = &args.trace {
+            sim.start_trace(path)?;
+        }
+        Ok(sim)
     }
 
     /// A `loom serve` session on `loaded`, from tick 0: the input is held
@@ -134,15 +142,16 @@ impl Sim {
             actions: ActionState::new(),
             source: InputSource::Held(TickInput::default()),
             recorder: Some(InputRecorder::new()),
+            trace: None,
             scene_path,
             scene_source,
         }
     }
 
     /// Starts over from tick 0 with `loaded` (a reloaded scene): the clock,
-    /// action state, recording and script replay restart; keys held on the
-    /// keyboard stay held. The bindings are `loaded`'s game's.
-    pub fn restart(&mut self, loaded: LoadedScene) {
+    /// action state, recording, script replay and trace restart; keys held
+    /// on the keyboard stay held. The bindings are `loaded`'s game's.
+    pub fn restart(&mut self, loaded: LoadedScene) -> Result<()> {
         self.bindings = loaded.game.bindings();
         self.game = loaded.game;
         self.sheets = loaded.sheets;
@@ -153,6 +162,10 @@ impl Sim {
         if let InputSource::Script { script, player, .. } = &mut self.source {
             *player = ScriptPlayer::new(script.clone());
         }
+        if let Some(trace) = &mut self.trace {
+            trace.restart()?;
+        }
+        self.trace_line()
     }
 
     /// Source text of the scene as loaded; `None` for the built-in scene.
@@ -161,8 +174,8 @@ impl Sim {
     }
 
     /// Runs one tick: sample this tick's input, advance the action state,
-    /// record, then step the game.
-    pub fn tick(&mut self) {
+    /// record, step the game, then trace. Only writing the trace can fail.
+    pub fn tick(&mut self) -> Result<()> {
         let next = match &mut self.source {
             InputSource::Idle => TickInput::default(),
             InputSource::Script { player, .. } => player.next_tick(),
@@ -174,6 +187,41 @@ impl Sim {
             recorder.observe(self.actions.input());
         }
         self.game.tick(&self.actions);
+        self.trace_line()
+    }
+
+    /// With a trace, writes the line of the current tick: the events of
+    /// the latest tick (none at tick 0) and the state now.
+    fn trace_line(&mut self) -> Result<()> {
+        if let Some(trace) = &mut self.trace {
+            let state = StateDump::of(&self.game, &self.actions, &self.bindings);
+            trace.line(self.game.clock().tick(), self.game.events(), &state)?;
+        }
+        Ok(())
+    }
+
+    /// Starts tracing to `path` (emptied first), stopping a trace already
+    /// running, and writes the current tick's line at once.
+    pub fn start_trace(&mut self, path: &Path) -> Result<()> {
+        self.stop_trace()?;
+        self.trace = Some(Trace::create(path)?);
+        self.trace_line()
+    }
+
+    /// Stops tracing: writes out and closes the file. `None` without a trace.
+    pub fn stop_trace(&mut self) -> Result<Option<TraceReport>> {
+        self.trace.take().map(Trace::finish).transpose()
+    }
+
+    /// Hands the running trace over to `other` (a serve session starting
+    /// over), which empties it and writes its own tick 0.
+    pub fn pass_trace_to(&mut self, other: &mut Self) -> Result<()> {
+        if let Some(mut trace) = self.trace.take() {
+            trace.restart()?;
+            other.trace = Some(trace);
+            other.trace_line()?;
+        }
+        Ok(())
     }
 
     /// A key event from the window. Ignored while replaying a script.

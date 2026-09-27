@@ -11,6 +11,7 @@ use loom_core::input::ActionState;
 use loom_scene::{MeshKind, NodeId, Scene, SceneError};
 use serde::Serialize;
 
+use crate::events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
 use crate::health::{Condition, Health, HealthState, HpBar};
 use crate::moves::{Action, Attack, AttackPhase, Buffered, Params};
 
@@ -540,6 +541,10 @@ pub struct Game {
     spawn: (Vec3, f32),
     /// The camera's yaw and pitch at load, given back on a respawn.
     start_view: (f32, f32),
+    /// The character node's path, for events.
+    player_path: String,
+    /// The events of the latest tick, in the order they happened.
+    events: Vec<Event>,
 }
 
 /// This tick's input as step 4 uses it.
@@ -551,6 +556,21 @@ struct Intent<'a> {
     v: Vec2,
     /// `v` relative to the camera (step 3).
     dir: Vec3,
+}
+
+impl Intent<'_> {
+    /// This tick's presses of the action keys, heavy before light before
+    /// the roll key's tap: the order they outrank each other in.
+    fn presses(&self) -> Vec<Buffered> {
+        [
+            (self.input.just_pressed(HEAVY), Buffered::Heavy),
+            (self.input.just_pressed(ATTACK), Buffered::Attack),
+            (self.tap, Buffered::Roll),
+        ]
+        .into_iter()
+        .filter_map(|(pressed, b)| pressed.then_some(b))
+        .collect()
+    }
 }
 
 impl Game {
@@ -659,6 +679,7 @@ impl Game {
         };
         let spawn = (state.player.position, state.player.facing);
         let start_view = (state.camera.yaw, state.camera.pitch);
+        let player_path = scene.path(player);
         let mut game = Self {
             clock: SimClock::new(),
             scene,
@@ -692,6 +713,8 @@ impl Game {
             player_meshes,
             spawn,
             start_view,
+            player_path,
+            events: Vec::new(),
         };
         game.place_camera(true);
         Ok(game)
@@ -700,6 +723,7 @@ impl Game {
     /// Runs one tick with this tick's input.
     pub fn tick(&mut self, input: &ActionState) {
         self.clock.step();
+        self.events.clear();
         let params = self.params;
 
         // 0. The roll key: a tap fires on release.
@@ -718,14 +742,25 @@ impl Game {
         };
 
         // 0b. Staggers and deaths run out; added-up impacts are forgotten.
-        for health in self.hurtboxes.iter_mut().filter_map(|h| h.health.as_mut()) {
-            health.count_down();
+        for h in &mut self.hurtboxes {
+            if let Some(health) = &mut h.health {
+                let was_dead = health.is_dead();
+                health.count_down();
+                if was_dead && !health.is_dead() {
+                    self.events.push(Event::Revive {
+                        node: h.path.clone(),
+                    });
+                }
+            }
         }
         // The character's too; coming back from the dead is the respawn: at
         // the spawn point with full stamina, the camera turned as at load.
         let was_dead = self.health.is_dead();
         self.health.count_down();
         if was_dead && !self.health.is_dead() {
+            self.events.push(Event::Respawn {
+                position: self.spawn.0,
+            });
             let player = &mut self.state.player;
             (player.position, player.facing) = self.spawn;
             player.stamina = params.stamina_max;
@@ -741,17 +776,30 @@ impl Game {
         // 1a. The lock key (not while dead), and letting go of a target too
         // far away.
         let lock = params.lock;
+        if input.just_pressed(LOCK) && self.health.is_dead() {
+            self.drop_inputs(&[Input::Lock], DropReason::Dead);
+        }
         if input.just_pressed(LOCK) && !self.health.is_dead() {
-            self.lock = match self.lock {
-                None => self.acquire(player.position, camera.yaw),
-                Some(_) => None,
-            };
+            match self.lock {
+                None => match self.acquire(player.position, camera.yaw) {
+                    Some(t) => {
+                        self.lock = Some(t);
+                        self.lock_event(Some(t), LockReason::Pressed);
+                    }
+                    None => self.drop_inputs(&[Input::Lock], DropReason::NoTarget),
+                },
+                Some(_) => {
+                    self.lock = None;
+                    self.lock_event(None, LockReason::Pressed);
+                }
+            }
             self.flick = 0.0;
             self.switch_wait = 0;
         } else if let Some(t) = self.lock
             && hdist(player.position, self.target_position(t)) > lock.break_range
         {
             self.lock = None;
+            self.lock_event(None, LockReason::OutOfRange);
         }
 
         if let Some(mut t) = self.lock {
@@ -768,6 +816,7 @@ impl Game {
                     if let Some(next) = self.switch_target(player.position, t, self.flick > 0.0) {
                         t = next;
                         self.lock = Some(t);
+                        self.lock_event(Some(t), LockReason::Switched);
                     }
                     self.flick = 0.0;
                     self.switch_wait = lock.switch_cooldown_ticks;
@@ -808,12 +857,20 @@ impl Game {
         // 4. Actions and movement; each move ends by pushing the capsule
         // out of the colliders. `busy`: stamina used or an action running.
         let intent = Intent { input, tap, v, dir };
+        let presses = intent.presses();
         let mut busy = true;
         if self.health.now.state != Condition::Ok {
             // Staggered or dead: no moving, turning or actions, and presses
             // are dropped; stamina comes back.
             busy = false;
+            let reason = if self.health.is_dead() {
+                DropReason::Dead
+            } else {
+                DropReason::Staggered
+            };
+            self.drop_presses(&presses, reason);
         } else if matches!(player.action, Action::Roll | Action::Backstep) {
+            self.drop_presses(&presses, DropReason::Rolling);
             let m = params.movement(player.action);
             player.action_tick += 1;
             player.position = resolve(
@@ -824,16 +881,20 @@ impl Game {
             );
             // The last tick still moves.
             if player.action_tick == m.ticks {
-                self.finished = (player.action, 0);
-                player.action = Action::Idle;
-                player.action_tick = 0;
+                self.end_action(&mut player, 0);
             }
         } else if matches!(player.action, Action::Attack | Action::Heavy) {
             player.action_tick += 1;
             self.attack_tick(&mut player, &intent);
-        } else if let Some((next, from_buffer)) = next_action(&mut player, &intent) {
+        } else if let Some((next, from_buffer)) = self.next_action(&mut player, &presses) {
+            if player.action == Action::Sprint {
+                self.events.push(Event::ActionEnd {
+                    action: Action::Sprint,
+                    reason: EndReason::Finished,
+                });
+            }
             match next {
-                Buffered::Roll => self.start_roll(&mut player, &intent),
+                Buffered::Roll => self.start_roll(&mut player, from_buffer, &intent),
                 Buffered::Attack => {
                     self.start_attack(&mut player, Action::Attack, from_buffer, &intent);
                 }
@@ -841,6 +902,8 @@ impl Game {
                     self.start_attack(&mut player, Action::Heavy, from_buffer, &intent);
                 }
             }
+            // Pressed on the same tick, but outranked by what started.
+            self.drop_presses(outranked(&presses, from_buffer), DropReason::Outranked);
         } else {
             let sprinting = input.pressed(ROLL)
                 && self.hold > params.tap_ticks
@@ -859,7 +922,15 @@ impl Game {
                 self.height,
                 player.position + dir * step,
             );
+            let was_sprinting = player.action == Action::Sprint;
             if sprinting {
+                if !was_sprinting {
+                    self.events.push(Event::ActionStart {
+                        action: Action::Sprint,
+                        combo: 0,
+                        buffered: false,
+                    });
+                }
                 player.action = Action::Sprint;
                 player.stamina = f32::max(player.stamina - params.sprint_drain, 0.0);
                 player.stamina_wait = params.delay_ticks;
@@ -867,6 +938,12 @@ impl Game {
                     self.spent = true;
                 }
             } else {
+                if was_sprinting {
+                    self.events.push(Event::ActionEnd {
+                        action: Action::Sprint,
+                        reason: EndReason::Finished,
+                    });
+                }
                 player.action = Action::Idle;
                 busy = false;
             }
@@ -933,11 +1010,7 @@ impl Game {
             if s.swing_tick == 1 {
                 s.struck = false;
             }
-            if s.phase() != Some(AttackPhase::Active)
-                || s.struck
-                || self.health.is_dead()
-                || player.invulnerable
-            {
+            if s.phase() != Some(AttackPhase::Active) || s.struck || self.health.is_dead() {
                 continue;
             }
             let (lo, hi) = s.slice_of(s.swing_tick - s.startup);
@@ -952,11 +1025,21 @@ impl Game {
                 low: s.low,
                 high: s.high,
             };
-            if sweep.touches(player.position, self.radius, self.height) {
-                s.struck = true;
-                let (by, damage, impact) = (s.path.clone(), s.damage, s.impact);
-                self.player_hit(player, at, by, damage, impact);
+            if !sweep.touches(player.position, self.radius, self.height) {
+                continue;
             }
+            // Invulnerable: no hit, and the round may still hit later.
+            if player.invulnerable {
+                self.events.push(Event::Dodged {
+                    by: s.path.clone(),
+                    action: player.action,
+                    action_tick: player.action_tick,
+                });
+                continue;
+            }
+            s.struck = true;
+            let (by, damage, impact) = (s.path.clone(), s.damage, s.impact);
+            self.player_hit(player, at, by, damage, impact);
         }
     }
 
@@ -975,7 +1058,7 @@ impl Game {
         player.hits += 1;
         player.last_hit = Some(PlayerHit {
             tick: self.clock.tick(),
-            by,
+            by: by.clone(),
         });
         // Away from the swinger; -Z when on one spot, like a hurtbox.
         let fall = if hdist(from, player.position) > 0.0 {
@@ -983,8 +1066,23 @@ impl Game {
         } else {
             0.0
         };
-        let died = self.health.take(damage, impact, fall);
+        let outcome = self.health.take(damage, impact, fall);
+        self.events.push(Event::Hit {
+            by,
+            target: self.player_path.clone(),
+            attack: HitAttack::Swing,
+            combo: 0,
+            damage: Some(damage),
+            hp: Some(self.health.now.hp),
+            result: outcome,
+        });
         if self.health.now.state != Condition::Ok {
+            if player.action != Action::Idle {
+                self.events.push(Event::ActionEnd {
+                    action: player.action,
+                    reason: EndReason::Interrupted,
+                });
+            }
             player.action = Action::Idle;
             player.action_tick = 0;
             player.attack_phase = None;
@@ -993,8 +1091,9 @@ impl Game {
             player.invulnerable = false;
             self.finished = (Action::Idle, 0);
         }
-        if died {
+        if outcome == Outcome::Death && self.lock.is_some() {
             self.lock = None;
+            self.lock_event(None, LockReason::Died);
         }
     }
 
@@ -1073,7 +1172,7 @@ impl Game {
 
     /// Starts a roll the way the input points, or a backstep without a
     /// direction, and runs its first tick.
-    fn start_roll(&mut self, player: &mut PlayerState, intent: &Intent) {
+    fn start_roll(&mut self, player: &mut PlayerState, from_buffer: bool, intent: &Intent) {
         if intent.v.length_squared() > 0.0 {
             // Roll the way the input points, turning there at once.
             player.action = Action::Roll;
@@ -1085,6 +1184,11 @@ impl Game {
             player.action = Action::Backstep;
             self.action_dir = Vec3::new(libm::sinf(player.facing), 0.0, libm::cosf(player.facing));
         }
+        self.events.push(Event::ActionStart {
+            action: player.action,
+            combo: 0,
+            buffered: from_buffer,
+        });
         let m = self.params.movement(player.action);
         player.stamina = f32::max(player.stamina - m.cost, 0.0);
         player.stamina_wait = self.params.delay_ticks;
@@ -1096,9 +1200,7 @@ impl Game {
             player.position + self.action_dir * m.step,
         );
         if m.ticks == 1 {
-            self.finished = (player.action, 0);
-            player.action = Action::Idle;
-            player.action_tick = 0;
+            self.end_action(player, 0);
         }
     }
 
@@ -1124,6 +1226,11 @@ impl Game {
         };
         player.action = action;
         player.action_tick = 1;
+        self.events.push(Event::ActionStart {
+            action,
+            combo: player.combo,
+            buffered: from_buffer,
+        });
         let a = self.params.attack_of(action);
         player.stamina = f32::max(player.stamina - a.cost, 0.0);
         player.stamina_wait = self.params.delay_ticks;
@@ -1137,7 +1244,12 @@ impl Game {
     /// the next action. The last tick ends the attack.
     fn attack_tick(&mut self, player: &mut PlayerState, intent: &Intent) {
         let a = self.params.attack_of(player.action);
+        let presses = intent.presses();
         let phase = if player.action_tick <= a.startup {
+            // Presses on tick 1 are `next_action`'s, which started the attack.
+            if player.action_tick > 1 {
+                self.drop_presses(&presses, DropReason::Startup);
+            }
             // Towards the target while locked on, otherwise towards `dir`.
             let step = self.params.attack_turn_step;
             if let Some(t) = self.lock {
@@ -1167,18 +1279,17 @@ impl Game {
         if phase != AttackPhase::Startup {
             // A later press replaces an earlier one; on one tick, heavy
             // beats light beats the roll key. Startup presses are dropped.
-            if intent.input.just_pressed(HEAVY) {
-                player.buffered = Some(Buffered::Heavy);
-            } else if intent.input.just_pressed(ATTACK) {
-                player.buffered = Some(Buffered::Attack);
-            } else if intent.tap {
-                player.buffered = Some(Buffered::Roll);
+            if let Some((&new, outranked)) = presses.split_first() {
+                if let Some(old) = player.buffered {
+                    self.events.push(Event::BufferReplaced { old, new });
+                }
+                player.buffered = Some(new);
+                self.drop_presses(outranked, DropReason::Outranked);
             }
         }
         if player.action_tick == a.startup + a.active + a.recovery {
-            self.finished = (player.action, player.combo);
-            player.action = Action::Idle;
-            player.action_tick = 0;
+            let combo = player.combo;
+            self.end_action(player, combo);
             player.attack_phase = None;
             player.combo = 0;
         }
@@ -1223,13 +1334,36 @@ impl Game {
                 } else {
                     0.0
                 };
-                if let Some(health) = &mut h.health
-                    && health.take(a.damage, a.impact, fall)
+                let attack = match player.action {
+                    Action::Heavy => HitAttack::Heavy,
+                    _ => HitAttack::Attack,
+                };
+                let (damage, hp, result) = match &mut h.health {
+                    Some(health) => {
+                        let outcome = health.take(a.damage, a.impact, fall);
+                        (Some(a.damage), Some(health.now.hp), outcome)
+                    }
+                    None => (None, None, Outcome::Hit),
+                };
+                self.events.push(Event::Hit {
+                    by: self.player_path.clone(),
+                    target: h.path.clone(),
+                    attack,
+                    combo: player.combo,
+                    damage,
+                    hp,
+                    result,
+                });
+                if result == Outcome::Death
                     && self
                         .lock
                         .is_some_and(|t| self.targets[t].hurtbox == Some(i))
                 {
                     self.lock = None;
+                    self.events.push(Event::Lock {
+                        target: None,
+                        reason: LockReason::TargetDied,
+                    });
                 }
             }
         }
@@ -1342,6 +1476,74 @@ impl Game {
 
     pub fn clock(&self) -> SimClock {
         self.clock
+    }
+
+    /// The events of the latest tick, in the order they happened; none
+    /// before the first tick.
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+
+    /// Ends the running roll, backstep or attack on its last tick; `combo`
+    /// is what a buffered light attack continues from.
+    fn end_action(&mut self, player: &mut PlayerState, combo: u32) {
+        self.events.push(Event::ActionEnd {
+            action: player.action,
+            reason: EndReason::Finished,
+        });
+        self.finished = (player.action, combo);
+        player.action = Action::Idle;
+        player.action_tick = 0;
+    }
+
+    /// An event for the lock-on target changing to `t` (`None`: let go).
+    fn lock_event(&mut self, t: Option<usize>, reason: LockReason) {
+        let target = t.map(|t| self.targets[t].path.clone());
+        self.events.push(Event::Lock { target, reason });
+    }
+
+    /// `input_dropped` for each of `inputs`.
+    fn drop_inputs(&mut self, inputs: &[Input], reason: DropReason) {
+        for &input in inputs {
+            self.events.push(Event::InputDropped {
+                input,
+                reason,
+                buffered: false,
+            });
+        }
+    }
+
+    /// `input_dropped` for each of this tick's `presses`.
+    fn drop_presses(&mut self, presses: &[Buffered], reason: DropReason) {
+        let inputs: Vec<Input> = presses.iter().map(|&p| p.into()).collect();
+        self.drop_inputs(&inputs, reason);
+    }
+
+    /// `next_action` of step 4: the buffered action, else this tick's first
+    /// press (heavy, then light, then a roll-key tap), with whether it was
+    /// buffered. With no stamina left there is none, and the input,
+    /// buffered or not, is dropped, along with the presses it outranked.
+    fn next_action(
+        &mut self,
+        player: &mut PlayerState,
+        presses: &[Buffered],
+    ) -> Option<(Buffered, bool)> {
+        let next = if let Some(buffered) = player.buffered.take() {
+            (buffered, true)
+        } else {
+            (*presses.first()?, false)
+        };
+        if player.stamina > 0.0 {
+            return Some(next);
+        }
+        let (next, from_buffer) = next;
+        self.events.push(Event::InputDropped {
+            input: next.into(),
+            reason: DropReason::NoStamina,
+            buffered: from_buffer,
+        });
+        self.drop_presses(outranked(presses, from_buffer), DropReason::Outranked);
+        None
     }
 
     pub fn scene(&self) -> &Scene {
@@ -1802,22 +2004,14 @@ fn resolve(boxes: &[BoxCollider], r: f32, h: f32, mut p: Vec3) -> Vec3 {
     p
 }
 
-/// `next_action` of step 4: the buffered action, else a new press (heavy,
-/// then light, then a roll-key tap), with whether it was buffered. With no
-/// stamina left there is none, and the input, buffered or not, is dropped.
-fn next_action(player: &mut PlayerState, intent: &Intent) -> Option<(Buffered, bool)> {
-    let next = if let Some(buffered) = player.buffered.take() {
-        (buffered, true)
-    } else if intent.input.just_pressed(HEAVY) {
-        (Buffered::Heavy, false)
-    } else if intent.input.just_pressed(ATTACK) {
-        (Buffered::Attack, false)
-    } else if intent.tap {
-        (Buffered::Roll, false)
+/// Of this tick's `presses`, the ones `next_action` outranked: all of
+/// them when it took the buffered action, else all but the first.
+fn outranked(presses: &[Buffered], from_buffer: bool) -> &[Buffered] {
+    if from_buffer {
+        presses
     } else {
-        return None;
-    };
-    (player.stamina > 0.0).then_some(next)
+        presses.get(1..).unwrap_or_default()
+    }
 }
 
 /// Wraps an angle into `[-π, π)`. `floor` is exactly rounded, so this is

@@ -3619,4 +3619,713 @@ mod tests {
             "the node \"t\": its hp_bar needs a mesh"
         );
     }
+
+    // ------------------------------------------------------------------ events
+
+    mod events {
+        use super::*;
+        use crate::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
+
+        type Held = (Vec<&'static str>, Vec<(&'static str, f32)>);
+
+        /// Runs `ticks` more ticks, holding what `input(t)` gives on the
+        /// run's tick `t`; returns the ticks that had events, with them.
+        fn events_of(
+            run: &mut Run,
+            ticks: u32,
+            input: impl Fn(u64) -> Held,
+        ) -> Vec<(u64, Vec<Event>)> {
+            let mut out = Vec::new();
+            for _ in 0..ticks {
+                let t = run.game.clock().tick() + 1;
+                let (actions, axes) = input(t);
+                run.hold(&actions, &axes);
+                let events = run.game.events();
+                if !events.is_empty() {
+                    out.push((t, events.to_vec()));
+                }
+            }
+            out
+        }
+
+        /// `action` pressed on the ticks `on`, nothing else.
+        fn press(action: &'static str, on: &'static [u64]) -> impl Fn(u64) -> Held {
+            move |t| {
+                (
+                    if on.contains(&t) {
+                        vec![action]
+                    } else {
+                        vec![]
+                    },
+                    vec![],
+                )
+            }
+        }
+
+        fn start(action: Action, combo: u32, buffered: bool) -> Event {
+            Event::ActionStart {
+                action,
+                combo,
+                buffered,
+            }
+        }
+
+        fn end(action: Action) -> Event {
+            Event::ActionEnd {
+                action,
+                reason: EndReason::Finished,
+            }
+        }
+
+        fn dropped(input: Input, reason: DropReason) -> Event {
+            Event::InputDropped {
+                input,
+                reason,
+                buffered: false,
+            }
+        }
+
+        fn lock(target: Option<&str>, reason: LockReason) -> Event {
+            Event::Lock {
+                target: target.map(str::to_owned),
+                reason,
+            }
+        }
+
+        /// A hit by the character's `attack` on `target`, which has health.
+        fn struck(
+            target: &str,
+            attack: HitAttack,
+            combo: u32,
+            damage: f32,
+            hp: f32,
+            result: Outcome,
+        ) -> Event {
+            Event::Hit {
+                by: "player".to_owned(),
+                target: target.to_owned(),
+                attack,
+                combo,
+                damage: Some(damage),
+                hp: Some(hp),
+                result,
+            }
+        }
+
+        /// A hit of 3 damage by the swinger "s" on the character.
+        fn swung(hp: f32, result: Outcome) -> Event {
+            Event::Hit {
+                by: "s".to_owned(),
+                target: "player".to_owned(),
+                attack: HitAttack::Swing,
+                combo: 0,
+                damage: Some(3.0),
+                hp: Some(hp),
+                result,
+            }
+        }
+
+        #[test]
+        fn character_hits_report_hit_then_stagger_then_death_with_the_hp_left() {
+            // hp 10, poise 1. Light (3 damage, impact 1) on 2: impact 1, not
+            // past the poise; on 5: impact 2, staggered. Heavy (5) on 8: dead.
+            let mut run = dummy_run(r#"("hp", 10), ("poise", 1)"#);
+            let events = events_of(&mut run, 9, |t| match t {
+                1 | 4 => (vec![ATTACK], vec![]),
+                7 => (vec![HEAVY], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (1, vec![start(Action::Attack, 1, false)]),
+                    (
+                        2,
+                        vec![struck("d", HitAttack::Attack, 1, 3.0, 7.0, Outcome::Hit)]
+                    ),
+                    (3, vec![end(Action::Attack)]),
+                    (4, vec![start(Action::Attack, 1, false)]),
+                    (
+                        5,
+                        vec![struck(
+                            "d",
+                            HitAttack::Attack,
+                            1,
+                            3.0,
+                            4.0,
+                            Outcome::Stagger
+                        )]
+                    ),
+                    (6, vec![end(Action::Attack)]),
+                    (7, vec![start(Action::Heavy, 0, false)]),
+                    (
+                        8,
+                        vec![struck("d", HitAttack::Heavy, 0, 5.0, 0.0, Outcome::Death)]
+                    ),
+                    (9, vec![end(Action::Heavy)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn hit_on_a_hurtbox_without_hp_has_null_damage_and_hp() {
+            let nodes = hurtbox("h", (0.0, 0.0, -1.5), 0.25, 1.8);
+            let mut run = Run::on(&scene_with(&health_props(), &nodes));
+            let events = events_of(&mut run, 2, press(ATTACK, &[1]));
+            let hit = Event::Hit {
+                by: "player".to_owned(),
+                target: "h".to_owned(),
+                attack: HitAttack::Attack,
+                combo: 1,
+                damage: None,
+                hp: None,
+                result: Outcome::Hit,
+            };
+            assert_eq!(events[1], (2, vec![hit]));
+        }
+
+        #[test]
+        fn one_slice_hitting_two_hurtboxes_reports_both_in_pre_order() {
+            // "a" 20° to the left comes first in the file, though the sweep
+            // runs right to left; one active tick sweeps the whole 120°.
+            let nodes = format!(
+                "{}{}",
+                dummy("a", (-0.5, -1.5), r#"("hp", 10)"#),
+                dummy("b", (0.5, -1.5), r#"("hp", 10)"#)
+            );
+            let mut run = Run::on(&scene_with(&health_props(), &nodes));
+            let events = events_of(&mut run, 2, press(ATTACK, &[1]));
+            assert_eq!(
+                events[1],
+                (
+                    2,
+                    vec![
+                        struck("a", HitAttack::Attack, 1, 3.0, 7.0, Outcome::Stagger),
+                        struck("b", HitAttack::Attack, 1, 3.0, 7.0, Outcome::Stagger),
+                    ]
+                )
+            );
+        }
+
+        #[test]
+        fn swinger_hit_on_the_character_reports_a_swing() {
+            // Impact 20 on poise 0: staggered.
+            let mut run = hit_run(r#"("hp", 100)"#, &swinger("s", (0.0, 0.0, 0.0), RHYTHM));
+            let events = events_of(&mut run, 6, press(ATTACK, &[]));
+            assert_eq!(events, [(3, vec![swung(97.0, Outcome::Stagger)])]);
+        }
+
+        #[test]
+        fn killing_the_locked_dummy_reports_the_hit_then_letting_go() {
+            let mut run = dummy_run(r#"("hp", 3)"#);
+            let events = events_of(&mut run, 4, |t| match t {
+                1 => (vec![LOCK], vec![]),
+                2 => (vec![ATTACK], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (1, vec![lock(Some("d"), LockReason::Pressed)]),
+                    (2, vec![start(Action::Attack, 1, false)]),
+                    (
+                        3,
+                        vec![
+                            struck("d", HitAttack::Attack, 1, 3.0, 0.0, Outcome::Death),
+                            lock(None, LockReason::TargetDied),
+                        ]
+                    ),
+                    (4, vec![end(Action::Attack)]),
+                ]
+            );
+        }
+
+        /// The roll key tapped on ticks 1-2, `axes` on tick 2, as [`dodge`].
+        fn tap_with(axes: &[(&'static str, f32)]) -> impl Fn(u64) -> Held {
+            let axes = axes.to_vec();
+            move |t| match t {
+                1 => (vec![ROLL], vec![]),
+                2 => (vec![], axes.clone()),
+                _ => (vec![], vec![]),
+            }
+        }
+
+        #[test]
+        fn sweep_over_an_invulnerable_dodge_is_dodged_and_a_later_round_hits() {
+            // As `dodge_invulnerable_on_the_only_active_tick_is_not_hit_that_round`:
+            // active on tick 5, the dodge's tick 4, and on tick 18.
+            for (axes, action) in [(&FORWARD[..], Action::Roll), (&NONE[..], Action::Backstep)] {
+                let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(4, 8));
+                let mut run = hit_run(SHORT_DODGES, &nodes);
+                let events = events_of(&mut run, 18, tap_with(axes));
+                let dodged = Event::Dodged {
+                    by: "s".to_owned(),
+                    action,
+                    action_tick: 4,
+                };
+                assert_eq!(
+                    events,
+                    [
+                        (2, vec![start(action, 0, false)]),
+                        (5, vec![dodged]),
+                        (9, vec![end(action)]),
+                        (18, vec![swung(97.0, Outcome::Stagger)]),
+                    ],
+                    "{action:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn same_sweep_on_a_character_standing_still_is_a_hit() {
+            let nodes = swinger("s", (0.0, 0.0, 0.0), &all_round(4, 8));
+            let mut run = hit_run(SHORT_DODGES, &nodes);
+            let events = events_of(&mut run, 9, press(ATTACK, &[]));
+            assert_eq!(events, [(5, vec![swung(97.0, Outcome::Stagger)])]);
+        }
+
+        #[test]
+        fn rolling_outside_the_sweep_reports_only_the_roll() {
+            // 20 m away, reach 10.
+            let nodes = swinger("s", (0.0, 0.0, -20.0), &all_round(4, 8));
+            let mut run = hit_run(SHORT_DODGES, &nodes);
+            let events = events_of(&mut run, 18, tap_with(&FORWARD));
+            assert_eq!(
+                events,
+                [
+                    (2, vec![start(Action::Roll, 0, false)]),
+                    (9, vec![end(Action::Roll)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn dodge_hit_after_its_invulnerability_is_interrupted() {
+            // As `dodge_is_hit_later_in_the_round_once_invulnerability_is_over_and_broken_off`.
+            let props = r#"("swing_startup_ticks", 4), ("swing_active_ticks", 4),
+                ("swing_recovery_ticks", 4), ("swing_arc", 360)"#;
+            for (axes, action) in [(&FORWARD[..], Action::Roll), (&NONE[..], Action::Backstep)] {
+                let mut run = hit_run(SHORT_DODGES, &swinger("s", (0.0, 0.0, 0.0), props));
+                let events = events_of(&mut run, 8, tap_with(axes));
+                let dodged = Event::Dodged {
+                    by: "s".to_owned(),
+                    action,
+                    action_tick: 4,
+                };
+                let interrupted = Event::ActionEnd {
+                    action,
+                    reason: EndReason::Interrupted,
+                };
+                assert_eq!(
+                    events,
+                    [
+                        (2, vec![start(action, 0, false)]),
+                        (5, vec![dodged]),
+                        (6, vec![swung(97.0, Outcome::Stagger), interrupted]),
+                    ],
+                    "{action:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn presses_while_staggered_are_dropped_as_staggered() {
+            // Hit on tick 2 (impact 1, poise 0): staggered for 30 ticks.
+            let mut run = every_third_tick(r#"("hp", 100)"#, 1);
+            let events = events_of(&mut run, 4, |t| match t {
+                3 => (vec![HEAVY, ATTACK, ROLL], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (2, vec![swung(97.0, Outcome::Stagger)]),
+                    (
+                        3,
+                        vec![
+                            dropped(Input::Heavy, DropReason::Staggered),
+                            dropped(Input::Attack, DropReason::Staggered),
+                        ]
+                    ),
+                    // The roll key's tap is its release.
+                    (4, vec![dropped(Input::Roll, DropReason::Staggered)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn presses_while_dead_are_dropped_as_dead_until_the_respawn() {
+            // Killed on tick 2, dead on 2..=6, back at the spawn point on 7.
+            let mut run = every_third_tick(r#"("hp", 3), ("respawn_ticks", 5)"#, 1);
+            let events = events_of(&mut run, 7, |t| match t {
+                3 => (vec![ATTACK, LOCK], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (2, vec![swung(0.0, Outcome::Death)]),
+                    (
+                        3,
+                        vec![
+                            dropped(Input::Lock, DropReason::Dead),
+                            dropped(Input::Attack, DropReason::Dead),
+                        ]
+                    ),
+                    (
+                        7,
+                        vec![Event::Respawn {
+                            position: Vec3::ZERO
+                        }]
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn attack_pressed_during_a_roll_is_dropped_as_rolling() {
+            let mut run = Run::new(&attack_props());
+            let events = events_of(&mut run, 5, |t| match t {
+                1 => (vec![ROLL], vec![]),
+                2 => (vec![], FORWARD.to_vec()),
+                4 => (vec![ATTACK], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (2, vec![start(Action::Roll, 0, false)]),
+                    (4, vec![dropped(Input::Attack, DropReason::Rolling)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn light_and_heavy_pressed_together_in_startup_are_both_dropped_as_startup() {
+            let mut run = Run::new(&attack_props());
+            let events = events_of(&mut run, 5, |t| match t {
+                1 => (vec![ATTACK], vec![]),
+                2 => (vec![HEAVY], vec![]),
+                4 => (vec![ATTACK, HEAVY], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (1, vec![start(Action::Attack, 1, false)]),
+                    (2, vec![dropped(Input::Heavy, DropReason::Startup)]),
+                    (
+                        4,
+                        vec![
+                            dropped(Input::Heavy, DropReason::Startup),
+                            dropped(Input::Attack, DropReason::Startup),
+                        ]
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn light_press_starting_with_a_heavy_one_is_outranked() {
+            let mut run = Run::new(&attack_props());
+            let events = events_of(&mut run, 1, |_| (vec![ATTACK, HEAVY], vec![]));
+            assert_eq!(
+                events,
+                [(
+                    1,
+                    vec![
+                        start(Action::Heavy, 0, false),
+                        dropped(Input::Attack, DropReason::Outranked),
+                    ]
+                )]
+            );
+        }
+
+        #[test]
+        fn light_press_buffered_with_a_heavy_one_is_outranked() {
+            // Active on ticks 5-8: the heavy press is buffered, the first
+            // buffer of this attack, so nothing is replaced.
+            let mut run = Run::new(&attack_props());
+            let events = events_of(&mut run, 6, |t| match t {
+                1 => (vec![ATTACK], vec![]),
+                6 => (vec![ATTACK, HEAVY], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (1, vec![start(Action::Attack, 1, false)]),
+                    (6, vec![dropped(Input::Attack, DropReason::Outranked)]),
+                ]
+            );
+            assert_eq!(run.game.state().player.buffered, Some(Buffered::Heavy));
+        }
+
+        #[test]
+        fn press_on_the_tick_a_buffered_attack_starts_is_outranked_by_it() {
+            // The light press on 3 (recovery) is buffered and starts on 4,
+            // where a heavy press comes too late to count.
+            let mut run = Run::new(&health_props());
+            let events = events_of(&mut run, 4, |t| match t {
+                1 | 3 => (vec![ATTACK], vec![]),
+                4 => (vec![HEAVY], vec![]),
+                _ => (vec![], vec![]),
+            });
+            assert_eq!(
+                events[2],
+                (
+                    4,
+                    vec![
+                        start(Action::Attack, 2, true),
+                        dropped(Input::Heavy, DropReason::Outranked),
+                    ]
+                )
+            );
+        }
+
+        #[test]
+        fn with_no_stamina_the_buffered_action_then_new_presses_are_dropped() {
+            // As `with_no_stamina_new_and_buffered_actions_are_dropped`: the
+            // attack on tick 1 uses all 10 stamina; the press on 6 is
+            // buffered and dropped on 15, the tick after the attack.
+            let mut run = Run::new(&format!(r#"{}, ("stamina_max", 10)"#, attack_props()));
+            let events = events_of(&mut run, 18, |t| match t {
+                1 | 6 | 16 => (vec![ATTACK], vec![]),
+                18 => (vec![HEAVY, ATTACK], vec![]),
+                _ => (vec![], vec![]),
+            });
+            let no_stamina = |input, buffered| Event::InputDropped {
+                input,
+                reason: DropReason::NoStamina,
+                buffered,
+            };
+            assert_eq!(
+                events,
+                [
+                    (1, vec![start(Action::Attack, 1, false)]),
+                    (14, vec![end(Action::Attack)]),
+                    (15, vec![no_stamina(Input::Attack, true)]),
+                    (16, vec![no_stamina(Input::Attack, false)]),
+                    (
+                        18,
+                        vec![
+                            no_stamina(Input::Heavy, false),
+                            dropped(Input::Attack, DropReason::Outranked),
+                        ]
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn lock_key_with_no_target_in_range_is_dropped_as_no_target() {
+            let mut run = Run::new(PROPS);
+            let events = events_of(&mut run, 1, press(LOCK, &[1]));
+            assert_eq!(
+                events,
+                [(1, vec![dropped(Input::Lock, DropReason::NoTarget)])]
+            );
+        }
+
+        #[test]
+        fn later_press_replacing_the_buffered_one_is_reported_once() {
+            // The light press on 6 is the first buffer: no event.
+            let mut run = Run::new(&attack_props());
+            let events = events_of(&mut run, 7, |t| match t {
+                1 | 6 => (vec![ATTACK], vec![]),
+                7 => (vec![HEAVY], vec![]),
+                _ => (vec![], vec![]),
+            });
+            let replaced = Event::BufferReplaced {
+                old: Buffered::Attack,
+                new: Buffered::Heavy,
+            };
+            assert_eq!(
+                events,
+                [
+                    (1, vec![start(Action::Attack, 1, false)]),
+                    (7, vec![replaced])
+                ]
+            );
+        }
+
+        #[test]
+        fn roll_backstep_and_sprint_report_their_start_and_end() {
+            // A roll of 24 ticks and a backstep of 16, from tick 2.
+            for (axes, action, last) in [
+                (&FORWARD[..], Action::Roll, 25),
+                (&NONE[..], Action::Backstep, 17),
+            ] {
+                let mut run = Run::new(PROPS);
+                let events = events_of(&mut run, 30, tap_with(axes));
+                assert_eq!(
+                    events,
+                    [
+                        (2, vec![start(action, 0, false)]),
+                        (last, vec![end(action)])
+                    ],
+                    "{action:?}"
+                );
+            }
+            // Sprinting from tick 16 of holding the key; released on 21.
+            let mut run = Run::new(PROPS);
+            let events = events_of(&mut run, 22, |t| {
+                (if t <= 20 { vec![ROLL] } else { vec![] }, FORWARD.to_vec())
+            });
+            assert_eq!(
+                events,
+                [
+                    (16, vec![start(Action::Sprint, 0, false)]),
+                    (21, vec![end(Action::Sprint)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn buffered_second_light_attack_starts_as_combo_two_from_the_buffer() {
+            // Ticks 1-3, the press on 3 (recovery) buffered; then 4-6.
+            let mut run = Run::new(&health_props());
+            let events = events_of(&mut run, 7, press(ATTACK, &[1, 3]));
+            assert_eq!(
+                events,
+                [
+                    (1, vec![start(Action::Attack, 1, false)]),
+                    (3, vec![end(Action::Attack)]),
+                    (4, vec![start(Action::Attack, 2, true)]),
+                    (6, vec![end(Action::Attack)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn attacking_out_of_a_sprint_ends_the_sprint_before_the_attack_starts() {
+            let mut run = Run::new(&attack_props());
+            let events = events_of(&mut run, 21, |t| {
+                let actions = if t <= 20 {
+                    vec![ROLL]
+                } else {
+                    vec![ROLL, ATTACK]
+                };
+                (actions, FORWARD.to_vec())
+            });
+            assert_eq!(
+                events,
+                [
+                    (16, vec![start(Action::Sprint, 0, false)]),
+                    (
+                        21,
+                        vec![end(Action::Sprint), start(Action::Attack, 1, false)]
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn roll_of_one_tick_starts_and_ends_on_that_tick() {
+            let props = r#"("roll_ticks", 1), ("roll_distance", 0.125), ("roll_invuln_to", 1)"#;
+            let mut run = Run::new(props);
+            let events = events_of(&mut run, 3, tap_with(&FORWARD));
+            assert_eq!(
+                events,
+                [(2, vec![start(Action::Roll, 0, false), end(Action::Roll)])]
+            );
+        }
+
+        #[test]
+        fn lock_key_locks_on_and_lets_go_as_pressed() {
+            let mut run = Run::on(&scene_with("", &three_targets()));
+            let events = events_of(&mut run, 3, press(LOCK, &[1, 3]));
+            assert_eq!(
+                events,
+                [
+                    (1, vec![lock(Some("mid"), LockReason::Pressed)]),
+                    (3, vec![lock(None, LockReason::Pressed)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn flick_to_the_right_reports_the_switched_target() {
+            let mut run = Run::on(&scene_with("", &three_targets()));
+            let events = events_of(&mut run, 2, |t| match t {
+                1 => (vec![LOCK], vec![]),
+                _ => (vec![], vec![(LOOK_X, 0.12)]),
+            });
+            assert_eq!(
+                events[1],
+                (2, vec![lock(Some("right"), LockReason::Switched)])
+            );
+        }
+
+        #[test]
+        fn target_past_lock_break_range_is_let_go_as_out_of_range() {
+            // As `target_past_lock_break_range_is_let_go_on_the_tick_it_is`.
+            let props = format!(r#"{PROPS}, ("lock_range", 5), ("lock_break_range", 6)"#);
+            let mut run = Run::on(&scene_with(&props, &target("ahead", 0.0, -5.0)));
+            let events = events_of(&mut run, 20, |t| match t {
+                1 => (vec![LOCK], vec![]),
+                _ => (vec![], vec![(MOVE_Y, -1.0)]),
+            });
+            assert_eq!(
+                events,
+                [
+                    (1, vec![lock(Some("ahead"), LockReason::Pressed)]),
+                    (19, vec![lock(None, LockReason::OutOfRange)]),
+                ]
+            );
+        }
+
+        #[test]
+        fn character_killed_while_locked_on_lets_go_as_died() {
+            let nodes = format!(
+                "{}{}",
+                target("t", 0.0, -10.0),
+                swinger("s", (0.0, 0.0, 0.0), &all_round(1, 1))
+            );
+            let mut run = hit_run(r#"("hp", 3)"#, &nodes);
+            let events = events_of(&mut run, 2, press(LOCK, &[1]));
+            assert_eq!(
+                events,
+                [
+                    (1, vec![lock(Some("t"), LockReason::Pressed)]),
+                    (
+                        2,
+                        vec![swung(0.0, Outcome::Death), lock(None, LockReason::Died)]
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn killed_dummy_revives_with_an_event_on_the_tick_it_stands() {
+            // Killed on tick 2, dead on 2..=6, back on 7.
+            let mut run = dummy_run(r#"("hp", 3), ("revive_ticks", 5)"#);
+            let events = events_of(&mut run, 8, press(ATTACK, &[1]));
+            assert_eq!(
+                events,
+                [
+                    (1, vec![start(Action::Attack, 1, false)]),
+                    (
+                        2,
+                        vec![struck("d", HitAttack::Attack, 1, 3.0, 0.0, Outcome::Death)]
+                    ),
+                    (3, vec![end(Action::Attack)]),
+                    (
+                        7,
+                        vec![Event::Revive {
+                            node: "d".to_owned()
+                        }]
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn frozen_g3_3_demo_without_input_emits_no_events() {
+            let mut run = Run::on(include_str!("g3_3_demo.scene.ron"));
+            assert!(run.game.events().is_empty());
+            let events = events_of(&mut run, 120, press(ATTACK, &[]));
+            assert_eq!(events, []);
+        }
+    }
 }

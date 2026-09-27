@@ -29,6 +29,40 @@ pub(crate) enum AnyGameState {
     Rogue(rogue::GameState),
 }
 
+/// The events of one tick (`docs/architecture.md` section 6, "轨迹"): the
+/// inner game's list, unwrapped, so each event is the game's own object.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(untagged)]
+pub(crate) enum AnyEvents<'a> {
+    Souls(&'a [souls::Event]),
+    Rogue(&'a [rogue::Event]),
+}
+
+/// One event, owned: for collecting events over several ticks.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub(crate) enum AnyEvent {
+    Souls(souls::Event),
+    Rogue(rogue::Event),
+}
+
+impl AnyEvents<'_> {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Souls(events) => events.len(),
+            Self::Rogue(events) => events.len(),
+        }
+    }
+
+    /// Owned copies of the events, in order.
+    pub fn to_vec(self) -> Vec<AnyEvent> {
+        match self {
+            Self::Souls(events) => events.iter().cloned().map(AnyEvent::Souls).collect(),
+            Self::Rogue(events) => events.iter().cloned().map(AnyEvent::Rogue).collect(),
+        }
+    }
+}
+
 impl AnyGame {
     /// Starts the game `scene` names. Errors are the scene's: a missing or
     /// unknown `game`, or what that game requires of its scene.
@@ -81,6 +115,14 @@ impl AnyGame {
         match self {
             Self::Souls(game) => game.tick(input),
             Self::Rogue(game) => game.tick(input),
+        }
+    }
+
+    /// The events of the latest tick; none before the first.
+    pub fn events(&self) -> AnyEvents<'_> {
+        match self {
+            Self::Souls(game) => AnyEvents::Souls(game.events()),
+            Self::Rogue(game) => AnyEvents::Rogue(game.events()),
         }
     }
 

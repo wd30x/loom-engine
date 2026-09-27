@@ -87,6 +87,15 @@ pub struct RecordArgs {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceArgs {
+    /// JSONL file to write the trace to, relative to the repository root; parent directories
+    /// are created and an existing file is emptied. Omit it to stop tracing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
 #[tool_router]
 impl LoomServer {
     pub fn new(bridge: Bridge) -> Self {
@@ -133,7 +142,9 @@ impl LoomServer {
     }
 
     /// Advance the simulation by N fixed 1/60 s ticks using the held input. Returns the tick
-    /// reached.
+    /// reached and the events the game emitted during those ticks (hits, dodged swings,
+    /// dropped presses, actions starting and ending, lock-on changes, ...), in order, each
+    /// with the tick it happened on.
     #[tool]
     async fn step(
         &self,
@@ -197,6 +208,18 @@ impl LoomServer {
         Parameters(args): Parameters<RecordArgs>,
     ) -> Result<CallToolResult, McpError> {
         Ok(self.forward("record", to_params(&args)).await)
+    }
+
+    /// Start writing a trace to `path`: one JSON line per tick, `{"tick", "events", "state"}`
+    /// with the full state dump, starting with the current tick; or stop it (no `path`).
+    /// load_scene and reset start the file over from tick 0. Returns the path and the tick of
+    /// the first line, or on stopping the path (null if none) and the number of lines.
+    #[tool]
+    async fn trace(
+        &self,
+        Parameters(args): Parameters<TraceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("trace", to_params(&args)).await)
     }
 }
 

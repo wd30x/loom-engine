@@ -20,6 +20,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::games::AnyEvent;
 use crate::report::RunAdapter;
 use crate::run::save_screenshot;
 use crate::sim::{LoadedScene, Sim};
@@ -45,7 +46,9 @@ pub(crate) fn serve(args: &ServeArgs) -> Result<()> {
     if let Some(renderer) = session.renderer.take() {
         renderer.shutdown();
     }
-    result
+    // `quit` or the end of stdin: write out the trace, if any.
+    let traced = session.sim.stop_trace();
+    result.and(traced.map(|_| ()))
 }
 
 struct Session {
@@ -131,6 +134,10 @@ impl Session {
                 }
                 .map_err(ServeError::Engine)?;
                 // Only now: a failed load keeps the session as it was.
+                let mut sim = sim;
+                self.sim
+                    .pass_trace_to(&mut sim)
+                    .map_err(ServeError::Engine)?;
                 self.sim = sim;
                 reply(
                     id,
@@ -143,7 +150,11 @@ impl Session {
             }
             "reset" => {
                 let NoParams {} = parse_params(params)?;
-                self.sim = self.restarted().map_err(ServeError::Engine)?;
+                let mut sim = self.restarted().map_err(ServeError::Engine)?;
+                self.sim
+                    .pass_trace_to(&mut sim)
+                    .map_err(ServeError::Engine)?;
+                self.sim = sim;
                 reply(id, TickResult { tick: self.tick() })
             }
             "input" => {
@@ -167,10 +178,24 @@ impl Session {
                         "ticks must be at least 1"
                     )));
                 }
+                let mut events = Vec::new();
                 for _ in 0..ticks {
-                    self.sim.tick();
+                    self.sim.tick().map_err(ServeError::Engine)?;
+                    let tick = self.tick();
+                    let tick_events = self.sim.game().events().to_vec();
+                    events.extend(
+                        tick_events
+                            .into_iter()
+                            .map(|event| TickEvent { tick, event }),
+                    );
                 }
-                reply(id, TickResult { tick: self.tick() })
+                reply(
+                    id,
+                    StepResult {
+                        tick: self.tick(),
+                        events,
+                    },
+                )
             }
             "state" => {
                 let NoParams {} = parse_params(params)?;
@@ -212,6 +237,29 @@ impl Session {
                         ticks: self.tick(),
                     },
                 )
+            }
+            "trace" => {
+                let TraceParams { path } = parse_params(params)?;
+                match path {
+                    Some(path) => {
+                        self.sim.start_trace(&path).map_err(ServeError::Engine)?;
+                        reply(
+                            id,
+                            TraceStarted {
+                                path: path.display().to_string(),
+                                tick: self.tick(),
+                            },
+                        )
+                    }
+                    None => {
+                        let report = self.sim.stop_trace().map_err(ServeError::Engine)?;
+                        let (path, lines) = match report {
+                            Some(report) => (Some(report.path), report.lines),
+                            None => (None, 0),
+                        };
+                        reply(id, TraceStopped { path, lines })
+                    }
+                }
             }
             "quit" => {
                 let NoParams {} = parse_params(params)?;
@@ -498,6 +546,13 @@ struct RecordParams {
     path: PathBuf,
 }
 
+/// A path starts a trace; none stops it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraceParams {
+    path: Option<PathBuf>,
+}
+
 // ---------------------------------------------------------------- results
 
 #[derive(Serialize)]
@@ -525,6 +580,23 @@ struct TickResult {
     tick: u64,
 }
 
+#[derive(Serialize)]
+struct StepResult {
+    tick: u64,
+    /// Every event of the ticks run, in order.
+    events: Vec<TickEvent>,
+}
+
+/// An event with the tick it happened on, first: `{"tick":57,"type":…}`.
+/// Flattened, the event's fields are serialized as they are, so their
+/// text is the trace's.
+#[derive(Serialize)]
+struct TickEvent {
+    tick: u64,
+    #[serde(flatten)]
+    event: AnyEvent,
+}
+
 /// The held input: pressed actions (sorted) and the non-zero axes.
 #[derive(Serialize)]
 struct HeldInput<'a> {
@@ -549,11 +621,26 @@ struct RecordResult {
 }
 
 #[derive(Serialize)]
+struct TraceStarted {
+    path: String,
+    /// The tick of the first line.
+    tick: u64,
+}
+
+#[derive(Serialize)]
+struct TraceStopped {
+    /// `None` when no trace was running.
+    path: Option<String>,
+    lines: u64,
+}
+
+#[derive(Serialize)]
 struct Empty {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::games::AnyEvents;
 
     fn error_of(line: &str) -> (Value, i32) {
         let (id, e) = parse_request(line).err().expect("the line is rejected");
@@ -579,6 +666,43 @@ mod tests {
             assert_eq!(error_of(line), (Value::Null, -32600), "{line}");
         }
         assert_eq!(error_of("{"), (Value::Null, -32700));
+    }
+
+    #[test]
+    fn step_event_is_the_trace_event_text_with_its_tick_in_front() {
+        // Floats whose f32 text is shorter than their f64 one.
+        let events = [
+            souls::Event::Hit {
+                by: "s".to_owned(),
+                target: "player".to_owned(),
+                attack: souls::HitAttack::Swing,
+                combo: 0,
+                damage: Some(0.1),
+                hp: Some(1.0 / 3.0),
+                result: souls::Outcome::Stagger,
+            },
+            souls::Event::Respawn {
+                position: glam::Vec3::new(5.999997, 0.0, -0.2617994),
+            },
+        ];
+        let trace = serde_json::to_string(&AnyEvents::Souls(&events)).unwrap();
+        assert_eq!(
+            trace,
+            concat!(
+                r#"[{"type":"hit","by":"s","target":"player","attack":"swing","combo":0,"#,
+                r#""damage":0.1,"hp":0.33333334,"result":"stagger"},"#,
+                r#"{"type":"respawn","position":[5.999997,0.0,-0.2617994]}]"#
+            )
+        );
+        let step: Vec<TickEvent> = AnyEvents::Souls(&events)
+            .to_vec()
+            .into_iter()
+            .map(|event| TickEvent { tick: 57, event })
+            .collect();
+        assert_eq!(
+            serde_json::to_string(&step).unwrap(),
+            trace.replace(r#"{"type":"#, r#"{"tick":57,"type":"#)
+        );
     }
 
     #[test]

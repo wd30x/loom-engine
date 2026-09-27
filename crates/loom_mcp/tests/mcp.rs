@@ -191,7 +191,8 @@ fn tools_forward_to_loom_serve_and_keep_its_numbers_exact() {
             "reset",
             "screenshot",
             "state",
-            "step"
+            "step",
+            "trace"
         ]
     );
 
@@ -201,7 +202,7 @@ fn tools_forward_to_loom_serve_and_keep_its_numbers_exact() {
     );
     assert_eq!(
         mcp.call("step", json!({"ticks": 30})),
-        (false, r#"{"tick":30}"#.to_owned())
+        (false, r#"{"tick":30,"events":[]}"#.to_owned())
     );
     let (is_error, state) = mcp.call("state", json!({}));
     assert!(!is_error, "{state}");
@@ -237,5 +238,39 @@ fn missing_loom_executable_is_reported_as_a_tool_error() {
         assert!(text.starts_with("starting loom serve ("), "{text}");
         assert!(!text.contains("note: new loom session"), "{text}");
     }
+    assert_eq!(mcp.close(), 0);
+}
+
+#[test]
+fn trace_tool_starts_a_trace_file_and_stops_it_without_a_path() {
+    let loom = loom_exe();
+    let dir = std::env::temp_dir().join("loom-mcp-tests").join("trace");
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("t.jsonl");
+    let quoted = serde_json::to_string(&path.display().to_string()).expect("a string");
+    let mut mcp = Mcp::start(&loom);
+    assert_eq!(
+        mcp.call("trace", json!({"path": path})),
+        (false, format!(r#"{{"path":{quoted},"tick":0}}"#))
+    );
+    assert!(!mcp.call("step", json!({"ticks": 2})).0);
+    assert_eq!(
+        mcp.call("trace", json!({})),
+        (false, format!(r#"{{"path":{quoted},"lines":3}}"#))
+    );
+    let text = std::fs::read_to_string(&path).expect("the trace was written");
+    let ticks: Vec<u64> = text
+        .lines()
+        .map(|line| {
+            let line: Value = serde_json::from_str(line).expect("each line is JSON");
+            line["tick"].as_u64().expect("a tick")
+        })
+        .collect();
+    assert_eq!(ticks, [0, 1, 2]);
+    // Nothing left to stop.
+    assert_eq!(
+        mcp.call("trace", json!({})),
+        (false, r#"{"path":null,"lines":0}"#.to_owned())
+    );
     assert_eq!(mcp.close(), 0);
 }

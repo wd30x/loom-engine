@@ -153,6 +153,36 @@ pub struct Message {
     pub text: String,
 }
 
+/// One event of a tick, for traces and `loom serve`'s `step`
+/// (`docs/architecture.md` section 15, "事件"); serialized as an object
+/// whose first field is `type`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Event {
+    /// The player bumped into a zombie, or a zombie bit the player: one
+    /// per `You hit`, `You kill` or `bites you` message.
+    Hit {
+        /// The attacker's node path.
+        by: String,
+        /// The node path of the one hit.
+        target: String,
+        /// The attacker's attack.
+        damage: i32,
+        /// The target's hp after the hit.
+        hp: i32,
+        result: HitResult,
+    },
+}
+
+/// What a hit did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HitResult {
+    Hit,
+    /// Down to 0 hp.
+    Death,
+}
+
 /// What does not change after loading, per zombie; parallel to
 /// `GameState::zombies`.
 #[derive(Debug, Clone, Copy)]
@@ -177,6 +207,8 @@ pub struct Game {
     /// `width * height` flags, row by row: whether the cell is a wall.
     walls: Vec<bool>,
     state: GameState,
+    /// The events of the latest tick, in the order they happened.
+    events: Vec<Event>,
 }
 
 /// The map as `Game::new` checks characters against it.
@@ -343,6 +375,7 @@ impl Game {
                 zombies: zombie_states,
                 messages: Vec::new(),
             },
+            events: Vec::new(),
         })
     }
 
@@ -352,6 +385,7 @@ impl Game {
     /// repeat it; a dead player ignores all input.
     pub fn tick(&mut self, input: &ActionState) {
         self.clock.step();
+        self.events.clear();
         if self.state.player.hp == 0 {
             return;
         }
@@ -399,7 +433,8 @@ impl Game {
     fn player_attacks(&mut self, z: usize) {
         let zombie = &mut self.state.zombies[z];
         zombie.hp = (zombie.hp - self.player_attack).max(0);
-        let (dead, name) = (zombie.hp == 0, zombie.name.clone());
+        let (dead, name, hp) = (zombie.hp == 0, zombie.name.clone(), zombie.hp);
+        self.hit(self.player, self.zombies[z].node, self.player_attack, hp);
         if !dead {
             self.message(format!("You hit {name}."));
             return;
@@ -425,8 +460,14 @@ impl Game {
         if key([zc, zr]).0 == 1 {
             let player = &mut self.state.player;
             player.hp = (player.hp - self.zombies[z].attack).max(0);
-            let dead = player.hp == 0;
+            let (dead, hp) = (player.hp == 0, player.hp);
             let name = self.state.zombies[z].name.clone();
+            self.hit(
+                self.zombies[z].node,
+                self.player,
+                self.zombies[z].attack,
+                hp,
+            );
             self.message(format!("{name} bites you."));
             if dead {
                 self.message("You die.".to_owned());
@@ -450,6 +491,21 @@ impl Game {
             self.state.zombies[z].cell = best;
             self.place(self.zombies[z].node, best);
         }
+    }
+
+    /// A hit by the node `by` on `target` for `damage`, leaving it `hp`.
+    fn hit(&mut self, by: NodeId, target: NodeId, damage: i32, hp: i32) {
+        self.events.push(Event::Hit {
+            by: self.scene.path(by),
+            target: self.scene.path(target),
+            damage,
+            hp,
+            result: if hp == 0 {
+                HitResult::Death
+            } else {
+                HitResult::Hit
+            },
+        });
     }
 
     fn message(&mut self, text: String) {
@@ -487,6 +543,12 @@ impl Game {
         }
         let index = usize::try_from(r * self.width + c).expect("checked to be inside the map");
         !self.walls[index]
+    }
+
+    /// The events of the latest tick, in the order they happened; none
+    /// before the first tick.
+    pub fn events(&self) -> &[Event] {
+        &self.events
     }
 
     pub fn clock(&self) -> SimClock {

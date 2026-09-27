@@ -13,6 +13,7 @@ mod serve;
 mod sheet;
 mod sim;
 mod state;
+mod trace;
 mod view;
 
 use std::path::PathBuf;
@@ -66,6 +67,10 @@ pub(crate) struct RunArgs {
     /// Parent directories are created.
     #[arg(long, value_name = "PATH")]
     record: Option<PathBuf>,
+    /// Write every tick's events and state as JSON lines while running.
+    /// Parent directories are created.
+    #[arg(long, value_name = "PATH")]
+    trace: Option<PathBuf>,
     /// Load a scene file instead of the built-in demo scene.
     #[arg(long, value_name = "PATH")]
     scene: Option<PathBuf>,
