@@ -40,6 +40,7 @@ fn demo_scene_parses_into_the_character_scene_tree() {
             "ground",
             "player",
             "player/visor",
+            "player/flask",
             "pillars",
             "pillars/a",
             "pillars/b",

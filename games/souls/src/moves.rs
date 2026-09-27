@@ -23,6 +23,8 @@ pub enum Action {
     Heavy,
     /// Sitting at a bonfire.
     Sit,
+    /// Drinking from the flask.
+    Drink,
 }
 
 /// The part of an attack; serialized in lower case.
@@ -43,12 +45,14 @@ pub enum Buffered {
     Heavy,
     /// The roll key: a roll, or a backstep without a direction.
     Roll,
+    /// A drink from the flask.
+    Drink,
 }
 
 /// Every prop the character understands, with its default and rule, in
 /// the order they are checked. Reading, checking, rejecting unknown names
 /// and `loom schema` all go through this one table.
-pub(crate) const PARAMS: [PropSpec; 50] = [
+pub(crate) const PARAMS: [PropSpec; 55] = [
     PropSpec {
         name: "stamina_max",
         default: Some(100.0),
@@ -402,6 +406,43 @@ pub(crate) const PARAMS: [PropSpec; 50] = [
         unit: "ticks",
         description: "Ticks lying dead before coming back at the start.",
     },
+    PropSpec {
+        name: "flask_charges",
+        default: Some(3.0),
+        rule: PropRule::Whole { min: 0, max: None },
+        unit: "drinks",
+        description: "How many drinks the full flask holds; filled up at a bonfire and on the \
+                      respawn.",
+    },
+    PropSpec {
+        name: "flask_heal",
+        default: Some(0.4),
+        rule: PropRule::PositiveAtMost { max: 1.0 },
+        unit: "fraction of full health",
+        description: "What one drink gives back.",
+    },
+    PropSpec {
+        name: "flask_ticks",
+        default: Some(60.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "How long a drink takes.",
+    },
+    PropSpec {
+        name: "flask_heal_tick",
+        default: Some(30.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "tick",
+        description: "The tick of a drink that heals; a stagger before it wastes the drink. At \
+                      most flask_ticks.",
+    },
+    PropSpec {
+        name: "flask_walk_speed",
+        default: Some(1.0),
+        rule: PropRule::Positive,
+        unit: "meters per second",
+        description: "Walking speed while drinking; per tick, less than the capsule radius.",
+    },
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -468,6 +509,14 @@ pub(crate) struct Params {
     pub stagger_ticks: u32,
     pub poise_reset_ticks: u32,
     pub respawn_ticks: u32,
+    /// The flask: drinks when full, the fraction of full health one gives
+    /// back, a drink's length and the tick it heals on, and meters per
+    /// tick walked while drinking: `flask_walk_speed / 60`.
+    pub flask_charges: u32,
+    pub flask_heal: f32,
+    pub flask_ticks: u32,
+    pub flask_heal_tick: u32,
+    pub flask_step: f32,
 }
 
 /// Lock-on, in per-tick units and radians.
@@ -491,14 +540,16 @@ pub(crate) struct Lock {
 
 /// Rules across the character's props, checked after each value, in this
 /// order (`loom schema` writes them out).
-pub(crate) const CHARACTER_CONSTRAINTS: [&str; 5] = [
+pub(crate) const CHARACTER_CONSTRAINTS: [&str; 6] = [
     "1 <= roll_invuln_from <= roll_invuln_to <= roll_ticks",
     "1 <= backstep_invuln_from <= backstep_invuln_to <= backstep_ticks",
     "lock_range <= lock_break_range",
     "swing_low < swing_high",
+    "flask_heal_tick <= flask_ticks",
     "each move per tick is shorter than the capsule radius: sprint_speed / 60, \
      roll_distance / roll_ticks, backstep_distance / backstep_ticks, \
-     attack_distance / attack_active_ticks, heavy_distance / heavy_active_ticks",
+     attack_distance / attack_active_ticks, heavy_distance / heavy_active_ticks, \
+     flask_walk_speed / 60",
 ];
 
 impl Params {
@@ -506,8 +557,8 @@ impl Params {
     /// `radius`: unknown names (in file order), then each value (in table
     /// order), then [`CHARACTER_CONSTRAINTS`] in order: the invulnerability
     /// windows (roll, backstep), `lock_range <= lock_break_range`,
-    /// `swing_low < swing_high`, the per-tick distances (sprint, roll,
-    /// backstep, attack, heavy).
+    /// `swing_low < swing_high`, `flask_heal_tick <= flask_ticks`, the
+    /// per-tick distances (sprint, roll, backstep, attack, heavy, drink).
     pub fn new(scene: &Scene, id: NodeId, radius: f32) -> Result<Self, GameError> {
         let node = scene.node(id);
         let character = scene.path(id);
@@ -598,6 +649,11 @@ impl Params {
             stagger_ticks: ticks("stagger_ticks"),
             poise_reset_ticks: ticks("poise_reset_ticks"),
             respawn_ticks: ticks("respawn_ticks"),
+            flask_charges: ticks("flask_charges"),
+            flask_heal: get("flask_heal") as f32,
+            flask_ticks: ticks("flask_ticks"),
+            flask_heal_tick: ticks("flask_heal_tick"),
+            flask_step: get("flask_walk_speed") as f32 / 60.0,
         };
         for (action, m) in [("roll", params.roll), ("backstep", params.backstep)] {
             if !(m.invuln_from <= m.invuln_to && m.invuln_to <= m.ticks) {
@@ -610,12 +666,16 @@ impl Params {
         if params.swing_low >= params.swing_high {
             return Err(GameError::SwingBand { character });
         }
+        if params.flask_heal_tick > params.flask_ticks {
+            return Err(GameError::FlaskHealTick { character });
+        }
         for (action, step) in [
             ("sprint", params.sprint_step),
             ("roll", params.roll.step),
             ("backstep", params.backstep.step),
             ("attack", params.attack.step),
             ("heavy", params.heavy.step),
+            ("drink", params.flask_step),
         ] {
             if step >= radius {
                 return Err(GameError::StepTooLong {
@@ -634,7 +694,12 @@ impl Params {
         match action {
             Action::Roll => self.roll,
             Action::Backstep => self.backstep,
-            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy | Action::Sit => {
+            Action::Idle
+            | Action::Sprint
+            | Action::Attack
+            | Action::Heavy
+            | Action::Sit
+            | Action::Drink => {
                 unreachable!("only rolls and backsteps are moves")
             }
         }
@@ -645,7 +710,12 @@ impl Params {
         match action {
             Action::Attack => self.attack,
             Action::Heavy => self.heavy,
-            Action::Idle | Action::Sprint | Action::Roll | Action::Backstep | Action::Sit => {
+            Action::Idle
+            | Action::Sprint
+            | Action::Roll
+            | Action::Backstep
+            | Action::Sit
+            | Action::Drink => {
                 unreachable!("only light and heavy attacks are attacks")
             }
         }

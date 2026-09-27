@@ -105,6 +105,14 @@ pub enum Event {
     },
     /// The character stood up from a bonfire (step 4).
     Stand,
+    /// The character's drink healed it (step 4), on the drink's
+    /// `flask_heal_tick`.
+    Heal {
+        /// What it actually gave back: 0 at full health.
+        amount: f32,
+        /// The health after it.
+        hp: f32,
+    },
 }
 
 /// What hit: the character's light or heavy attack, a swinger, or an
@@ -156,6 +164,7 @@ pub enum Input {
     Roll,
     Lock,
     Interact,
+    Drink,
 }
 
 impl From<Buffered> for Input {
@@ -164,6 +173,7 @@ impl From<Buffered> for Input {
             Buffered::Attack => Self::Attack,
             Buffered::Heavy => Self::Heavy,
             Buffered::Roll => Self::Roll,
+            Buffered::Drink => Self::Drink,
         }
     }
 }
@@ -192,6 +202,10 @@ pub enum DropReason {
     NoBonfire,
     /// The interact key, with a living enemy within its aggro range.
     EnemyNear,
+    /// Drinking from the flask.
+    Drinking,
+    /// The drink key, with no flask left.
+    Empty,
 }
 
 /// Why an action ended.

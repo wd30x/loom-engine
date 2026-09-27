@@ -2006,7 +2006,8 @@ if input.just_pressed("interact"):
 **表现**：
 - 角色如果有一个名叫 `flask` 的**直接子节点**，它就是瓶子，必须带 `mesh`（报错 `the character "<名字>": its flask needs a mesh`）。
 - 喝的时候显示，其余时候隐藏（`Scene::set_visible`）。
-- 演示场景和 Boss 场景的角色各加一个：`(name: "flask", position: (0.3, 1.2, -0.3), scale: (0.12, 0.25, 0.12), mesh: Cube, color: (0.9, 0.7, 0.2))`。
+- 演示场景和 Boss 场景的角色各加一个：`(name: "flask", position: (0.5, 1.2, -0.3), scale: (0.12, 0.25, 0.12), mesh: Cube, color: (0.9, 0.7, 0.2))`。
+  - 瓶子伸到胶囊体（半径 0.35）外面，默认相机在角色背后时也看得见（G5.2 审查时定：原来的 `x = 0.3` 被胶囊体整个挡住）。
 
 **已知限制**（G5.2）：
 - 喝没有动画，只有瓶子显示出来。

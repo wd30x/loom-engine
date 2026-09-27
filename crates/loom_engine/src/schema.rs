@@ -162,7 +162,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("no {name}"))
         };
         let character = group("souls", "character");
-        assert_eq!(character["props"].as_array().unwrap().len(), 50);
+        assert_eq!(character["props"].as_array().unwrap().len(), 55);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
             96
@@ -235,6 +235,7 @@ mod tests {
         let character_names = names("souls", "character");
         assert_eq!(character_names[..2], ["stamina_max", "stamina_regen"]);
         assert_eq!(character_names[49], "respawn_ticks");
+        assert_eq!(character_names[54], "flask_walk_speed");
         assert_eq!(names("rogue", "zombie"), ["hp", "attack", "speed"]);
         assert_eq!(
             character["constraints"][2],
@@ -273,7 +274,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (50 + 96 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (55 + 96 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),
@@ -378,6 +379,19 @@ mod tests {
                 hp: Some(50.0),
                 result: Outcome::Stagger,
             },
+            Event::Heal {
+                amount: 40.0,
+                hp: 90.0,
+            },
+            Event::InputDropped {
+                input: Input::Drink,
+                reason: DropReason::Empty,
+                buffered: true,
+            },
+            Event::ActionEnd {
+                action: Action::Drink,
+                reason: EndReason::Finished,
+            },
         ];
         for e in &events {
             match e {
@@ -393,7 +407,8 @@ mod tests {
                 | Event::EnemyMove { .. }
                 | Event::Stage { .. }
                 | Event::Rest { .. }
-                | Event::Stand => {}
+                | Event::Stand
+                | Event::Heal { .. } => {}
             }
         }
         events
@@ -412,8 +427,8 @@ mod tests {
         }
         types.sort();
         types.dedup();
-        assert_eq!(types.len(), 13);
-        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 13);
+        assert_eq!(types.len(), 14);
+        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 14);
 
         let rogue = &schema["games"]["rogue"]["event"];
         let e = rogue::Event::Hit {

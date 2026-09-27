@@ -132,7 +132,7 @@ fn describe_lists_the_demo_bindings_sorted_without_a_scene_path() {
     assert_eq!(r["axes"], json!(["look_x", "look_y", "move_x", "move_y"]));
     assert_eq!(
         r["actions"],
-        json!(["attack", "heavy", "interact", "lock", "roll"])
+        json!(["attack", "drink", "heavy", "interact", "lock", "roll"])
     );
 }
 
@@ -1245,7 +1245,7 @@ fn node_ron_keeps_the_spawn_point_while_its_transform_follows_the_player() {
     ]);
     let node = result(&replies[2]);
     assert_eq!(node["path"], "player");
-    assert_eq!(node["children"], json!(["visor"]));
+    assert_eq!(node["children"], json!(["visor", "flask"]));
     let ron = node["ron"].as_str().expect("ron is text");
     assert!(
         ron.starts_with("(\n    name: \"player\",\n    position: (0.0, 0.0, 0.0),\n"),

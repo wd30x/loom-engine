@@ -40,6 +40,8 @@ pub const HEAVY: &str = "heavy";
 pub const LOCK: &str = "lock";
 /// Sits down at a bonfire, and stands up; fires on the tick it is pressed.
 pub const INTERACT: &str = "interact";
+/// Drinks from the flask, on the tick it is pressed.
+pub const DRINK: &str = "drink";
 
 /// The eleven props of the move whose names start with `$m`, with its
 /// defaults in the order damage, impact, startup, active, recovery,
@@ -615,6 +617,10 @@ pub enum GameError {
     LockRanges { character: String },
     #[error("the character {character:?}: needs swing_low < swing_high")]
     SwingBand { character: String },
+    #[error("the character {character:?}: needs flask_heal_tick <= flask_ticks")]
+    FlaskHealTick { character: String },
+    #[error("the character {0:?}: its flask needs a mesh")]
+    FlaskWithoutMesh(String),
     #[error(
         "the character {character:?}: {action} moves {step} m per tick, which must be less than \
          the capsule radius {radius}"
@@ -745,6 +751,8 @@ pub struct PlayerState {
     /// The latest hit on the character; `None` before the first.
     pub last_hit: Option<PlayerHit>,
     pub health: HealthState,
+    /// Drinks left in the flask; `flask_charges` at load.
+    pub flask: u32,
 }
 
 /// One hit on the character.
@@ -1137,6 +1145,9 @@ pub struct Game {
     /// included), in pre-order, with its color in the scene file: what
     /// flashes and darkens.
     player_meshes: Vec<(NodeId, Vec3)>,
+    /// The character's direct child named `flask`, shown only while
+    /// drinking.
+    flask: Option<NodeId>,
     /// Every bonfire, in pre-order.
     bonfires: Vec<Bonfire>,
     /// Where the character comes back after dying.
@@ -1164,11 +1175,13 @@ struct Intent<'a> {
 
 impl Intent<'_> {
     /// This tick's presses of the action keys, heavy before light before
-    /// the roll key's tap: the order they outrank each other in.
+    /// the drink key before the roll key's tap: the order they outrank
+    /// each other in.
     fn presses(&self) -> Vec<Buffered> {
         [
             (self.input.just_pressed(HEAVY), Buffered::Heavy),
             (self.input.just_pressed(ATTACK), Buffered::Attack),
+            (self.input.just_pressed(DRINK), Buffered::Drink),
             (self.tap, Buffered::Roll),
         ]
         .into_iter()
@@ -1189,7 +1202,8 @@ impl Game {
     /// most one). The character must not be scaled, and colliders must not
     /// move with either. Nodes with a `lock_height` prop are lock-on
     /// targets, and nodes with `swing_damage` swingers: root nodes other
-    /// than the camera. Places the camera for tick 0, already pulled in
+    /// than the camera. A direct child of the character named `flask` is its
+    /// flask, which needs a mesh. Places the camera for tick 0, already pulled in
     /// front of anything in the way; the character is not pushed out of
     /// colliders until the first tick.
     pub fn new(scene: Scene) -> Result<Self, GameError> {
@@ -1252,6 +1266,14 @@ impl Game {
             .filter(|&n| is_in_subtree(&scene, n, player))
             .filter_map(|n| scene.node(n).mesh.map(|m| (n, m.color)))
             .collect();
+        let flask = scene
+            .ids()
+            .find(|&n| scene.node(n).parent == Some(player) && scene.node(n).name == "flask");
+        if let Some(f) = flask
+            && scene.node(f).mesh.is_none()
+        {
+            return Err(GameError::FlaskWithoutMesh(scene.path(player)));
+        }
         let boxes = scene
             .colliders()
             .iter()
@@ -1275,6 +1297,7 @@ impl Game {
                 hits: 0,
                 last_hit: None,
                 health: health.now,
+                flask: params.flask_charges,
             },
             camera: CameraState {
                 yaw: wrap(orbit.yaw_degrees.to_radians()),
@@ -1335,6 +1358,7 @@ impl Game {
             enemies,
             health,
             player_meshes,
+            flask,
             bonfires,
             respawn,
             initial,
@@ -1343,6 +1367,10 @@ impl Game {
             events: Vec::new(),
         };
         game.place_camera(true);
+        if let Some(f) = flask {
+            // Hidden until the first drink.
+            game.scene.set_visible(f, false);
+        }
         Ok(game)
     }
 
@@ -1393,6 +1421,7 @@ impl Game {
             (player.position, player.facing) = (self.respawn.position, self.respawn.facing);
             player.stamina = params.stamina_max;
             player.stamina_wait = 0;
+            player.flask = params.flask_charges;
             (self.state.camera.yaw, self.state.camera.pitch) = self.start_view;
             self.flick = 0.0;
             self.switch_wait = 0;
@@ -1530,6 +1559,12 @@ impl Game {
         } else if matches!(player.action, Action::Attack | Action::Heavy) {
             player.action_tick += 1;
             self.attack_tick(&mut player, &intent);
+        } else if player.action == Action::Drink {
+            // Drinking costs no stamina, so it comes back.
+            busy = false;
+            self.drop_presses(&presses, DropReason::Drinking);
+            player.action_tick += 1;
+            self.drink_tick(&mut player, &intent);
         } else if let Some((next, from_buffer)) = self.next_action(&mut player, &presses) {
             if player.action == Action::Sprint {
                 self.events.push(Event::ActionEnd {
@@ -1544,6 +1579,10 @@ impl Game {
                 }
                 Buffered::Heavy => {
                     self.start_attack(&mut player, Action::Heavy, from_buffer, &intent);
+                }
+                Buffered::Drink => {
+                    busy = false;
+                    self.start_drink(&mut player, from_buffer, &intent);
                 }
             }
             // Pressed on the same tick, but outranked by what started.
@@ -1593,19 +1632,7 @@ impl Game {
                 busy = false;
             }
 
-            // 5. Turn, at most `max_turn` per tick: towards the target while
-            // locked on and not sprinting, otherwise towards `dir`.
-            if let Some(t) = self.lock
-                && player.action != Action::Sprint
-            {
-                let to = self.target_position(t);
-                if hdist(player.position, to) > 0.0 {
-                    player.facing =
-                        turn(player.facing, bearing(player.position, to), self.max_turn);
-                }
-            } else if v.length_squared() > 0.0 {
-                player.facing = turn(player.facing, libm::atan2f(-dir.x, -dir.z), self.max_turn);
-            }
+            self.turn_player(&mut player, &intent);
         }
 
         // 5b. Stamina comes back once `stamina_wait` has run out.
@@ -1621,7 +1648,12 @@ impl Game {
                 let m = params.movement(player.action);
                 (m.invuln_from..=m.invuln_to).contains(&player.action_tick)
             }
-            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy | Action::Sit => false,
+            Action::Idle
+            | Action::Sprint
+            | Action::Attack
+            | Action::Heavy
+            | Action::Sit
+            | Action::Drink => false,
         };
 
         // 5c. The enemies, then the swingers, act, and may hit the character.
@@ -2026,6 +2058,8 @@ impl Game {
             DropReason::Dead
         } else if self.health.now.state == Condition::Stagger {
             DropReason::Staggered
+        } else if player.action == Action::Drink {
+            DropReason::Drinking
         } else if !matches!(player.action, Action::Idle | Action::Sprint) {
             DropReason::Busy
         } else if let Some(b) = bonfire
@@ -2043,8 +2077,8 @@ impl Game {
     }
 
     /// Sits down at bonfire `b`: the sprint stops, full health and stamina,
-    /// the respawn point where the character stands, the lock let go, the
-    /// world reset, then the `rest` event.
+    /// a full flask, the respawn point where the character stands, the
+    /// lock let go, the world reset, then the `rest` event.
     fn sit(&mut self, player: &mut PlayerState, b: usize) {
         if player.action == Action::Sprint {
             self.events.push(Event::ActionEnd {
@@ -2055,6 +2089,7 @@ impl Game {
         player.action = Action::Sit;
         player.action_tick = 0;
         self.health = self.initial.health;
+        player.flask = self.params.flask_charges;
         player.stamina = self.params.stamina_max;
         player.stamina_wait = 0;
         self.respawn = Respawn {
@@ -2179,6 +2214,10 @@ impl Game {
             self.scene
                 .set_mesh_color(id, shown(color, state == Condition::Dead, flashing))
                 .expect("meshes were picked for having a mesh, and every color is valid");
+        }
+        if let Some(f) = self.flask {
+            let drinking = self.state.player.action == Action::Drink;
+            self.scene.set_visible(f, drinking);
         }
     }
 
@@ -2307,6 +2346,64 @@ impl Game {
         );
         if m.ticks == 1 {
             self.end_action(player, 0);
+        }
+    }
+
+    /// Starts a drink, using up a flask, and runs its first tick.
+    fn start_drink(&mut self, player: &mut PlayerState, from_buffer: bool, intent: &Intent) {
+        player.flask -= 1;
+        player.action = Action::Drink;
+        player.action_tick = 1;
+        self.events.push(Event::ActionStart {
+            action: Action::Drink,
+            combo: 0,
+            buffered: from_buffer,
+        });
+        self.drink_tick(player, intent);
+    }
+
+    /// Tick `action_tick` of the running drink: walking slowly and turning
+    /// as step 5 does, healing on `flask_heal_tick`. The last tick ends
+    /// the drink.
+    fn drink_tick(&mut self, player: &mut PlayerState, intent: &Intent) {
+        player.position = resolve(
+            &self.boxes,
+            self.radius,
+            self.height,
+            player.position + intent.dir * self.params.flask_step,
+            &self.enemy_circles(),
+        );
+        self.turn_player(player, intent);
+        if player.action_tick == self.params.flask_heal_tick {
+            let now = &mut self.health.now;
+            let before = now.hp;
+            now.hp = f32::min(
+                now.hp + self.params.flask_heal * self.health.hp_max,
+                self.health.hp_max,
+            );
+            self.events.push(Event::Heal {
+                amount: now.hp - before,
+                hp: now.hp,
+            });
+        }
+        if player.action_tick == self.params.flask_ticks {
+            self.end_action(player, 0);
+        }
+    }
+
+    /// Step 5, turning at most `max_turn` per tick: towards the target
+    /// while locked on and not sprinting, otherwise towards `dir`.
+    fn turn_player(&self, player: &mut PlayerState, intent: &Intent) {
+        if let Some(t) = self.lock
+            && player.action != Action::Sprint
+        {
+            let to = self.target_position(t);
+            if hdist(player.position, to) > 0.0 {
+                player.facing = turn(player.facing, bearing(player.position, to), self.max_turn);
+            }
+        } else if intent.v.length_squared() > 0.0 {
+            let dir = intent.dir;
+            player.facing = turn(player.facing, libm::atan2f(-dir.x, -dir.z), self.max_turn);
         }
     }
 
@@ -2764,7 +2861,7 @@ impl Game {
         &self.events
     }
 
-    /// Ends the running roll, backstep or attack on its last tick; `combo`
+    /// Ends the running roll, backstep, attack or drink on its last tick; `combo`
     /// is what a buffered light attack continues from.
     fn end_action(&mut self, player: &mut PlayerState, combo: u32) {
         self.events.push(Event::ActionEnd {
@@ -2801,8 +2898,9 @@ impl Game {
 
     /// `next_action` of step 4: the buffered action, else this tick's first
     /// press (heavy, then light, then a roll-key tap), with whether it was
-    /// buffered. With no stamina left there is none, and the input,
-    /// buffered or not, is dropped, along with the presses it outranked.
+    /// buffered. With no stamina left there is none but a drink, and with
+    /// no flask left no drink; then the input, buffered or not, is
+    /// dropped, along with the presses it outranked.
     fn next_action(
         &mut self,
         player: &mut PlayerState,
@@ -2813,13 +2911,16 @@ impl Game {
         } else {
             (*presses.first()?, false)
         };
-        if player.stamina > 0.0 {
-            return Some(next);
-        }
+        let reason = match next.0 {
+            Buffered::Drink if player.flask == 0 => DropReason::Empty,
+            Buffered::Drink => return Some(next),
+            _ if player.stamina > 0.0 => return Some(next),
+            _ => DropReason::NoStamina,
+        };
         let (next, from_buffer) = next;
         self.events.push(Event::InputDropped {
             input: next.into(),
-            reason: DropReason::NoStamina,
+            reason,
             buffered: from_buffer,
         });
         self.drop_presses(outranked(presses, from_buffer), DropReason::Outranked);
@@ -4653,3 +4754,7 @@ mod tests {
 #[cfg(test)]
 #[path = "bonfire_tests.rs"]
 mod bonfire_tests;
+
+#[cfg(test)]
+#[path = "flask_tests.rs"]
+mod flask_tests;

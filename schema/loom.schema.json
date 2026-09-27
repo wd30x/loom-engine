@@ -1732,6 +1732,55 @@
               },
               "unit": "ticks",
               "description": "Ticks lying dead before coming back at the start."
+            },
+            {
+              "name": "flask_charges",
+              "default": 3.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "drinks",
+              "description": "How many drinks the full flask holds; filled up at a bonfire and on the respawn."
+            },
+            {
+              "name": "flask_heal",
+              "default": 0.4,
+              "rule": {
+                "kind": "positive_at_most",
+                "max": 1.0
+              },
+              "unit": "fraction of full health",
+              "description": "What one drink gives back."
+            },
+            {
+              "name": "flask_ticks",
+              "default": 60.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "How long a drink takes."
+            },
+            {
+              "name": "flask_heal_tick",
+              "default": 30.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "tick",
+              "description": "The tick of a drink that heals; a stagger before it wastes the drink. At most flask_ticks."
+            },
+            {
+              "name": "flask_walk_speed",
+              "default": 1.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters per second",
+              "description": "Walking speed while drinking; per tick, less than the capsule radius."
             }
           ],
           "requires": [],
@@ -1740,7 +1789,8 @@
             "1 <= backstep_invuln_from <= backstep_invuln_to <= backstep_ticks",
             "lock_range <= lock_break_range",
             "swing_low < swing_high",
-            "each move per tick is shorter than the capsule radius: sprint_speed / 60, roll_distance / roll_ticks, backstep_distance / backstep_ticks, attack_distance / attack_active_ticks, heavy_distance / heavy_active_ticks"
+            "flask_heal_tick <= flask_ticks",
+            "each move per tick is shorter than the capsule radius: sprint_speed / 60, roll_distance / roll_ticks, backstep_distance / backstep_ticks, attack_distance / attack_active_ticks, heavy_distance / heavy_active_ticks, flask_walk_speed / 60"
           ]
         },
         "node": {
@@ -2774,6 +2824,11 @@
                 "description": "Sitting at a bonfire.",
                 "type": "string",
                 "const": "sit"
+              },
+              {
+                "description": "Drinking from the flask.",
+                "type": "string",
+                "const": "drink"
               }
             ]
           },
@@ -2800,6 +2855,11 @@
                 "description": "The roll key: a roll, or a backstep without a direction.",
                 "type": "string",
                 "const": "roll"
+              },
+              {
+                "description": "A drink from the flask.",
+                "type": "string",
+                "const": "drink"
               }
             ]
           },
@@ -3234,6 +3294,12 @@
                 "type": "number",
                 "format": "float"
               },
+              "flask": {
+                "description": "Drinks left in the flask; `flask_charges` at load.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "health": {
                 "$ref": "#/$defs/HealthState"
               },
@@ -3293,7 +3359,8 @@
               "buffered",
               "hits",
               "last_hit",
-              "health"
+              "health",
+              "flask"
             ]
           },
           "RespawnState": {
@@ -3460,6 +3527,11 @@
                 "description": "Sitting at a bonfire.",
                 "type": "string",
                 "const": "sit"
+              },
+              {
+                "description": "Drinking from the flask.",
+                "type": "string",
+                "const": "drink"
               }
             ]
           },
@@ -3486,6 +3558,11 @@
                 "description": "The roll key: a roll, or a backstep without a direction.",
                 "type": "string",
                 "const": "roll"
+              },
+              {
+                "description": "A drink from the flask.",
+                "type": "string",
+                "const": "drink"
               }
             ]
           },
@@ -3582,6 +3659,16 @@
                 "description": "The interact key, with a living enemy within its aggro range.",
                 "type": "string",
                 "const": "enemy_near"
+              },
+              {
+                "description": "Drinking from the flask.",
+                "type": "string",
+                "const": "drinking"
+              },
+              {
+                "description": "The drink key, with no flask left.",
+                "type": "string",
+                "const": "empty"
               }
             ]
           },
@@ -4096,6 +4183,31 @@
                 "required": [
                   "type"
                 ]
+              },
+              {
+                "description": "The character's drink healed it (step 4), on the drink's\n`flask_heal_tick`.",
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "description": "What it actually gave back: 0 at full health.",
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "hp": {
+                    "description": "The health after it.",
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "heal"
+                  }
+                },
+                "required": [
+                  "type",
+                  "amount",
+                  "hp"
+                ]
               }
             ]
           },
@@ -4265,7 +4377,8 @@
               "heavy",
               "roll",
               "lock",
-              "interact"
+              "interact",
+              "drink"
             ]
           },
           "LastHit": {
@@ -4444,6 +4557,12 @@
                 "type": "number",
                 "format": "float"
               },
+              "flask": {
+                "description": "Drinks left in the flask; `flask_charges` at load.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "health": {
                 "$ref": "#/$defs/HealthState"
               },
@@ -4503,7 +4622,8 @@
               "buffered",
               "hits",
               "last_hit",
-              "health"
+              "health",
+              "flask"
             ]
           },
           "RespawnState": {
@@ -5014,6 +5134,31 @@
             "required": [
               "type"
             ]
+          },
+          {
+            "description": "The character's drink healed it (step 4), on the drink's\n`flask_heal_tick`.",
+            "type": "object",
+            "properties": {
+              "amount": {
+                "description": "What it actually gave back: 0 at full health.",
+                "type": "number",
+                "format": "float"
+              },
+              "hp": {
+                "description": "The health after it.",
+                "type": "number",
+                "format": "float"
+              },
+              "type": {
+                "type": "string",
+                "const": "heal"
+              }
+            },
+            "required": [
+              "type",
+              "amount",
+              "hp"
+            ]
           }
         ],
         "$defs": {
@@ -5043,6 +5188,11 @@
                 "description": "Sitting at a bonfire.",
                 "type": "string",
                 "const": "sit"
+              },
+              {
+                "description": "Drinking from the flask.",
+                "type": "string",
+                "const": "drink"
               }
             ]
           },
@@ -5060,6 +5210,11 @@
                 "description": "The roll key: a roll, or a backstep without a direction.",
                 "type": "string",
                 "const": "roll"
+              },
+              {
+                "description": "A drink from the flask.",
+                "type": "string",
+                "const": "drink"
               }
             ]
           },
@@ -5113,6 +5268,16 @@
                 "description": "The interact key, with a living enemy within its aggro range.",
                 "type": "string",
                 "const": "enemy_near"
+              },
+              {
+                "description": "Drinking from the flask.",
+                "type": "string",
+                "const": "drinking"
+              },
+              {
+                "description": "The drink key, with no flask left.",
+                "type": "string",
+                "const": "empty"
               }
             ]
           },
@@ -5182,7 +5347,8 @@
               "heavy",
               "roll",
               "lock",
-              "interact"
+              "interact",
+              "drink"
             ]
           },
           "LockReason": {
