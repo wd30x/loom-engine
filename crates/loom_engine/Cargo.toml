@@ -31,6 +31,7 @@ env_logger.workspace = true
 
 [dev-dependencies]
 jsonschema.workspace = true
+ron.workspace = true
 
 [lints]
 workspace = true

@@ -3,7 +3,7 @@
 
 use wgpu::util::DeviceExt;
 
-use crate::mesh::{self, MeshKind, Vertex};
+use crate::mesh::{self, MeshKind, SkinnedVertex, Vertex};
 
 /// Per-draw data for every draw item (or sprite) of a frame, read by the
 /// shader by instance index, bound together with the globals. Grows as needed.
@@ -70,6 +70,71 @@ impl DrawBuffer {
     }
 }
 
+/// The skinned draw items' per-draw data and the frame's joint matrices,
+/// bound together with the globals. Made at the first frame with a
+/// skinned draw item; grows as needed.
+pub(crate) struct SkinBuffers {
+    pub(crate) draws: wgpu::Buffer,
+    pub(crate) joints: wgpu::Buffer,
+    /// In draw items and in matrices.
+    capacity: (usize, usize),
+    pub(crate) bind_group: wgpu::BindGroup,
+}
+
+impl SkinBuffers {
+    /// Buffers for `draws` skinned draw items of `draw_stride` bytes and
+    /// `joints` matrices, each rounded up to a power of two.
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        globals: &wgpu::Buffer,
+        draw_stride: usize,
+        draws: usize,
+        joints: usize,
+    ) -> Self {
+        let capacity = (draws.next_power_of_two(), joints.next_power_of_two());
+        let storage = |label, size: usize| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: size as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let draws = storage("skinned draws", capacity.0 * draw_stride);
+        let joints = storage("joints", capacity.1 * std::mem::size_of::<[f32; 16]>());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("skinned"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: draws.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: joints.as_entire_binding(),
+                },
+            ],
+        });
+        Self {
+            draws,
+            joints,
+            capacity,
+            bind_group,
+        }
+    }
+
+    /// Whether `draws` draw items and `joints` matrices fit.
+    pub(crate) fn fits(&self, draws: usize, joints: usize) -> bool {
+        draws <= self.capacity.0 && joints <= self.capacity.1
+    }
+}
+
 /// The vertex buffer of the debug lines or of the HUD. Grows as needed,
 /// never shrinks.
 pub(crate) struct VertexBuffer {
@@ -124,6 +189,9 @@ pub(crate) struct GpuMesh {
     pub(crate) index_count: u32,
     /// `Uint16` for the built-in meshes, `Uint32` for created ones.
     pub(crate) index_format: wgpu::IndexFormat,
+    /// For a skinned mesh, how many joint matrices its draw items need:
+    /// one more than its highest joint index. `None` for the others.
+    pub(crate) joints: Option<u32>,
 }
 
 impl GpuMesh {
@@ -142,6 +210,7 @@ impl GpuMesh {
             }),
             index_count: u32::try_from(indices.len()).expect("meshes have few indices"),
             index_format: wgpu::IndexFormat::Uint16,
+            joints: None,
         }
     }
 
@@ -160,6 +229,36 @@ impl GpuMesh {
             }),
             index_count: u32::try_from(indices.len()).expect("the caller checked the index count"),
             index_format: wgpu::IndexFormat::Uint32,
+            joints: None,
+        }
+    }
+
+    /// A skinned mesh from `vertices` and `u32` `indices` (checked by the
+    /// caller).
+    pub(crate) fn from_skinned_data(
+        device: &wgpu::Device,
+        vertices: &[SkinnedVertex],
+        indices: &[u32],
+    ) -> Self {
+        let highest = vertices
+            .iter()
+            .flat_map(|v| v.joints)
+            .max()
+            .unwrap_or_default();
+        Self {
+            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("skinned mesh vertices"),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("skinned mesh indices"),
+                contents: bytemuck::cast_slice(indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            index_count: u32::try_from(indices.len()).expect("the caller checked the index count"),
+            index_format: wgpu::IndexFormat::Uint32,
+            joints: Some(u32::from(highest) + 1),
         }
     }
 }

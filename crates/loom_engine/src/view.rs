@@ -9,25 +9,27 @@ use anyhow::{Context, Result};
 use glam::{Mat4, Vec2, Vec3};
 use loom_core::hud::{GLYPH_CELL, Hud, HudItem, HudView, glyph_cell};
 use loom_render::{
-    DirectionalLight, DrawItem, DrawMesh, Frame, HudDraw, LineDraw, MeshId, Projection,
+    DirectionalLight, DrawItem, DrawMesh, Frame, HudDraw, JointRange, LineDraw, MeshId, Projection,
     RenderError, Renderer, SpriteDraw, TextureId, view_projection,
 };
-use loom_scene::{NodeId, Scene};
+use loom_scene::{Model, NodeId, Scene};
 
 use crate::ViewArgs;
 use crate::model::Models;
+use crate::output::ensure_parent_dir;
 use crate::report::ViewReport;
-use crate::run::{millis_since, save_screenshot};
+use crate::run::millis_since;
 use crate::sheet::Sheets;
 
 /// A game's HUD for a view: what [`render_scene`] draws over the scene.
 pub(crate) type HudFn<'a> = &'a dyn Fn(&HudView, &mut Hud);
 
-/// Draws `scene` from its camera, with the HUD `hud` lays out (if any) over
-/// it and the debug `lines` on top. `sheets` and `models` must have been
-/// loaded for `scene` ([`Sheets::load`], [`Models::load`]) and only ever be
-/// drawn with `renderer`. Returns `false` if the frame was skipped (zero
-/// render size).
+/// Draws `scene` from its camera at game tick `tick` (which poses the
+/// animated models), with the HUD `hud` lays out (if any) over it and the
+/// debug `lines` on top. `sheets` and `models` must have been loaded for
+/// `scene` ([`Sheets::load`], [`Models::load`]) and only ever be drawn
+/// with `renderer`. Returns `false` if the frame was skipped (zero render
+/// size).
 pub(crate) fn render_scene(
     renderer: &mut Renderer,
     scene: &Scene,
@@ -35,8 +37,12 @@ pub(crate) fn render_scene(
     models: &mut Models,
     lines: &[LineDraw],
     hud: Option<HudFn<'_>>,
+    tick: u64,
 ) -> Result<bool, RenderError> {
-    let draws = mesh_draws(scene, |path| models.draw(renderer, path))?;
+    let mut joints = Vec::new();
+    let draws = mesh_draws(scene, |model| {
+        models.draw(renderer, model, tick, &mut joints)
+    })?;
     let sprites = sprite_draws(renderer, scene, sheets)?;
 
     let camera_id = scene.camera();
@@ -83,6 +89,7 @@ pub(crate) fn render_scene(
         ambient: scene.ambient(),
         light,
         draws: &draws,
+        joints: &joints,
         sprites: &sprites,
         hud: &hud,
         lines,
@@ -178,23 +185,28 @@ fn hud_draws(
 }
 
 /// One draw per drawn node with a mesh or a model ([`Scene::is_drawn`]),
-/// in scene pre-order; `model` gives the mesh of a model's path.
+/// in scene pre-order; `model` gives the mesh of a model, and its joint
+/// range if it is animated.
 fn mesh_draws(
     scene: &Scene,
-    mut model: impl FnMut(&str) -> Result<MeshId, RenderError>,
+    mut model: impl FnMut(&Model) -> Result<(MeshId, Option<JointRange>), RenderError>,
 ) -> Result<Vec<DrawItem>, RenderError> {
     let mut draws = Vec::new();
     for id in scene.ids().filter(|&id| scene.is_drawn(id)) {
         let node = scene.node(id);
-        let (mesh, color) = match (&node.mesh, &node.model) {
-            (Some(mesh), _) => (mesh_kind(mesh.kind).into(), mesh.color),
-            (None, Some(m)) => (DrawMesh::Id(model(&m.path)?), m.color),
+        let (mesh, color, joints) = match (&node.mesh, &node.model) {
+            (Some(mesh), _) => (mesh_kind(mesh.kind).into(), mesh.color, None),
+            (None, Some(m)) => {
+                let (mesh, joints) = model(m)?;
+                (DrawMesh::Id(mesh), m.color, joints)
+            }
             (None, None) => continue,
         };
         draws.push(DrawItem {
             mesh,
             model: scene.world_matrix(id),
             color,
+            joints,
         });
     }
     Ok(draws)
@@ -273,9 +285,11 @@ fn mesh_kind(kind: loom_scene::MeshKind) -> loom_render::MeshKind {
 }
 
 /// `loom view`: renders the scene as loaded, without a game (so it needs no
-/// `game`, nor what a game requires) and without ticking, and saves a
-/// screenshot. The scene and its sheets are checked before the GPU is
-/// touched. `started` is the process start, for `renderer_init_ms`.
+/// `game`, nor what a game requires) and without ticking, once for each of
+/// `--ticks` (which only poses the animated models), and saves the frames
+/// left to right as one screenshot. The scene, its sheets, models and
+/// clips are checked before the GPU is touched. `started` is the process
+/// start, for `renderer_init_ms`.
 pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
     let path = &args.scene;
     let src = std::fs::read_to_string(path)
@@ -286,17 +300,44 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
         Sheets::load(&scene, &[]).with_context(|| format!("invalid scene {}", path.display()))?;
     let mut models =
         Models::load(&scene).with_context(|| format!("invalid scene {}", path.display()))?;
-    let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
+    let (width, height) = (args.size.width, args.size.height);
+    let mut renderer = Renderer::new_headless(width, height)?;
     let renderer_init_ms = millis_since(started);
-    render_scene(&mut renderer, &scene, &mut sheets, &mut models, &[], None)?;
-    let screenshot = save_screenshot(&renderer, &args.screenshot)?;
+    let ticks = &args.ticks.0;
+    let frames = u32::try_from(ticks.len()).expect("at most 16 ticks");
+    let strip_width = width
+        .checked_mul(frames)
+        .context("the frames are too wide together")?;
+    let mut strip = image::RgbaImage::new(strip_width, height);
+    for (i, &tick) in (0u32..).zip(ticks) {
+        render_scene(
+            &mut renderer,
+            &scene,
+            &mut sheets,
+            &mut models,
+            &[],
+            None,
+            tick,
+        )?;
+        let pixels = renderer.read_pixels().context("reading back the frame")?;
+        let frame = image::RgbaImage::from_raw(width, height, pixels)
+            .context("readback size does not match the render size")?;
+        image::imageops::replace(&mut strip, &frame, i64::from(i * width), 0);
+    }
+    let path_shown = args.screenshot.display().to_string();
+    ensure_parent_dir(&args.screenshot)?;
+    strip
+        .save_with_format(&args.screenshot, image::ImageFormat::Png)
+        .with_context(|| format!("writing screenshot {path_shown}"))?;
+    log::info!("screenshot saved to {path_shown}");
     let adapter = renderer.adapter_summary();
     renderer.shutdown();
     Ok(ViewReport {
         status: "ok",
         mode: "view",
-        screenshot,
-        size: [args.size.width, args.size.height],
+        screenshot: path_shown,
+        size: [width, height],
+        ticks: ticks.clone(),
         scene: path.display().to_string(),
         adapter: adapter.into(),
         renderer_init_ms,
@@ -515,9 +556,11 @@ mod tests {
         )
         .unwrap();
         let mut asked = Vec::new();
-        let draws = mesh_draws(&scene, |path| {
-            asked.push(path.to_owned());
-            Ok(MeshId::from_index(if path == "k.glb" { 7 } else { 3 }))
+        let draws = mesh_draws(&scene, |model| {
+            asked.push(model.path.clone());
+            let id = MeshId::from_index(if model.path == "k.glb" { 7 } else { 3 });
+            let joints = (model.path == "j.glb").then_some(JointRange { first: 4, count: 2 });
+            Ok((id, joints))
         })
         .unwrap();
         assert_eq!(asked, ["k.glb", "j.glb"]);
@@ -528,16 +571,19 @@ mod tests {
                     mesh: DrawMesh::Kind(loom_render::MeshKind::Cube),
                     model: Mat4::from_translation(Vec3::X),
                     color: Vec3::splat(0.8),
+                    joints: None,
                 },
                 DrawItem {
                     mesh: DrawMesh::Id(MeshId::from_index(7)),
                     model: Mat4::from_translation(Vec3::new(1.0, 2.0, 0.0)),
                     color: Vec3::new(0.5, 1.0, 1.0),
+                    joints: None,
                 },
                 DrawItem {
                     mesh: DrawMesh::Id(MeshId::from_index(3)),
                     model: Mat4::IDENTITY,
                     color: Vec3::ONE,
+                    joints: Some(JointRange { first: 4, count: 2 }),
                 },
             ]
         );

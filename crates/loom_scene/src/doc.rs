@@ -24,7 +24,7 @@ fn fail<T>(message: impl Into<String>) -> Result<T, EditError> {
 }
 
 /// The optional fields of a node, in canonical order: what `unset` takes.
-const OPTIONAL_FIELDS: [&str; 15] = [
+const OPTIONAL_FIELDS: [&str; 16] = [
     "display_name",
     "position",
     "rotation",
@@ -32,6 +32,7 @@ const OPTIONAL_FIELDS: [&str; 15] = [
     "scale",
     "mesh",
     "model",
+    "animation",
     "color",
     "camera",
     "sprite",
@@ -287,6 +288,7 @@ fn patch_has(p: &NodePatch, field: &str) -> bool {
         "scale" => p.scale.is_some(),
         "mesh" => p.mesh.is_some(),
         "model" => p.model.is_some(),
+        "animation" => p.animation.is_some(),
         "color" => p.color.is_some(),
         "camera" => p.camera.is_some(),
         "sprite" => p.sprite.is_some(),
@@ -323,6 +325,7 @@ fn apply(node: &mut NodeDesc, p: NodePatch) {
         scale,
         mesh,
         model,
+        animation,
         color,
         camera,
         sprite,
@@ -344,6 +347,7 @@ fn clear(node: &mut NodeDesc, field: &str) {
         "scale" => node.scale = None,
         "mesh" => node.mesh = None,
         "model" => node.model = None,
+        "animation" => node.animation = None,
         "color" => node.color = None,
         "camera" => node.camera = None,
         "sprite" => node.sprite = None,

@@ -3059,14 +3059,18 @@ E7.2 用户决定（2026-09-28）：
 **蒙皮**：
 - 有 `animation` 的节点，模型必须**正好有一个 skin**，每个图元都有 `JOINTS_0` 和 `WEIGHTS_0`，没有 `JOINTS_1`（最多 4 个影响骨骼）；片段里的骨骼名都要在这个 skin 里。否则加载报错。
 - 按 glTF 的规则，蒙皮网格的顶点**不乘**网格节点的变换，而是由关节矩阵 `关节在模型空间的姿势 * inverseBindMatrix` 带到模型空间。
-- 权重先归一化（和为 1）；和为 0 的顶点报错。
+- 权重先归一化（和为 1）；和为 0（或 NaN）的顶点报错。
+- E7.2 实现时多加、审查时接受的加载检查：默认场景里带网格的节点都要引用这个 skin；`inverseBindMatrices` 的个数等于关节数；关节都在默认场景里；`JOINTS_0`、`WEIGHTS_0` 的个数等于顶点数；关节数不超过 65536（顶点用 `u16` 记关节下标）。
+- 蒙皮不能用的原因在导入时就存下（`Imported.skinned` 是 `Result`），只有节点有 `animation` 时才报，所以没有动画的模型不受这些检查影响。片段由 `Models::load` 一起读（`anim::Clips`）。
 - 渲染：`loom_render` 加 `create_skinned_mesh(&[SkinnedVertex], &[u32]) -> MeshId`（顶点多了 4 个关节下标、4 个权重）和一条蒙皮管线；`Frame` 多一个 `joints: &[Mat4]`，`DrawItem` 多一个可选的关节范围。蒙皮在顶点着色器里做（GPU 蒙皮）；法线乘混合后矩阵的 3×3 再归一化（片段没有缩放，矩阵是刚体变换，这样是对的）。
 - 没有蒙皮的绘制项不变：`joints` 为空时不发任何新命令，已有截图逐字节不变。
+- 实现（E7.2）：蒙皮项的每项数据单独一个 storage buffer（`GpuDraw` 加第一个关节下标），按它在蒙皮项里的序号作 instance index；关节矩阵 buffer 到第一个有蒙皮项的帧才建，按 2 的幂增长。渲染错误：`MissingJoints`（蒙皮网格没带范围）、`UnexpectedJoints`（静态网格带了范围）、`JointRangeOutside`（范围超出这一帧的关节）、`JointIndex`（网格用到的最大关节下标超出范围，4 个下标都算，权重为 0 的也算）。
+- GPU 测试证明：单位关节矩阵下，蒙皮的 Cube 和内置 Cube 逐像素相同；关节平移和 `DrawItem.model` 平移逐像素相同。humanoid 空片段下，蒙皮和静态网格的顶点最大相差 4.2e-7 m（它的网格节点变换是单位矩阵）。
 
 **胶片图 `loom view --ticks`**：
 - `--ticks 0,15,30,45`：按这些 tick 各画一帧，从左到右拼成一行，存成一张 PNG；每帧大小是 `--size`，整张宽是 `帧数 × 宽`。不写就是 `--ticks 0`，和以前一样只有一帧。
-- tick 最多 16 个，可以重复、可以不按顺序；为空、写错按参数错误报（退出码 2）。
-- 报告 JSON 多一个 `ticks` 字段。
+- tick 最多 16 个，可以重复、可以不按顺序，每项两边可以有空格；为空、有空项、不是非负整数都报 `expected ticks as comma-separated non-negative integers, e.g. 0,15,30, got "…"`，超过 16 个报 `at most 16 ticks, got 17`（退出码 2）。
+- 报告 JSON 多一个 `ticks` 字段，在 `size` 后面；`size` 仍是单帧大小。只有一个 tick 时 PNG 和以前逐字节相同。
 - 用来让 AI 一眼看完一段动作：选小一点的 `--size`，例如 `320x360`。
 
 **`loom run` 和 serve**：有 `animation` 的节点按游戏时钟的 tick 画，从 tick 0 开始循环。热重载、`reset`、`load_scene` 后从新的 tick 0 开始。

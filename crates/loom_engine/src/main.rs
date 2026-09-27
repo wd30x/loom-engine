@@ -4,6 +4,7 @@
 //! `loom serve`, whose stdout is one JSON-RPC reply per line; logs go to
 //! stderr.
 
+mod anim;
 mod debug;
 mod games;
 mod model;
@@ -120,6 +121,33 @@ pub(crate) struct ViewArgs {
     /// Render resolution.
     #[arg(long, value_name = "WxH", default_value = "1280x720", value_parser = parse_size)]
     size: Size,
+    /// Game ticks to render, comma-separated (at most 16): one frame each,
+    /// left to right in one image, animated models posed at that tick.
+    #[arg(long, value_name = "T,T,...", default_value = "0", value_parser = parse_ticks)]
+    ticks: Ticks,
+}
+
+/// `--ticks`: 1 to [`MAX_TICKS`] ticks, in the order given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Ticks(pub Vec<u64>);
+
+/// The most frames `--ticks` may ask for.
+const MAX_TICKS: usize = 16;
+
+fn parse_ticks(s: &str) -> Result<Ticks, String> {
+    let ticks = s
+        .split(',')
+        .map(|t| t.trim().parse::<u64>())
+        .collect::<Result<Vec<u64>, _>>()
+        .map_err(|_| {
+            format!(
+                "expected ticks as comma-separated non-negative integers, e.g. 0,15,30, got {s:?}"
+            )
+        })?;
+    if ticks.len() > MAX_TICKS {
+        return Err(format!("at most {MAX_TICKS} ticks, got {}", ticks.len()));
+    }
+    Ok(Ticks(ticks))
 }
 
 #[derive(Debug, clap::Args)]

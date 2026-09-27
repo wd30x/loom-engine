@@ -1,0 +1,79 @@
+// Walk in place: one stride of each leg, a 1 s loop (docs/architecture.md
+// section 19). The node does not move; a game moves it. Rotations are YXZ
+// degrees about each bone's position along the model's axes (+X right, +Y
+// up, -Z forward); see assets/anims/README.md for which way each bone
+// turns. Every channel starts and ends on the same value, so the loop has
+// no seam.
+//
+// Tick 0: left leg forward, right leg back; tick 15: legs passing, the
+// right one swinging through with its knee bent; tick 30: right leg
+// forward, left leg back; tick 45: the left one swinging through.
+(
+    length: 60,
+    looping: true,
+    bones: {
+        // +X lifts a leg forward, -X swings it back.
+        "upper_leg_l": (rotation: [
+            (0, (25.0, 0.0, 0.0)),
+            (30, (-25.0, 0.0, 0.0)),
+            (60, (25.0, 0.0, 0.0)),
+        ]),
+        "upper_leg_r": (rotation: [
+            (0, (-25.0, 0.0, 0.0)),
+            (30, (25.0, 0.0, 0.0)),
+            (60, (-25.0, 0.0, 0.0)),
+        ]),
+        // -X bends a knee (the shin swings back). A knee is straight when
+        // its leg reaches forward, most bent just after it pushed off
+        // behind, and still bent while the leg swings through.
+        "lower_leg_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (15, (-10.0, 0.0, 0.0)),
+            (30, (-35.0, 0.0, 0.0)),
+            (45, (-45.0, 0.0, 0.0)),
+            (60, (0.0, 0.0, 0.0)),
+        ]),
+        "lower_leg_r": (rotation: [
+            (0, (-35.0, 0.0, 0.0)),
+            (15, (-45.0, 0.0, 0.0)),
+            (30, (0.0, 0.0, 0.0)),
+            (45, (-10.0, 0.0, 0.0)),
+            (60, (-35.0, 0.0, 0.0)),
+        ]),
+        // +X tips the toes up. A foot reaching forward is near level
+        // (heel first, toes 5 degrees up); behind, the thigh and knee turn
+        // it toes down about 45 degrees, pushing off.
+        "foot_l": (rotation: [
+            (0, (-20.0, 0.0, 0.0)),
+            (30, (15.0, 0.0, 0.0)),
+            (60, (-20.0, 0.0, 0.0)),
+        ]),
+        "foot_r": (rotation: [
+            (0, (15.0, 0.0, 0.0)),
+            (30, (-20.0, 0.0, 0.0)),
+            (60, (15.0, 0.0, 0.0)),
+        ]),
+        // The body is lowest with the legs apart (ticks 0 and 30) and
+        // highest as they pass (15 and 45): two bobs a loop.
+        "hips": (translation: [
+            (0, (0.0, -0.05, 0.0)),
+            (15, (0.0, -0.01, 0.0)),
+            (30, (0.0, -0.05, 0.0)),
+            (45, (0.0, -0.01, 0.0)),
+            (60, (0.0, -0.05, 0.0)),
+        ]),
+        // The arms swing against the legs: the left arm forward (+X) with
+        // the right leg, and back with the left leg.
+        "upper_arm_l": (rotation: [
+            (0, (-20.0, 0.0, 0.0)),
+            (30, (20.0, 0.0, 0.0)),
+            (60, (-20.0, 0.0, 0.0)),
+        ]),
+        // The sword arm swings less, forward with the left leg.
+        "upper_arm_r": (rotation: [
+            (0, (10.0, 0.0, 0.0)),
+            (30, (-10.0, 0.0, 0.0)),
+            (60, (10.0, 0.0, 0.0)),
+        ]),
+    },
+)

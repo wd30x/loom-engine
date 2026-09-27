@@ -31,6 +31,7 @@ fn render_with(make: impl FnOnce(&mut Renderer) -> Vec<HudDraw>) -> Vec<u8> {
             ambient: Vec3::ZERO,
             light: None,
             draws: &[],
+            joints: &[],
             sprites: &[],
             hud,
             lines: &[],

@@ -23,6 +23,10 @@ pub struct Frame<'a> {
     pub light: Option<DirectionalLight>,
     /// Drawn in this order.
     pub draws: &'a [DrawItem],
+    /// The joint matrices of the skinned draw items, each item's a range
+    /// of them ([`DrawItem::joints`]). Nothing is uploaded for an empty
+    /// list.
+    pub joints: &'a [Mat4],
     /// Drawn in this order, after `draws`, in the same pass and against the
     /// same depth buffer. Unlit and alpha-tested, so the order does not
     /// change the result.
@@ -111,6 +115,19 @@ pub struct DrawItem {
     pub model: Mat4,
     /// Linear RGB.
     pub color: Vec3,
+    /// The joint matrices of a skinned mesh
+    /// ([`crate::Renderer::create_skinned_mesh`]): required for one, not
+    /// allowed for any other mesh.
+    pub joints: Option<JointRange>,
+}
+
+/// `count` joint matrices of [`Frame::joints`] from `first`: a skinned
+/// mesh's joint index `i` is matrix `first + i`. Each matrix takes the
+/// mesh's space to the draw item's object space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JointRange {
+    pub first: u32,
+    pub count: u32,
 }
 
 /// A 1x1 quad on the XY plane of `model`, centered at its origin and facing
@@ -198,6 +215,25 @@ impl GpuDraw {
             model: item.model.to_cols_array_2d(),
             normal: [n.x_axis, n.y_axis, n.z_axis].map(|c| c.extend(0.0).to_array()),
             color: item.color.extend(1.0).to_array(),
+        }
+    }
+}
+
+/// One skinned draw item; matches `Draw` in `shaders/skinned.wgsl` (144
+/// bytes).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub(crate) struct GpuSkinnedDraw {
+    draw: GpuDraw,
+    /// x: the first joint matrix; the rest unused.
+    joints: [u32; 4],
+}
+
+impl GpuSkinnedDraw {
+    pub fn new(item: &DrawItem, joints: JointRange) -> Self {
+        Self {
+            draw: GpuDraw::new(item),
+            joints: [joints.first, 0, 0, 0],
         }
     }
 }
@@ -501,6 +537,7 @@ mod tests {
             mesh: MeshKind::Cube.into(),
             model,
             color: Vec3::ONE,
+            joints: None,
         });
         let n = Mat3::from_cols_array_2d(&draw.normal.map(|c| [c[0], c[1], c[2]]));
         // A surface through the origin spanned by tangent t, with normal nrm.

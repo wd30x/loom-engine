@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::*;
 
 /// A `.glb` of `json` and the binary chunk `bin`.
-fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
+pub(crate) fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
     let mut text = serde_json::to_vec(json).expect("JSON");
     while !text.len().is_multiple_of(4) {
         text.push(b' ');

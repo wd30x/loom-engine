@@ -21,6 +21,8 @@ pub(crate) struct LoomSchema {
     loom_schema: u32,
     /// The scene file.
     scene: Schema,
+    /// An animation clip file.
+    clip: Schema,
     /// Each game, by name.
     games: BTreeMap<&'static str, GameSchema>,
 }
@@ -59,6 +61,7 @@ impl LoomSchema {
         Self {
             loom_schema: LOOM_SCHEMA,
             scene: loom_scene::scene_schema(),
+            clip: loom_scene::clip_schema(),
             games: BTreeMap::from([
                 (
                     "rogue",
@@ -125,7 +128,8 @@ mod tests {
     fn schema_lists_its_parts_in_order_and_every_game_by_name() {
         let pretty = LoomSchema::new().to_pretty();
         let at = |key: &str| pretty.find(&format!("\"{key}\":")).unwrap();
-        assert!(at("loom_schema") < at("scene") && at("scene") < at("games"));
+        assert!(at("loom_schema") < at("scene") && at("scene") < at("clip"));
+        assert!(at("clip") < at("games"));
         let schema = schema();
         assert_eq!(schema["loom_schema"], 1);
         let games: Vec<&str> = schema["games"]

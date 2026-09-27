@@ -1,9 +1,23 @@
 //! The render pipelines and the layouts they bind, built once by
 //! `Renderer::with_adapter` in this order: the globals, the meshes, the
-//! sprites, the debug lines, the HUD.
+//! skinned meshes, the sprites, the debug lines, the HUD.
 
 use crate::frame::{GpuGlobals, HudVertex, LineVertex};
 use crate::{COLOR_FORMAT, DEPTH_FORMAT, mesh};
+
+/// A read-only storage buffer read by the vertex stage, at `binding`.
+fn vertex_storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
 
 /// The uniform buffer of the globals every pipeline reads.
 pub(crate) fn globals_buffer(device: &wgpu::Device) -> wgpu::Buffer {
@@ -31,16 +45,7 @@ pub(crate) fn mesh_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLa
                 },
                 count: None,
             },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
+            vertex_storage(1),
         ],
     })
 }
@@ -51,19 +56,75 @@ pub(crate) fn mesh_pipeline(
     shader: &wgpu::ShaderModule,
     bind_group_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
+    lit_pipeline(
+        device,
+        "mesh",
+        shader,
+        bind_group_layout,
+        mesh::Vertex::layout(),
+    )
+}
+
+/// Group 0 of the skinned meshes: the globals, the per-draw storage and
+/// the joint matrices, both read by the vertex stage.
+pub(crate) fn skinned_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("skinned"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            vertex_storage(1),
+            vertex_storage(2),
+        ],
+    })
+}
+
+/// The pipeline of the lit skinned meshes: the lit meshes' state with the
+/// skinned vertex layout.
+pub(crate) fn skinned_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    lit_pipeline(
+        device,
+        "skinned mesh",
+        shader,
+        bind_group_layout,
+        mesh::SkinnedVertex::layout(),
+    )
+}
+
+/// A lit, back-face culled, depth-tested pipeline of `shader` with one
+/// vertex buffer of `vertex_layout`.
+fn lit_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    vertex_layout: wgpu::VertexBufferLayout<'static>,
+) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("mesh"),
+        label: Some(label),
         bind_group_layouts: &[Some(bind_group_layout)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("mesh"),
+        label: Some(label),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[Some(mesh::Vertex::layout())],
+            buffers: &[Some(vertex_layout)],
         },
         primitive: wgpu::PrimitiveState {
             front_face: wgpu::FrontFace::Ccw,

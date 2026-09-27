@@ -61,6 +61,33 @@ impl Vertex {
     }
 }
 
+/// One vertex of a skinned mesh: a [`Vertex`] placed by up to four joint
+/// matrices of its draw item's joint range, blended by `weights` (which
+/// sum to 1). `joints` index into the range.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
+pub struct SkinnedVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub color: [f32; 3],
+    pub joints: [u16; 4],
+    pub weights: [f32; 4],
+}
+
+impl SkinnedVertex {
+    pub(crate) const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Uint16x4, 4 => Float32x4
+    ];
+
+    pub(crate) fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SkinnedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 pub(crate) fn mesh(kind: MeshKind) -> (Vec<Vertex>, Vec<u16>) {
     match kind {
         MeshKind::Cube => cube(),

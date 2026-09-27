@@ -4,6 +4,8 @@
 //! Only GPU-free invocations belong here (headless, no `--screenshot`), so
 //! that `verify.ps1` keeps working on machines without a GPU.
 
+#[path = "cli/anim.rs"]
+mod anim;
 #[path = "cli/bonfire.rs"]
 mod bonfire;
 #[path = "cli/boss.rs"]

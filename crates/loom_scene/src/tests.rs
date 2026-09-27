@@ -1164,3 +1164,60 @@ fn model_color_defaults_to_white_and_tints_like_a_mesh_color() {
     assert!(scene.set_mesh_color(k, Vec3::splat(2.0)).is_err());
     assert_eq!(scene.model_nodes(), [k]);
 }
+
+#[test]
+fn animation_is_read_with_its_clips_and_the_playing_one_from_tick_0() {
+    let scene = Scene::parse(&scene_with(
+        r#"(name: "k", model: "k.glb", animation: (clips: {"walk": "w.ron", "idle": "i.ron"}, play: "walk")),"#,
+    ))
+    .unwrap();
+    let k = scene.find("k").unwrap();
+    let animation = scene.node(k).model.as_ref().unwrap().animation.clone();
+    assert_eq!(
+        animation,
+        Some(Animation {
+            clips: [("idle", "i.ron"), ("walk", "w.ron")]
+                .map(|(n, p)| (n.to_owned(), p.to_owned()))
+                .into(),
+            playing: "walk".to_owned(),
+            start: 0,
+        })
+    );
+    let plain = Scene::parse(&scene_with(r#"(name: "k", model: "k.glb"),"#)).unwrap();
+    let k = plain.find("k").unwrap();
+    assert_eq!(plain.node(k).model.as_ref().unwrap().animation, None);
+}
+
+#[test]
+fn animation_rules_are_scene_errors_naming_the_node() {
+    let cases = [
+        (
+            r#"(name: "k", mesh: Cube, animation: (clips: {"idle": "i.ron"}, play: "idle")),"#,
+            "animation needs a model on the same node",
+        ),
+        (
+            r#"(name: "k", animation: (clips: {"idle": "i.ron"}, play: "idle")),"#,
+            "animation needs a model on the same node",
+        ),
+        (
+            r#"(name: "k", model: "k.glb", animation: (clips: {}, play: "idle")),"#,
+            "animation clips must not be empty",
+        ),
+        (
+            r#"(name: "k", model: "k.glb", animation: (clips: {"": "i.ron"}, play: "")),"#,
+            "animation clip name must not be empty",
+        ),
+        (
+            r#"(name: "k", model: "k.glb", animation: (clips: {"idle": ""}, play: "idle")),"#,
+            "animation clip path must not be empty",
+        ),
+        (
+            r#"(name: "k", model: "k.glb", animation: (clips: {"idle": "i.ron"}, play: "walk")),"#,
+            "animation play \"walk\" is not one of its clips",
+        ),
+    ];
+    for (node, problem) in cases {
+        let err = Scene::parse(&scene_with(node)).unwrap_err();
+        assert_eq!(err.to_string(), format!("node \"k\": {problem}"), "{node}");
+    }
+}

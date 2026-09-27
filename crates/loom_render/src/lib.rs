@@ -16,15 +16,18 @@ use std::sync::mpsc;
 use wgpu::util::DeviceExt;
 
 pub use frame::{
-    DirectionalLight, DrawItem, DrawMesh, Frame, HudDraw, LineDraw, Projection, SpriteDraw,
-    view_projection,
+    DirectionalLight, DrawItem, DrawMesh, Frame, HudDraw, JointRange, LineDraw, Projection,
+    SpriteDraw, view_projection,
 };
-use frame::{GpuDraw, GpuGlobals, GpuSprite, HudVertex, LineVertex, hud_vertices, line_vertices};
-pub use mesh::{MeshKind, Vertex};
+use frame::{
+    GpuDraw, GpuGlobals, GpuSkinnedDraw, GpuSprite, HudVertex, LineVertex, hud_vertices,
+    line_vertices,
+};
+pub use mesh::{MeshKind, SkinnedVertex, Vertex};
 
 use buffers::{
     DrawBuffer, GpuMesh, INITIAL_DRAW_CAPACITY, INITIAL_HUD_VERTICES, INITIAL_LINE_VERTICES,
-    VertexBuffer,
+    SkinBuffers, VertexBuffer,
 };
 use gpu::{EXIT, INIT, adapter_options, init_step, new_instance, step};
 use target::{Offscreen, Presenter};
@@ -81,6 +84,16 @@ pub enum RenderError {
     MeshIndex { index: u32, vertices: usize },
     #[error("draw item uses mesh {0}, which this renderer did not create")]
     UnknownMesh(u32),
+    #[error("draw item uses skinned mesh {0} without a joint range")]
+    MissingJoints(u32),
+    #[error("draw item gives a joint range for a mesh that is not skinned")]
+    UnexpectedJoints,
+    #[error("joint range {first}..{end} is outside the frame's {len} joints")]
+    JointRangeOutside { first: u32, end: u64, len: usize },
+    #[error(
+        "skinned mesh {mesh} uses joint {highest}, but its draw item's range has {count} joints"
+    )]
+    JointIndex { mesh: u32, highest: u32, count: u32 },
 }
 
 /// Handle of a texture created by [`Renderer::create_texture`]; only valid
@@ -150,6 +163,10 @@ pub struct Renderer {
     bind_group_layout: wgpu::BindGroupLayout,
     globals_buffer: wgpu::Buffer,
     draws: DrawBuffer,
+    skinned_pipeline: wgpu::RenderPipeline,
+    skinned_layout: wgpu::BindGroupLayout,
+    /// Made at the first frame with a skinned draw item.
+    skin: Option<SkinBuffers>,
     sprite_pipeline: wgpu::RenderPipeline,
     texture_layout: wgpu::BindGroupLayout,
     sprites: DrawBuffer,
@@ -246,6 +263,14 @@ impl Renderer {
         );
         let pipeline = pipelines::mesh_pipeline(&device, &shader, &bind_group_layout);
 
+        // Skinned meshes: their own group 0 (globals, per-draw storage,
+        // joint matrices), whose buffers wait for the first skinned draw.
+        let skinned_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/skinned.wgsl"));
+        let skinned_layout = pipelines::skinned_bind_group_layout(&device);
+        let skinned_pipeline =
+            pipelines::skinned_pipeline(&device, &skinned_shader, &skinned_layout);
+
         // Sprites share group 0's layout with meshes (globals, then per-draw
         // storage read by the vertex stage); group 1 is the texture.
         let sprite_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/sprite.wgsl"));
@@ -306,6 +331,9 @@ impl Renderer {
             bind_group_layout,
             globals_buffer,
             draws,
+            skinned_pipeline,
+            skinned_layout,
+            skin: None,
             sprite_pipeline,
             texture_layout,
             sprites,
@@ -341,6 +369,9 @@ impl Renderer {
             bind_group_layout,
             globals_buffer,
             draws,
+            skinned_pipeline,
+            skinned_layout,
+            skin,
             sprite_pipeline,
             texture_layout,
             sprites,
@@ -362,6 +393,7 @@ impl Renderer {
             drop((
                 offscreen,
                 draws,
+                (skin, skinned_pipeline, skinned_layout),
                 sprites,
                 (lines, line_bind_group, line_pipeline),
                 (hud, hud_solid_pipeline, hud_textured_pipeline),
@@ -441,18 +473,26 @@ impl Renderer {
         vertices: &[Vertex],
         indices: &[u32],
     ) -> Result<MeshId, RenderError> {
-        if indices.is_empty() || !indices.len().is_multiple_of(3) {
-            return Err(RenderError::MeshIndexCount(indices.len()));
-        }
-        if let Some(&index) = indices.iter().find(|&&i| i as usize >= vertices.len()) {
-            return Err(RenderError::MeshIndex {
-                index,
-                vertices: vertices.len(),
-            });
-        }
+        check_indices(indices, vertices.len())?;
         let id = u32::try_from(self.created_meshes.len()).expect("far fewer than 2^32 meshes");
         self.created_meshes
             .push(GpuMesh::from_data(&self.device, vertices, indices));
+        Ok(MeshId(id))
+    }
+
+    /// Uploads a skinned mesh for [`DrawItem`]s, which must give it a
+    /// joint range ([`DrawItem::joints`]) of more joints than its highest
+    /// joint index: `indices` into `vertices`, three a triangle,
+    /// counter-clockwise seen from the front.
+    pub fn create_skinned_mesh(
+        &mut self,
+        vertices: &[SkinnedVertex],
+        indices: &[u32],
+    ) -> Result<MeshId, RenderError> {
+        check_indices(indices, vertices.len())?;
+        let id = u32::try_from(self.created_meshes.len()).expect("far fewer than 2^32 meshes");
+        self.created_meshes
+            .push(GpuMesh::from_skinned_data(&self.device, vertices, indices));
         Ok(MeshId(id))
     }
 
@@ -522,17 +562,31 @@ impl Renderer {
             &self.globals_buffer,
             frame.sprites.len(),
         );
+        let mut skinned = 0;
         for item in frame.draws {
             match item.mesh {
                 DrawMesh::Kind(kind) => {
+                    if item.joints.is_some() {
+                        return Err(RenderError::UnexpectedJoints);
+                    }
                     if !self.meshes.iter().any(|(k, _)| *k == kind) {
                         log::debug!("uploading mesh {kind:?}");
                         self.meshes.push((kind, GpuMesh::new(&self.device, kind)));
                     }
                 }
                 DrawMesh::Id(MeshId(id)) => {
-                    if self.created_meshes.get(id as usize).is_none() {
-                        return Err(RenderError::UnknownMesh(id));
+                    let mesh = self
+                        .created_meshes
+                        .get(id as usize)
+                        .ok_or(RenderError::UnknownMesh(id))?;
+                    match (mesh.joints, item.joints) {
+                        (None, None) => {}
+                        (None, Some(_)) => return Err(RenderError::UnexpectedJoints),
+                        (Some(_), None) => return Err(RenderError::MissingJoints(id)),
+                        (Some(needed), Some(range)) => {
+                            check_joint_range(id, needed, range, frame.joints.len())?;
+                            skinned += 1;
+                        }
                     }
                 }
             }
@@ -548,6 +602,31 @@ impl Renderer {
         if !draws.is_empty() {
             self.queue
                 .write_buffer(&self.draws.buffer, 0, bytemuck::cast_slice(&draws));
+        }
+        // Nothing of the skinned meshes' for a frame without one.
+        if skinned > 0 {
+            let joints = frame.joints.len();
+            if !self.skin.as_ref().is_some_and(|s| s.fits(skinned, joints)) {
+                self.skin = Some(SkinBuffers::new(
+                    &self.device,
+                    &self.skinned_layout,
+                    &self.globals_buffer,
+                    std::mem::size_of::<GpuSkinnedDraw>(),
+                    skinned,
+                    joints,
+                ));
+            }
+            let skin = self.skin.as_ref().expect("made just above");
+            let skinned_draws: Vec<GpuSkinnedDraw> = frame
+                .draws
+                .iter()
+                .filter_map(|item| item.joints.map(|j| GpuSkinnedDraw::new(item, j)))
+                .collect();
+            self.queue
+                .write_buffer(&skin.draws, 0, bytemuck::cast_slice(&skinned_draws));
+            let matrices: Vec<[f32; 16]> = frame.joints.iter().map(|m| m.to_cols_array()).collect();
+            self.queue
+                .write_buffer(&skin.joints, 0, bytemuck::cast_slice(&matrices));
         }
         let sprites: Vec<GpuSprite> = frame.sprites.iter().map(GpuSprite::new).collect();
         if !sprites.is_empty() {
@@ -599,7 +678,26 @@ impl Renderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.draws.bind_group, &[]);
             let mut bound = None;
+            // Whether the skinned pipeline is set, and the next skinned
+            // draw's index among the skinned ones.
+            let mut skinning = false;
+            let mut next_skinned = 0_u32;
             for (i, item) in frame.draws.iter().enumerate() {
+                let is_skinned = item.joints.is_some();
+                if is_skinned != skinning {
+                    if is_skinned {
+                        let skin = self
+                            .skin
+                            .as_ref()
+                            .expect("made above for a frame with a skinned draw item");
+                        pass.set_pipeline(&self.skinned_pipeline);
+                        pass.set_bind_group(0, &skin.bind_group, &[]);
+                    } else {
+                        pass.set_pipeline(&self.pipeline);
+                        pass.set_bind_group(0, &self.draws.bind_group, &[]);
+                    }
+                    skinning = is_skinned;
+                }
                 let (slot, mesh) = match item.mesh {
                     DrawMesh::Kind(kind) => {
                         let slot = self
@@ -616,8 +714,14 @@ impl Renderer {
                     pass.set_index_buffer(mesh.indices.slice(..), mesh.index_format);
                     bound = Some(slot);
                 }
-                // The instance index selects this item's per-draw data.
-                let instance = u32::try_from(i).expect("draw count fits in u32");
+                // The instance index selects this item's per-draw data:
+                // among all items, or among the skinned ones.
+                let instance = if is_skinned {
+                    next_skinned += 1;
+                    next_skinned - 1
+                } else {
+                    u32::try_from(i).expect("draw count fits in u32")
+                };
                 pass.draw_indexed(0..mesh.index_count, 0, instance..instance + 1);
             }
             if !frame.sprites.is_empty() {
@@ -758,6 +862,44 @@ impl Renderer {
         buffer.unmap();
         Ok(pixels)
     }
+}
+
+/// Checks `indices` of a mesh of `vertices` vertices: a positive multiple
+/// of 3, each in range.
+fn check_indices(indices: &[u32], vertices: usize) -> Result<(), RenderError> {
+    if indices.is_empty() || !indices.len().is_multiple_of(3) {
+        return Err(RenderError::MeshIndexCount(indices.len()));
+    }
+    if let Some(&index) = indices.iter().find(|&&i| i as usize >= vertices) {
+        return Err(RenderError::MeshIndex { index, vertices });
+    }
+    Ok(())
+}
+
+/// Checks the joint `range` a draw item gives skinned mesh `mesh`, which
+/// needs `needed` joints: inside the frame's `len` joints, and long enough.
+fn check_joint_range(
+    mesh: u32,
+    needed: u32,
+    range: JointRange,
+    len: usize,
+) -> Result<(), RenderError> {
+    let end = u64::from(range.first) + u64::from(range.count);
+    if end > len as u64 {
+        return Err(RenderError::JointRangeOutside {
+            first: range.first,
+            end,
+            len,
+        });
+    }
+    if range.count < needed {
+        return Err(RenderError::JointIndex {
+            mesh,
+            highest: needed - 1,
+            count: range.count,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,0 +1,23 @@
+// Preview of the humanoid's clips (docs/architecture.md section 19), rendered without a game, as
+// a film strip of four ticks (smoke H13):
+//   loom view --scene assets/scenes/anim_preview.ron --ticks 0,15,30,45 --size 480x360 --screenshot out/anim_preview.png
+// Two knights face loom's forward (-Z), seen from the front and a little to their left so the
+// legs' swing forward and back shows. On the viewer's left (+X) the knight plays `idle`, on the
+// right (-X) the one playing `walk`, in place.
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (-2.6, 1.5, -4.4), look_at: (0.0, 0.85, 0.0),
+            camera: (fov_y: 40.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 150.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (20.0, 1.0, 20.0), color: (0.35, 0.35, 0.38)),
+        (name: "idle", position: (1.1, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: {"idle": "assets/anims/humanoid/idle.ron", "walk": "assets/anims/humanoid/walk.ron"},
+                play: "idle")),
+        (name: "walk", position: (-1.1, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: {"idle": "assets/anims/humanoid/idle.ron", "walk": "assets/anims/humanoid/walk.ron"},
+                play: "walk")),
+    ],
+)

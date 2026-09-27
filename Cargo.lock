@@ -1398,6 +1398,7 @@ dependencies = [
  "loom_render",
  "loom_scene",
  "rogue",
+ "ron",
  "schemars",
  "serde",
  "serde_json",

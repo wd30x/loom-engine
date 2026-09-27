@@ -60,6 +60,29 @@
       "nodes"
     ],
     "$defs": {
+      "AnimationDesc": {
+        "description": "A model's animation clips (`docs/architecture.md` section 19).",
+        "type": "object",
+        "properties": {
+          "clips": {
+            "description": "Clip name to the path of its RON clip file (the `clip` schema),\nrelative to the working directory. At least one; names and paths\nnot empty.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "minProperties": 1
+          },
+          "play": {
+            "description": "The clip played from tick 0: one of `clips`' names.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "clips",
+          "play"
+        ]
+      },
       "CameraDesc": {
         "description": "A camera: `near` and `far` in meters, `0 < near < far`.",
         "type": "object",
@@ -218,6 +241,17 @@
         "description": "A scene node. Every number must be finite.",
         "type": "object",
         "properties": {
+          "animation": {
+            "description": "The model's animation clips, played from tick 0. Only with `model`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AnimationDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "camera": {
             "description": "Makes the node a camera, looking along its -Z axis.",
             "anyOf": [
@@ -617,6 +651,122 @@
           "legend",
           "rows"
         ]
+      }
+    }
+  },
+  "clip": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "clip",
+    "description": "A loom animation clip file (`docs/architecture.md` section 19). The\nfile is RON; this schema describes the same data as JSON: a keyframe\n`(30, (25.0, 0.0, 0.0))` is a two-item array of the tick and a\nthree-item array; an optional field may be left out, and when given is\nwritten bare in RON (`rotation: [...]`, not `rotation: Some([...])`).\nLoading checks more than the structure: the rules are in the field\ndescriptions.",
+    "type": "object",
+    "properties": {
+      "bones": {
+        "description": "Bone name (a joint of the model's skin) to its channels; may be\nempty (the bind pose). Bones not listed keep their bind pose.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/BoneDesc"
+        }
+      },
+      "length": {
+        "description": "The clip's length in ticks (1/60 s), greater than 0.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 1
+      },
+      "looping": {
+        "description": "`true`: the clip repeats, tick `length` being tick 0 again; `false`:\nit stops at its last tick.",
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "length",
+      "looping",
+      "bones"
+    ],
+    "$defs": {
+      "BoneDesc": {
+        "description": "One bone's channels: at least one of the two. Values are offsets from\nthe bind pose along the model's axes (+X right, +Y up, -Z forward), not\nthe bone's own axes; a parent's motion carries its children's axes.",
+        "type": "object",
+        "properties": {
+          "rotation": {
+            "description": "`(tick, (x, y, z))` keyframes of YXZ Euler angles in degrees, as a\nscene node's `rotation`, about the bone's position. At least one;\nticks strictly increasing, each at most `length`; values finite.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                {
+                  "type": "array",
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    {
+                      "type": "number",
+                      "format": "float"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "translation": {
+            "description": "`(tick, (x, y, z))` keyframes of a move in meters. At least one;\nticks strictly increasing, each at most `length`; values finite.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                {
+                  "type": "array",
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    {
+                      "type": "number",
+                      "format": "float"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
       }
     }
   },

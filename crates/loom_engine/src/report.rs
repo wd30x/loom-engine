@@ -51,7 +51,10 @@ pub(crate) struct ViewReport {
     /// Always `"view"`.
     pub mode: &'static str,
     pub screenshot: String,
+    /// One frame's size: `--size`.
     pub size: [u32; 2],
+    /// `--ticks`: the frames, left to right.
+    pub ticks: Vec<u64>,
     /// `--scene` path.
     pub scene: String,
     pub adapter: RunAdapter,

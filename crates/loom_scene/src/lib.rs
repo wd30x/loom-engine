@@ -9,21 +9,24 @@
 //! The tree is simulation state: its structure is fixed after parsing, only
 //! transforms change.
 
+mod clip;
 mod doc;
 #[cfg(test)]
 mod doc_tests;
 mod file;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+pub use clip::{Clip, ClipError, clip_schema};
 pub use doc::{EditError, SceneDoc};
 pub use file::MeshKind;
 use file::{
-    CameraDesc, ColliderKind, NodeDesc, OrbitCameraDesc, SceneFile, SpriteDesc, TilemapDesc, Triple,
+    AnimationDesc, CameraDesc, ColliderKind, NodeDesc, OrbitCameraDesc, SceneFile, SpriteDesc,
+    TilemapDesc, Triple,
 };
 
 /// The JSON Schema (draft 2020-12) of a scene file, as `loom schema`
@@ -96,6 +99,10 @@ pub enum Problem {
     DrawableConflict,
     #[error("{0} must not be empty")]
     EmptyField(&'static str),
+    #[error("animation needs a model on the same node")]
+    AnimationWithoutModel,
+    #[error("animation play {0:?} is not one of its clips")]
+    AnimationPlayUnknown(String),
     #[error("tilemap rows must not be empty")]
     TilemapNoRows,
     #[error("tilemap rows must all have the same number of characters, at least 1")]
@@ -198,6 +205,22 @@ pub struct Model {
     pub path: String,
     /// Linear RGB, multiplied with the model's vertex colors.
     pub color: Vec3,
+    /// The model's clips and the one playing; `None` draws the bind pose.
+    pub animation: Option<Animation>,
+}
+
+/// A model's animation clips (`docs/architecture.md` section 19). The clip
+/// files are read by `loom_engine`, not here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Animation {
+    /// Clip name to clip file path, as written; at least one, names and
+    /// paths not empty.
+    pub clips: BTreeMap<String, String>,
+    /// The clip playing: one of `clips`' names.
+    pub playing: String,
+    /// The tick the playing clip started at: 0 until games can switch
+    /// clips (E7.3).
+    pub start: u64,
 }
 
 /// Looks along the node's -Z.
@@ -760,15 +783,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     }
     let rotation = match (desc.rotation, desc.look_at) {
         (Some(_), Some(_)) => return Err(Problem::RotationAndLookAt),
-        (Some(degrees), None) => {
-            let d = finite(degrees, "rotation")?;
-            Quat::from_euler(
-                EulerRot::YXZ,
-                d.y.to_radians(),
-                d.x.to_radians(),
-                d.z.to_radians(),
-            )
-        }
+        (Some(degrees), None) => euler_degrees(finite(degrees, "rotation")?),
         (None, Some(target)) => {
             let target = finite(target, "look_at")?;
             if target == position {
@@ -841,6 +856,10 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     if desc.model.as_deref() == Some("") {
         return Err(Problem::EmptyField("model"));
     }
+    let animation = desc.animation.as_ref().map(animation).transpose()?;
+    if animation.is_some() && desc.model.is_none() {
+        return Err(Problem::AnimationWithoutModel);
+    }
     let sprite = desc.sprite.as_ref().map(sprite).transpose()?;
     let tilemap = desc.tilemap.as_ref().map(tilemap).transpose()?;
     let props = props(&desc.props)?;
@@ -874,6 +893,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         model: desc.model.as_ref().map(|path| Model {
             path: path.clone(),
             color: mesh_color,
+            animation,
         }),
         camera,
         light,
@@ -917,6 +937,35 @@ fn camera(c: &CameraDesc) -> Result<Camera, Problem> {
         projection,
         near: c.near,
         far: c.far,
+    })
+}
+
+/// A rotation from YXZ Euler angles in degrees `(x, y, z)`: a node's
+/// `rotation`, and a clip's rotation keyframes.
+pub(crate) fn euler_degrees(d: Vec3) -> Quat {
+    Quat::from_euler(
+        EulerRot::YXZ,
+        d.y.to_radians(),
+        d.x.to_radians(),
+        d.z.to_radians(),
+    )
+}
+
+fn animation(a: &AnimationDesc) -> Result<Animation, Problem> {
+    if a.clips.is_empty() {
+        return Err(Problem::EmptyField("animation clips"));
+    }
+    for (name, path) in &a.clips {
+        not_empty(name, "animation clip name")?;
+        not_empty(path, "animation clip path")?;
+    }
+    if !a.clips.contains_key(&a.play) {
+        return Err(Problem::AnimationPlayUnknown(a.play.clone()));
+    }
+    Ok(Animation {
+        clips: a.clips.clone(),
+        playing: a.play.clone(),
+        start: 0,
     })
 }
 

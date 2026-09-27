@@ -7,6 +7,8 @@
 //! (`docs/architecture.md` section 10, "规范格式"): fields in declaration
 //! order, absent optional fields and empty lists left out.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +77,9 @@ pub(crate) struct NodeDesc {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1))]
     pub model: Option<String>,
+    /// The model's animation clips, played from tick 0. Only with `model`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animation: Option<AnimationDesc>,
     /// The mesh color, linear RGB, each component from 0 to 1. Default
     /// (0.8, 0.8, 0.8), or (1, 1, 1) with a `model`: a model's color
     /// tints its vertex colors.
@@ -135,6 +140,19 @@ pub enum MeshKind {
     /// caps; the origin is at the bottom, so it spans y in `[0, height]`.
     /// Requires `radius > 0` and `height >= 2 * radius`.
     Capsule { radius: f32, height: f32 },
+}
+
+/// A model's animation clips (`docs/architecture.md` section 19).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AnimationDesc {
+    /// Clip name to the path of its RON clip file (the `clip` schema),
+    /// relative to the working directory. At least one; names and paths
+    /// not empty.
+    #[schemars(extend("minProperties" = 1))]
+    pub clips: BTreeMap<String, String>,
+    /// The clip played from tick 0: one of `clips`' names.
+    pub play: String,
 }
 
 /// A camera: `near` and `far` in meters, `0 < near < far`.
@@ -254,6 +272,7 @@ pub(crate) struct NodePatch {
     pub scale: Option<Triple>,
     pub mesh: Option<MeshKind>,
     pub model: Option<String>,
+    pub animation: Option<AnimationDesc>,
     pub color: Option<Triple>,
     pub camera: Option<CameraDesc>,
     pub sprite: Option<SpriteDesc>,

@@ -41,7 +41,7 @@ fn every_repository_scene_fits_the_scene_schema_and_broken_ones_do_not() {
         .filter(|p| p.extension().is_some_and(|x| x == "ron"))
         .collect();
     assets.sort();
-    assert_eq!(assets.len(), 5, "{assets:?}");
+    assert_eq!(assets.len(), 6, "{assets:?}");
     files.extend(assets);
     let scene = validator(&["scene"]);
     let as_json = |file: &PathBuf| -> Value {

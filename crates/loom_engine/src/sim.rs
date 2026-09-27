@@ -422,6 +422,7 @@ impl Sim {
             &mut self.models,
             &lines,
             hud,
+            game.clock().tick(),
         )
     }
 
