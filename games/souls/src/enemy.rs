@@ -38,6 +38,30 @@ impl MoveKind {
     }
 }
 
+/// What an enemy chose: one of its moves, or walking up to the character
+/// for a while; serialized in lower case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EnemyChoice {
+    Sweep,
+    Cleave,
+    Lunge,
+    Combo,
+    /// Walking up to the character for at most `approach_ticks`.
+    Approach,
+}
+
+impl From<MoveKind> for EnemyChoice {
+    fn from(kind: MoveKind) -> Self {
+        match kind {
+            MoveKind::Sweep => Self::Sweep,
+            MoveKind::Cleave => Self::Cleave,
+            MoveKind::Lunge => Self::Lunge,
+            MoveKind::Combo => Self::Combo,
+        }
+    }
+}
+
 /// What an enemy is doing; serialized in snake case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -75,8 +99,11 @@ pub struct EnemyState {
     pub hit: u32,
     /// Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.
     pub facing: f32,
-    /// Ticks of rest left.
+    /// Ticks of rest left; 0 outside `rest`.
     pub rest: u32,
+    /// Ticks left of the approach it chose; 0 otherwise, also while it
+    /// walks up with nothing to choose.
+    pub chase: u32,
     /// The state of its random numbers.
     pub rng: u64,
 }
@@ -140,11 +167,29 @@ pub(crate) struct EnemyParams {
     pub lunge_step: f32,
     pub combo_hits: u32,
     pub combo_gap: u32,
+    /// Meters: approaching is a choice only farther than this.
+    pub approach_min: f32,
+    /// The approach's weight per meter beyond `approach_min`.
+    pub approach_per_meter: f32,
+    /// The most ticks one approach walks.
+    pub approach_ticks: u32,
 }
 
 impl EnemyParams {
     pub fn of(&self, kind: MoveKind) -> &MoveParams {
         &self.moves[kind as usize]
+    }
+
+    /// The approach's weight at the character's horizontal distance `d`:
+    /// `floor(approach_per_meter * (d - approach_min))` farther than
+    /// `approach_min`, else 0.
+    pub fn approach_weight(&self, d: f32) -> u32 {
+        if d > self.approach_min {
+            // Not negative here; `as` saturates a huge one.
+            libm::floorf(self.approach_per_meter * (d - self.approach_min)) as u32
+        } else {
+            0
+        }
     }
 
     /// How many cuts `kind` has: `combo_hits` for the combo, else 1.
@@ -276,6 +321,9 @@ mod tests {
             lunge_step: 0.1,
             combo_hits: hits,
             combo_gap: gap,
+            approach_min: 0.0,
+            approach_per_meter: 0.0,
+            approach_ticks: 1,
         }
     }
 

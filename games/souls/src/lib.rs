@@ -16,7 +16,7 @@ mod health;
 mod moves;
 
 pub use demo::{bindings, demo_scene, demo_scene_source};
-pub use enemy::{EnemyCondition, EnemyState, MoveKind};
+pub use enemy::{EnemyChoice, EnemyCondition, EnemyState, MoveKind};
 pub use events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
 pub use game::{
     ATTACK, CameraState, DEBUG_CATEGORIES, Game, GameError, GameState, HEAVY, HurtboxState, LOCK,

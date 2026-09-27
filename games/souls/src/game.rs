@@ -14,7 +14,9 @@ use loom_scene::{MeshKind, NodeId, Scene, SceneError};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::enemy::{EnemyCondition, EnemyParams, EnemyState, MoveKind, MoveParams, SplitMix64};
+use crate::enemy::{
+    EnemyChoice, EnemyCondition, EnemyParams, EnemyState, MoveKind, MoveParams, SplitMix64,
+};
 use crate::events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
 use crate::health::{Condition, Health, HealthState, HpBar};
 use crate::moves::{Action, Attack, AttackPhase, Buffered, Params};
@@ -135,8 +137,9 @@ macro_rules! move_props {
 /// - `swing_damage` makes it a swinger, hitting the character; the eight
 ///   after it go with `swing_damage`;
 /// - `enemy_speed` makes it an enemy; all the others go with it: the rest
-///   of [`ENEMY_PROPS`], eleven for each move, then [`ENEMY_TAIL`].
-pub(crate) const NODE_PROPS: [PropSpec; 72] = join(&[
+///   of [`ENEMY_PROPS`], eleven for each move, then [`ENEMY_TAIL`] and
+///   [`APPROACH_PROPS`].
+pub(crate) const NODE_PROPS: [PropSpec; 75] = join(&[
     &BASE_PROPS,
     &ENEMY_PROPS,
     &move_props!(
@@ -162,6 +165,7 @@ pub(crate) const NODE_PROPS: [PropSpec; 72] = join(&[
         [20.0, 15.0, 25.0, 5.0, 45.0, 2.8, 140.0, 0.0, 2.8, 2.0, 90.0]
     ),
     &ENEMY_TAIL,
+    &APPROACH_PROPS,
 ]);
 
 /// `parts` one after the other, which must be `N` in all.
@@ -394,11 +398,39 @@ const ENEMY_TAIL: [PropSpec; 3] = [
     },
 ];
 
+/// An enemy's approach, the choice of walking up to the character: the
+/// last enemy props.
+const APPROACH_PROPS: [PropSpec; 3] = [
+    PropSpec {
+        name: "approach_min_range",
+        default: Some(2.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "meters",
+        description: "Approaching is a choice only with the character farther than this, \
+                      horizontally.",
+    },
+    PropSpec {
+        name: "approach_weight_per_meter",
+        default: Some(2.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "weight per meter",
+        description: "The approach's weight is this times the meters beyond \
+                      approach_min_range, rounded down; 0 leaves it out.",
+    },
+    PropSpec {
+        name: "approach_ticks",
+        default: Some(30.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "The most ticks one approach walks.",
+    },
+];
+
 /// Where the props that go with `hp`, with `swing_damage` and with
 /// `enemy_speed` are in [`NODE_PROPS`].
 const HP_PROPS: std::ops::Range<usize> = 4..8;
 const SWING_PROPS: std::ops::Range<usize> = 9..17;
-const ENEMY_OTHER_PROPS: std::ops::Range<usize> = 18..72;
+const ENEMY_OTHER_PROPS: std::ops::Range<usize> = 18..75;
 
 /// The name of the child of a hurtbox with `hp` that shows its health.
 const HP_BAR: &str = "hp_bar";
@@ -534,8 +566,6 @@ pub enum GameError {
     EnemyIncomplete(String),
     #[error("the enemy {0:?} cannot also be a swinger")]
     EnemySwinger(String),
-    #[error("the enemy {0:?} must be a root node, and not the camera")]
-    EnemyNotRoot(String),
     #[error(
         "the enemy {enemy:?}: {what} moves {step} m per tick, which must be less than hurt_radius \
          {radius}"
@@ -777,6 +807,8 @@ struct Enemy {
     move_tick: u32,
     facing: f32,
     rest: u32,
+    /// Ticks left of a chosen approach.
+    chase: u32,
     rng: SplitMix64,
     /// The cut of the move (1 for the moves that have one) that has hit
     /// the character already; 0 for none.
@@ -1444,6 +1476,7 @@ impl Game {
                 e.current = None;
                 e.move_tick = 0;
                 e.rest = 0;
+                e.chase = 0;
                 e.struck = 0;
                 continue;
             }
@@ -1452,6 +1485,8 @@ impl Game {
             }
             if (player_dead || d > e.params.aggro_range) && e.state != EnemyCondition::Attack {
                 e.state = EnemyCondition::Idle;
+                e.rest = 0;
+                e.chase = 0;
                 continue;
             }
             match e.state {
@@ -1468,6 +1503,7 @@ impl Game {
                         e.state = EnemyCondition::Idle;
                     }
                 }
+                EnemyCondition::Chase if e.chase > 0 => self.enemy_approach(i, player),
                 EnemyCondition::Idle | EnemyCondition::Chase => self.enemy_choose(i, player),
                 EnemyCondition::Stagger | EnemyCondition::Dead => {
                     unreachable!("a stagger or death was left above")
@@ -1476,42 +1512,60 @@ impl Game {
         }
     }
 
-    /// An idle or chasing enemy `i`: starts a move chosen at random among
-    /// those in range when it faces the character closely enough, and
-    /// otherwise turns to it, walking up while no move is in range.
+    /// An idle enemy `i`, or one walking up with nothing to choose: when it
+    /// faces the character closely enough, chooses at random among the
+    /// moves in range and the approach, and starts the choice; otherwise
+    /// turns to the character, walking up while there is nothing to choose.
     fn enemy_choose(&mut self, i: usize, player: &mut PlayerState) {
         let at = self.scene.transform(self.enemies[i].id).position;
         let d = hdist(at, player.position);
         let e = &mut self.enemies[i];
         let p = e.params;
-        let candidates: Vec<MoveKind> = MoveKind::ALL
+        let mut weighted: Vec<(EnemyChoice, u32)> = MoveKind::ALL
             .into_iter()
-            .filter(|&kind| {
+            .filter_map(|kind| {
                 let m = p.of(kind);
-                m.weight > 0 && m.min_range <= d && d <= m.max_range
+                (m.weight > 0 && m.min_range <= d && d <= m.max_range)
+                    .then_some((kind.into(), m.weight))
             })
             .collect();
+        let approach = p.approach_weight(d);
+        if approach >= 1 {
+            weighted.push((EnemyChoice::Approach, approach));
+        }
         let off = wrap(bearing(at, player.position) - e.facing).abs();
-        if !candidates.is_empty() && off <= p.face_angle {
-            let total: u64 = candidates.iter().map(|&k| u64::from(p.of(k).weight)).sum();
+        if !weighted.is_empty() && off <= p.face_angle {
+            let total: u64 = weighted.iter().map(|&(_, w)| u64::from(w)).sum();
             let r = e.rng.next() % total;
             let mut sum = 0;
-            let chosen = candidates
+            let chosen = weighted
                 .iter()
-                .copied()
-                .find(|&k| {
-                    sum += u64::from(p.of(k).weight);
+                .find(|&&(_, w)| {
+                    sum += u64::from(w);
                     sum > r
                 })
-                .expect("r is less than the total of the weights");
+                .expect("r is less than the total of the weights")
+                .0;
             self.events.push(Event::EnemyMove {
                 by: e.path.clone(),
                 r#move: chosen,
                 distance: d,
-                candidates,
+                candidates: weighted.iter().map(|&(c, _)| c).collect(),
             });
+            let kind = match chosen {
+                EnemyChoice::Sweep => MoveKind::Sweep,
+                EnemyChoice::Cleave => MoveKind::Cleave,
+                EnemyChoice::Lunge => MoveKind::Lunge,
+                EnemyChoice::Combo => MoveKind::Combo,
+                EnemyChoice::Approach => {
+                    e.state = EnemyCondition::Chase;
+                    e.chase = p.approach_ticks;
+                    self.enemy_approach(i, player);
+                    return;
+                }
+            };
             e.state = EnemyCondition::Attack;
-            e.current = Some(chosen);
+            e.current = Some(kind);
             e.move_tick = 1;
             e.struck = 0;
             self.enemy_move_tick(i, player);
@@ -1520,16 +1574,45 @@ impl Game {
         if d > 0.0 {
             e.facing = turn(e.facing, bearing(at, player.position), p.turn);
         }
-        if candidates.is_empty() {
+        if weighted.is_empty() {
             e.state = EnemyCondition::Chase;
-            if d > 0.0 {
-                let to = Vec3::new(player.position.x - at.x, 0.0, player.position.z - at.z) / d;
-                let moved = self.enemy_resolve(i, at + to * p.step, player.position);
-                self.scene.transform_mut(self.enemies[i].id).position = moved;
-            }
+            self.enemy_walk(i, player.position);
         } else {
             e.state = EnemyCondition::Idle;
         }
+    }
+
+    /// A tick of enemy `i`'s chosen approach: turns to the character and
+    /// walks up to it; idle again once the approach's ticks are used up or
+    /// it has come within `approach_min_range`.
+    fn enemy_approach(&mut self, i: usize, player: &PlayerState) {
+        let at = self.scene.transform(self.enemies[i].id).position;
+        let e = &mut self.enemies[i];
+        if hdist(at, player.position) > 0.0 {
+            e.facing = turn(e.facing, bearing(at, player.position), e.params.turn);
+        }
+        let moved = self.enemy_walk(i, player.position);
+        let e = &mut self.enemies[i];
+        e.chase -= 1;
+        if e.chase == 0 || hdist(moved, player.position) <= e.params.approach_min {
+            e.chase = 0;
+            e.state = EnemyCondition::Idle;
+        }
+    }
+
+    /// Enemy `i` walks a step straight at the character at `to` (none on
+    /// its spot), with collisions; where it ends up.
+    fn enemy_walk(&mut self, i: usize, to: Vec3) -> Vec3 {
+        let id = self.enemies[i].id;
+        let at = self.scene.transform(id).position;
+        let d = hdist(at, to);
+        if d == 0.0 {
+            return at;
+        }
+        let dir = Vec3::new(to.x - at.x, 0.0, to.z - at.z) / d;
+        let moved = self.enemy_resolve(i, at + dir * self.enemies[i].params.step, to);
+        self.scene.transform_mut(id).position = moved;
+        moved
     }
 
     /// Tick `move_tick` of enemy `i`'s move: turning to the character
@@ -2342,6 +2425,7 @@ impl Game {
                         hit: moment.map_or(0, |(_, m)| m.hit),
                         facing: e.facing,
                         rest: e.rest,
+                        chase: e.chase,
                         rng: e.rng.0,
                     }
                 })
@@ -2428,8 +2512,8 @@ pub(crate) const NODE_REQUIRES: [&str; 5] = [
     "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
     "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, \
      swing_arc, swing_low, swing_high: need swing_damage",
-    "every enemy_*, sweep_*, cleave_*, lunge_* and combo_* prop but enemy_speed: needs \
-     enemy_speed",
+    "every enemy_*, sweep_*, cleave_*, lunge_*, combo_* and approach_* prop but enemy_speed: \
+     needs enemy_speed",
 ];
 
 /// The other rules [`roles`] checks on a node's props.
@@ -2441,8 +2525,7 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 9] = [
     "an enemy (a node with enemy_speed): <move>_min_range <= <move>_max_range for sweep, cleave, \
      lunge and combo",
     "an enemy: enemy_swing_low < enemy_swing_high",
-    "an enemy needs hurt_radius, hurt_height, hp and lock_height, is not a swinger, and is a \
-     root node other than the camera",
+    "an enemy needs hurt_radius, hurt_height, hp and lock_height, and is not a swinger",
     "an enemy: enemy_speed / 60 and lunge_distance / lunge_active_ticks are less than \
      hurt_radius",
     "an enemy has no collider in its subtree",
@@ -2456,8 +2539,9 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 9] = [
 /// a swinger's `swing_low < swing_high`; only on root nodes other than the
 /// camera; an `hp_bar` with a mesh; an `arm` with a mesh; the enemy props
 /// only with `enemy_speed`; then, for an enemy, each move's ranges, its
-/// swing band, the props it needs, not a swinger, a root node, its steps
-/// shorter than `hurt_radius` and no collider in its subtree.
+/// swing band, the props it needs, not a swinger, its steps shorter than
+/// `hurt_radius` and no collider in its subtree (a lock-on target, it is a
+/// root node already).
 fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameError> {
     let mut targets = Vec::new();
     let mut hurtboxes = Vec::new();
@@ -2604,9 +2688,6 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 if swing_damage.is_some() {
                     return Err(GameError::EnemySwinger(path()));
                 }
-                if node.parent.is_some() || id == camera {
-                    return Err(GameError::EnemyNotRoot(path()));
-                }
                 let moves = MoveKind::ALL.map(|kind| {
                     let v = |suffix: &str| value(&format!("{}_{suffix}", kind.name()));
                     let active = v("active_ticks") as u32;
@@ -2642,6 +2723,9 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                     lunge_step: value("lunge_distance") as f32 / lunge_active as f32,
                     combo_hits: ticks("combo_hits"),
                     combo_gap: ticks("combo_gap_ticks"),
+                    approach_min: value("approach_min_range") as f32,
+                    approach_per_meter: value("approach_weight_per_meter") as f32,
+                    approach_ticks: ticks("approach_ticks"),
                 };
                 for (what, step) in [("enemy", params.step), ("lunge", params.lunge_step)] {
                     if step >= radius {
@@ -2779,6 +2863,7 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 move_tick: 0,
                 facing,
                 rest: 0,
+                chase: 0,
                 rng: SplitMix64(params.seed),
                 struck: 0,
             });

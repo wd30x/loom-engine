@@ -5407,27 +5407,27 @@ fn every_expected_state_dump_fits_its_games_state_dump_schema() {
 
 // ---------------------------------------------------------------- the boss
 
-/// The boss fight: walk up (ticks 1-39), take the boss's cleave, backstep
-/// through the next one (tapped on 320-321), lock on (330), walk in
-/// (335-369) and attack three times, the last two buffered.
+/// The boss fight: walk up (ticks 1-39), take the boss's cleave, roll back
+/// through its combo's first cut (333, backwards 331-336), lock on (380),
+/// walk in (382-427) and attack twice in its rest, the second buffered.
 const BOSS_SCRIPT: &str = concat!(
     "(version: 1, tick_hz: 60, events: [",
-    "(tick: 320, action: \"roll\", down: true), (tick: 321, action: \"roll\", down: false), ",
-    "(tick: 330, action: \"lock\", down: true), (tick: 331, action: \"lock\", down: false), ",
-    "(tick: 372, action: \"attack\", down: true), (tick: 373, action: \"attack\", down: false), ",
-    "(tick: 390, action: \"attack\", down: true), (tick: 391, action: \"attack\", down: false), ",
-    "(tick: 420, action: \"attack\", down: true), (tick: 421, action: \"attack\", down: false)",
+    "(tick: 333, action: \"roll\", down: true), (tick: 334, action: \"roll\", down: false), ",
+    "(tick: 380, action: \"lock\", down: true), (tick: 381, action: \"lock\", down: false), ",
+    "(tick: 430, action: \"attack\", down: true), (tick: 431, action: \"attack\", down: false), ",
+    "(tick: 448, action: \"attack\", down: true), (tick: 449, action: \"attack\", down: false)",
     "], axes: [",
     "(tick: 1, axis: \"move_y\", value: 1.0), (tick: 40, axis: \"move_y\", value: 0.0), ",
-    "(tick: 335, axis: \"move_y\", value: 1.0), (tick: 370, axis: \"move_y\", value: 0.0)",
+    "(tick: 331, axis: \"move_y\", value: -1.0), (tick: 337, axis: \"move_y\", value: 0.0), ",
+    "(tick: 382, axis: \"move_y\", value: 1.0), (tick: 428, axis: \"move_y\", value: 0.0)",
     "])\n",
 );
 
-/// State after 460 ticks of `BOSS_SCRIPT` on assets/scenes/boss.ron.
+/// The state on tick 520 of [`BOSS_SCRIPT`], the character killed by the combo.
 const BOSS_STATE: &str = concat!(
     "{\n",
-    "  \"tick\": 460,\n",
-    "  \"sim_time\": 7.666666666666667,\n",
+    "  \"tick\": 520,\n",
+    "  \"sim_time\": 8.666666666666666,\n",
     "  \"actions\": [],\n",
     "  \"axes\": {\n",
     "    \"look_x\": 0.0,\n",
@@ -5440,7 +5440,7 @@ const BOSS_STATE: &str = concat!(
     "      \"position\": [\n",
     "        -4.3711393e-7,\n",
     "        0.0,\n",
-    "        2.166669\n",
+    "        3.5000033\n",
     "      ],\n",
     "      \"rotation\": [\n",
     "        0.0,\n",
@@ -5456,15 +5456,15 @@ const BOSS_STATE: &str = concat!(
     "    },\n",
     "    \"boss/arm\": {\n",
     "      \"position\": [\n",
-    "        0.0,\n",
+    "        -0.45965165,\n",
     "        1.8,\n",
-    "        -1.9\n",
+    "        -1.8435618\n",
     "      ],\n",
     "      \"rotation\": [\n",
     "        0.0,\n",
+    "        0.12186936,\n",
     "        0.0,\n",
-    "        0.0,\n",
-    "        1.0\n",
+    "        0.99254614\n",
     "      ],\n",
     "      \"scale\": [\n",
     "        0.15,\n",
@@ -5492,7 +5492,7 @@ const BOSS_STATE: &str = concat!(
     "    },\n",
     "    \"boss/hp_bar\": {\n",
     "      \"position\": [\n",
-    "        -0.08000002,\n",
+    "        -0.05333333,\n",
     "        3.4,\n",
     "        0.0\n",
     "      ],\n",
@@ -5503,7 +5503,7 @@ const BOSS_STATE: &str = concat!(
     "        1.0\n",
     "      ],\n",
     "      \"scale\": [\n",
-    "        1.4399999,\n",
+    "        1.4933333,\n",
     "        0.1,\n",
     "        0.1\n",
     "      ]\n",
@@ -5528,15 +5528,15 @@ const BOSS_STATE: &str = concat!(
     "    },\n",
     "    \"main_cam\": {\n",
     "      \"position\": [\n",
-    "        1.0773516e-7,\n",
-    "        1.5179029,\n",
-    "        8.066629\n",
+    "        2.7286234e-8,\n",
+    "        1.3589728,\n",
+    "        9.130854\n",
     "      ],\n",
     "      \"rotation\": [\n",
-    "        -0.0022378694,\n",
-    "        4.6173845e-8,\n",
-    "        1.033313e-10,\n",
-    "        0.9999975\n",
+    "        0.01763114,\n",
+    "        4.1230713e-8,\n",
+    "        -7.2705747e-10,\n",
+    "        0.99984455\n",
     "      ],\n",
     "      \"scale\": [\n",
     "        1.0,\n",
@@ -5636,15 +5636,15 @@ const BOSS_STATE: &str = concat!(
     "    },\n",
     "    \"player\": {\n",
     "      \"position\": [\n",
-    "        -2.6165281e-7,\n",
+    "        -3.0240565e-7,\n",
     "        0.0,\n",
-    "        4.0666695\n",
+    "        5.133341\n",
     "      ],\n",
     "      \"rotation\": [\n",
-    "        0.17364818,\n",
-    "        4.5472486e-8,\n",
-    "        -1.8202119e-8,\n",
-    "        0.9848077\n",
+    "        0.70710677,\n",
+    "        2.9159054e-8,\n",
+    "        -7.76111e-8,\n",
+    "        0.70710677\n",
     "      ],\n",
     "      \"scale\": [\n",
     "        1.0,\n",
@@ -5692,53 +5692,53 @@ const BOSS_STATE: &str = concat!(
     "  \"game\": {\n",
     "    \"player\": {\n",
     "      \"position\": [\n",
-    "        -2.6165281e-7,\n",
+    "        -3.0240565e-7,\n",
     "        0.0,\n",
-    "        4.0666695\n",
+    "        5.133341\n",
     "      ],\n",
-    "      \"facing\": 9.2347946e-8,\n",
-    "      \"stamina\": 43.75,\n",
-    "      \"stamina_wait\": 22,\n",
+    "      \"facing\": 8.247426e-8,\n",
+    "      \"stamina\": 73.0,\n",
+    "      \"stamina_wait\": 0,\n",
     "      \"action\": \"idle\",\n",
     "      \"action_tick\": 0,\n",
     "      \"invulnerable\": false,\n",
     "      \"attack_phase\": null,\n",
     "      \"combo\": 0,\n",
     "      \"buffered\": null,\n",
-    "      \"hits\": 2,\n",
+    "      \"hits\": 4,\n",
     "      \"last_hit\": {\n",
-    "        \"tick\": 452,\n",
+    "        \"tick\": 520,\n",
     "        \"by\": \"boss\"\n",
     "      },\n",
     "      \"health\": {\n",
-    "        \"hp\": 10.0,\n",
-    "        \"state\": \"stagger\",\n",
-    "        \"state_ticks\": 22,\n",
+    "        \"hp\": 0.0,\n",
+    "        \"state\": \"dead\",\n",
+    "        \"state_ticks\": 120,\n",
     "        \"impact\": 0.0,\n",
-    "        \"impact_wait\": 52\n",
+    "        \"impact_wait\": 0\n",
     "      }\n",
     "    },\n",
     "    \"camera\": {\n",
-    "      \"yaw\": 9.2347925e-8,\n",
-    "      \"pitch\": -0.0044757426,\n",
+    "      \"yaw\": 8.2474244e-8,\n",
+    "      \"pitch\": 0.035264105,\n",
     "      \"distance\": 4.0\n",
     "    },\n",
-    "    \"lock\": \"boss\",\n",
+    "    \"lock\": null,\n",
     "    \"hurtboxes\": [\n",
     "      {\n",
     "        \"node\": \"boss\",\n",
-    "        \"hits\": 3,\n",
+    "        \"hits\": 2,\n",
     "        \"last_hit\": {\n",
-    "          \"tick\": 443,\n",
+    "          \"tick\": 471,\n",
     "          \"attack\": \"attack\",\n",
-    "          \"combo\": 3\n",
+    "          \"combo\": 2\n",
     "        },\n",
     "        \"health\": {\n",
-    "          \"hp\": 540.0,\n",
+    "          \"hp\": 560.0,\n",
     "          \"state\": \"ok\",\n",
     "          \"state_ticks\": 0,\n",
-    "          \"impact\": 30.0,\n",
-    "          \"impact_wait\": 43\n",
+    "          \"impact\": 20.0,\n",
+    "          \"impact_wait\": 11\n",
     "        }\n",
     "      }\n",
     "    ],\n",
@@ -5747,13 +5747,14 @@ const BOSS_STATE: &str = concat!(
     "      {\n",
     "        \"node\": \"boss\",\n",
     "        \"state\": \"attack\",\n",
-    "        \"move\": \"cleave\",\n",
-    "        \"move_tick\": 54,\n",
-    "        \"phase\": \"recovery\",\n",
-    "        \"hit\": 0,\n",
+    "        \"move\": \"combo\",\n",
+    "        \"move_tick\": 62,\n",
+    "        \"phase\": \"active\",\n",
+    "        \"hit\": 3,\n",
     "        \"facing\": -3.1415925,\n",
     "        \"rest\": 0,\n",
-    "        \"rng\": 8709371129873690715\n",
+    "        \"chase\": 0,\n",
+    "        \"rng\": 13064056694810536069\n",
     "      }\n",
     "    ]\n",
     "  }\n",
@@ -5765,84 +5766,107 @@ fn boss_rng(n: u64) -> u64 {
     7_u64.wrapping_add(n.wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
+/// The state of the boss scene on tick `frames` of `script`, run in `dir`.
+fn boss_at(dir: &std::path::Path, script: &std::path::Path, frames: &str) -> Value {
+    let state = dir.join(format!("{frames}.json"));
+    let scene = repo_root().join("assets/scenes/boss.ron");
+    run_headless_replay_on(Some(&scene), frames, script, &state);
+    serde_json::from_str(&fs::read_to_string(&state).expect("the state dump was written"))
+        .expect("state file is valid JSON")
+}
+
+/// The boss's `(state, move, move_tick, phase, chase, rng)`.
+fn boss_of(dump: &Value) -> (Value, Value, Value, Value, Value, u64) {
+    let e = &dump["game"]["enemies"][0];
+    assert_eq!(e["node"], "boss");
+    (
+        e["state"].clone(),
+        e["move"].clone(),
+        e["move_tick"].clone(),
+        e["phase"].clone(),
+        e["chase"].clone(),
+        e["rng"].as_u64().expect("rng is a whole number"),
+    )
+}
+
+/// `(hp, state)` of a health in a state dump.
+fn hp_of(health: &Value) -> (Value, Value) {
+    (health["hp"].clone(), health["state"].clone())
+}
+
 #[test]
 fn boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time() {
     let dir = test_dir("boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time");
     let script = write_file(&dir, "boss.ron", BOSS_SCRIPT);
     let scene = repo_root().join("assets/scenes/boss.ron");
-    let at = |frames: &str| -> Value {
-        let state = dir.join(format!("{frames}.json"));
-        run_headless_replay_on(Some(&scene), frames, &script, &state);
-        serde_json::from_str(&fs::read_to_string(&state).expect("the state dump was written"))
-            .expect("state file is valid JSON")
-    };
-    let boss = |dump: &Value| {
-        let e = &dump["game"]["enemies"][0];
-        assert_eq!(e["node"], "boss");
-        (
-            e["state"].clone(),
-            e["move"].clone(),
-            e["move_tick"].clone(),
-            e["phase"].clone(),
-            e["rng"].as_u64().expect("rng is a whole number"),
-        )
-    };
-    let health = |dump: &Value| {
-        let h = &dump["game"]["player"]["health"];
-        (h["hp"].clone(), h["state"].clone())
-    };
-    // Walking up since tick 1 at 4 m/s, the boss at 2.5 m/s: 8.9 m apart on
-    // tick 29, in the lunge's range (4..=9) only: chosen, its first number.
-    let s = at("29");
+    let at = |frames: &str| boss_at(&dir, &script, frames);
+    let player = |dump: &Value| hp_of(&dump["game"]["player"]["health"]);
+    // 11.9 m apart on tick 1, beyond every move: only the approach, of
+    // weight floor(2 * 9.9) = 19, chosen with the first number; 30 ticks
+    // at most, one walked.
+    let s = at("1");
     assert_eq!(
-        boss(&s),
+        boss_of(&s),
+        (
+            "chase".into(),
+            Value::Null,
+            0.into(),
+            Value::Null,
+            29.into(),
+            boss_rng(1)
+        )
+    );
+    // Its second approach (tick 31) ends on tick 60; on 61, 6.9 m apart,
+    // the lunge's 2 against the approach's 9: the third number chose the
+    // lunge.
+    let s = at("61");
+    assert_eq!(
+        boss_of(&s),
         (
             "attack".into(),
             "lunge".into(),
             1.into(),
             "startup".into(),
-            boss_rng(1)
+            0.into(),
+            boss_rng(3)
         )
     );
-    // The cleave chosen on tick 149 hits on its first active tick, 149 +
+    // The cleave chosen on tick 181 hits on its first active tick, 181 +
     // 45: 100 - 45 hp, staggered (poise 0).
-    let s = at("194");
+    let s = at("226");
     assert_eq!(
-        boss(&s),
+        boss_of(&s),
         (
             "attack".into(),
             "cleave".into(),
             46.into(),
             "active".into(),
-            boss_rng(2)
-        )
-    );
-    assert_eq!(health(&s), (55.0.into(), "stagger".into()));
-    // The next cleave (tick 278) is backstepped through: no hit.
-    let s = at("326");
-    assert_eq!(
-        boss(&s),
-        (
-            "attack".into(),
-            "cleave".into(),
-            49.into(),
-            "active".into(),
-            boss_rng(3)
-        )
-    );
-    assert_eq!(health(&s), (55.0.into(), "ok".into()));
-    // Resting, then close: all but the lunge in range. The fourth number
-    // modulo 3 + 2 + 2 is 3: past the sweep's 3, within the cleave's 5.
-    let s = at("407");
-    assert_eq!(
-        boss(&s),
-        (
-            "attack".into(),
-            "cleave".into(),
-            1.into(),
-            "startup".into(),
+            0.into(),
             boss_rng(4)
         )
+    );
+    assert_eq!(player(&s), (55.0.into(), "stagger".into()));
+    // The combo chosen on tick 310: its first cut (336-340) is rolled
+    // through, the others out of reach.
+    let s = at("337");
+    assert_eq!(
+        boss_of(&s),
+        (
+            "attack".into(),
+            "combo".into(),
+            28.into(),
+            "active".into(),
+            0.into(),
+            boss_rng(5)
+        )
+    );
+    assert_eq!(player(&s), (55.0.into(), "ok".into()));
+    // Resting after the combo, hit by the first attack: 600 - 20.
+    let s = at("441");
+    assert_eq!(s["game"]["enemies"][0]["state"], "rest");
+    assert_eq!(
+        hp_of(&s["game"]["hurtboxes"][0]["health"]),
+        (580.0.into(), "ok".into())
     );
 
     // The whole state on the last tick, and the trace of two runs.
@@ -5855,7 +5879,7 @@ fn boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time() {
             "run",
             "--headless",
             "--frames",
-            "460",
+            "520",
             "--scene",
             path_str(&scene),
             "--input",
@@ -5877,29 +5901,29 @@ fn boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time() {
     assert_eq!(first, trace("two"));
     assert_trace_fits(&first, "souls");
     let events = trace_events(&first);
-    let moves: Vec<(u64, &Value, &Value)> = events
+    let moves: Vec<(u64, String, Value)> = events
         .iter()
         .filter(|(_, e)| e["type"] == "enemy_move")
-        .map(|(t, e)| (*t, &e["move"], &e["candidates"]))
+        .map(|(t, e)| {
+            let m = e["move"].as_str().expect("a move").to_owned();
+            (*t, m, e["candidates"].clone())
+        })
         .collect();
-    let moves: Vec<(u64, String, Value)> = moves
-        .into_iter()
-        .map(|(t, m, c)| (t, m.as_str().expect("a move").to_owned(), c.clone()))
-        .collect();
-    assert_eq!(
-        moves,
-        [
-            (29, "lunge".to_owned(), serde_json::json!(["lunge"])),
-            (149, "cleave".to_owned(), serde_json::json!(["cleave"])),
-            (278, "cleave".to_owned(), serde_json::json!(["cleave"])),
-            (
-                407,
-                "cleave".to_owned(),
-                serde_json::json!(["sweep", "cleave", "combo"])
-            ),
-        ]
-    );
-    // Hits both ways and the dodges, by tick.
+    let close = serde_json::json!(["sweep", "cleave", "combo"]);
+    let far = serde_json::json!(["lunge", "approach"]);
+    let want: Vec<(u64, String, Value)> = [
+        (1, "approach", serde_json::json!(["approach"])),
+        (31, "approach", far.clone()),
+        (61, "lunge", far),
+        (181, "cleave", close.clone()),
+        (310, "combo", close.clone()),
+        (459, "combo", close),
+    ]
+    .into_iter()
+    .map(|(t, m, c)| (t, m.to_owned(), c))
+    .collect();
+    assert_eq!(moves, want);
+    // Hits both ways and the dodge, by tick.
     let hits: Vec<(u64, String)> = events
         .iter()
         .filter(|(_, e)| e["type"] == "hit" || e["type"] == "dodged")
@@ -5909,18 +5933,70 @@ fn boss_fight_replays_its_moves_hits_and_dodges_the_same_every_time() {
         })
         .collect();
     let want: Vec<(u64, String)> = [
-        (194, r#"hit "boss" "cleave""#),
-        (323, r#"dodged "boss" null"#),
-        (324, r#"dodged "boss" null"#),
-        (325, r#"dodged "boss" null"#),
-        (326, r#"dodged "boss" null"#),
-        (383, r#"hit "player" "attack""#),
-        (413, r#"hit "player" "attack""#),
-        (443, r#"hit "player" "attack""#),
-        (452, r#"hit "boss" "cleave""#),
+        (226, r#"hit "boss" "cleave""#),
+        (337, r#"dodged "boss" null"#),
+        (441, r#"hit "player" "attack""#),
+        (471, r#"hit "player" "attack""#),
+        (486, r#"hit "boss" "combo""#),
+        (503, r#"hit "boss" "combo""#),
+        (520, r#"hit "boss" "combo""#),
     ]
     .iter()
     .map(|&(t, s)| (t, s.to_owned()))
     .collect();
     assert_eq!(hits, want);
+}
+
+/// Two heavy attacks stagger the boss (poise 50): walk up (1-39), backstep
+/// through its cleave (223), lock on (226), then a heavy as soon as the
+/// backstep ends (246) and another one buffered (281).
+const BOSS_STAGGER_SCRIPT: &str = concat!(
+    "(version: 1, tick_hz: 60, events: [",
+    "(tick: 223, action: \"roll\", down: true), (tick: 224, action: \"roll\", down: false), ",
+    "(tick: 226, action: \"lock\", down: true), (tick: 227, action: \"lock\", down: false), ",
+    "(tick: 246, action: \"heavy\", down: true), (tick: 247, action: \"heavy\", down: false), ",
+    "(tick: 281, action: \"heavy\", down: true), (tick: 282, action: \"heavy\", down: false)",
+    "], axes: [",
+    "(tick: 1, axis: \"move_y\", value: 1.0), (tick: 40, axis: \"move_y\", value: 0.0)",
+    "])\n",
+);
+
+#[test]
+fn two_heavy_attacks_around_the_boss_rest_stagger_it() {
+    let dir = test_dir("two_heavy_attacks_around_the_boss_rest_stagger_it");
+    let script = write_file(&dir, "stagger.ron", BOSS_STAGGER_SCRIPT);
+    let at = |frames: &str| boss_at(&dir, &script, frames);
+    let boss = |dump: &Value| hp_of(&dump["game"]["hurtboxes"][0]["health"]);
+    // The first heavy lands on the first tick of its rest: 30 impact.
+    let s = at("270");
+    assert_eq!(s["game"]["enemies"][0]["state"], "rest");
+    assert_eq!(boss(&s), (565.0.into(), "ok".into()));
+    assert_eq!(s["game"]["hurtboxes"][0]["health"]["impact"], 30.0);
+    // A heavy takes 50 ticks and the rest 40: the second lands on tick
+    // 319, 9 ticks into the sweep chosen on 310, past 50 impact.
+    let s = at("318");
+    assert_eq!(
+        boss_of(&s),
+        (
+            "attack".into(),
+            "sweep".into(),
+            9.into(),
+            "startup".into(),
+            0.into(),
+            boss_rng(5)
+        )
+    );
+    let s = at("319");
+    assert_eq!(boss(&s), (530.0.into(), "stagger".into()));
+    assert_eq!(
+        boss_of(&s),
+        (
+            "stagger".into(),
+            Value::Null,
+            0.into(),
+            Value::Null,
+            0.into(),
+            boss_rng(5)
+        )
+    );
 }

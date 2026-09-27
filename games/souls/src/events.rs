@@ -8,7 +8,7 @@ use glam::Vec3;
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::enemy::MoveKind;
+use crate::enemy::{EnemyChoice, MoveKind};
 use crate::moves::{Action, Buffered};
 
 /// One event; serialized as an object whose first field is `type`.
@@ -76,16 +76,17 @@ pub enum Event {
         #[schemars(with = "[f32; 3]")]
         position: Vec3,
     },
-    /// An enemy chose a move (step 5c), before that move's first tick.
+    /// An enemy chose a move or to approach (step 5c), before that
+    /// choice's first tick.
     EnemyMove {
         /// The enemy's node path.
         by: String,
         #[serde(rename = "move")]
-        r#move: MoveKind,
+        r#move: EnemyChoice,
         /// The character's horizontal distance.
         distance: f32,
-        /// The moves it chose from, in their order.
-        candidates: Vec<MoveKind>,
+        /// What it chose from: the moves in their order, then `approach`.
+        candidates: Vec<EnemyChoice>,
     },
 }
 

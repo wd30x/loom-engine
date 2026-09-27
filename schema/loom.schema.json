@@ -2435,6 +2435,36 @@
               },
               "unit": "ticks",
               "description": "The wait before each cut of the combo after the first, a startup again."
+            },
+            {
+              "name": "approach_min_range",
+              "default": 2.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Approaching is a choice only with the character farther than this, horizontally."
+            },
+            {
+              "name": "approach_weight_per_meter",
+              "default": 2.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "weight per meter",
+              "description": "The approach's weight is this times the meters beyond approach_min_range, rounded down; 0 leaves it out."
+            },
+            {
+              "name": "approach_ticks",
+              "default": 30.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "The most ticks one approach walks."
             }
           ],
           "requires": [
@@ -2442,7 +2472,7 @@
             "hp: needs hurt_radius and hurt_height",
             "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
             "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, swing_high: need swing_damage",
-            "every enemy_*, sweep_*, cleave_*, lunge_* and combo_* prop but enemy_speed: needs enemy_speed"
+            "every enemy_*, sweep_*, cleave_*, lunge_*, combo_* and approach_* prop but enemy_speed: needs enemy_speed"
           ],
           "constraints": [
             "a swinger: swing_low < swing_high",
@@ -2451,7 +2481,7 @@
             "a swinger or an enemy: its child named arm, if any, needs a mesh",
             "an enemy (a node with enemy_speed): <move>_min_range <= <move>_max_range for sweep, cleave, lunge and combo",
             "an enemy: enemy_swing_low < enemy_swing_high",
-            "an enemy needs hurt_radius, hurt_height, hp and lock_height, is not a swinger, and is a root node other than the camera",
+            "an enemy needs hurt_radius, hurt_height, hp and lock_height, and is not a swinger",
             "an enemy: enemy_speed / 60 and lunge_distance / lunge_active_ticks are less than hurt_radius",
             "an enemy has no collider in its subtree"
           ]
@@ -2643,6 +2673,12 @@
             "description": "An enemy in the state dump (`game.enemies`).",
             "type": "object",
             "properties": {
+              "chase": {
+                "description": "Ticks left of the approach it chose; 0 otherwise, also while it\nwalks up with nothing to choose.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "facing": {
                 "description": "Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.",
                 "type": "number",
@@ -2687,7 +2723,7 @@
                 ]
               },
               "rest": {
-                "description": "Ticks of rest left.",
+                "description": "Ticks of rest left; 0 outside `rest`.",
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
@@ -2711,6 +2747,7 @@
               "hit",
               "facing",
               "rest",
+              "chase",
               "rng"
             ]
           },
@@ -3270,6 +3307,25 @@
               }
             ]
           },
+          "EnemyChoice": {
+            "description": "What an enemy chose: one of its moves, or walking up to the character\nfor a while; serialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sweep",
+                  "cleave",
+                  "lunge",
+                  "combo"
+                ]
+              },
+              {
+                "description": "Walking up to the character for at most `approach_ticks`.",
+                "type": "string",
+                "const": "approach"
+              }
+            ]
+          },
           "EnemyCondition": {
             "description": "What an enemy is doing; serialized in snake case.",
             "oneOf": [
@@ -3309,6 +3365,12 @@
             "description": "An enemy in the state dump (`game.enemies`).",
             "type": "object",
             "properties": {
+              "chase": {
+                "description": "Ticks left of the approach it chose; 0 otherwise, also while it\nwalks up with nothing to choose.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "facing": {
                 "description": "Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.",
                 "type": "number",
@@ -3353,7 +3415,7 @@
                 ]
               },
               "rest": {
-                "description": "Ticks of rest left.",
+                "description": "Ticks of rest left; 0 outside `rest`.",
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
@@ -3377,6 +3439,7 @@
               "hit",
               "facing",
               "rest",
+              "chase",
               "rng"
             ]
           },
@@ -3635,7 +3698,7 @@
                 ]
               },
               {
-                "description": "An enemy chose a move (step 5c), before that move's first tick.",
+                "description": "An enemy chose a move or to approach (step 5c), before that\nchoice's first tick.",
                 "type": "object",
                 "properties": {
                   "by": {
@@ -3643,10 +3706,10 @@
                     "type": "string"
                   },
                   "candidates": {
-                    "description": "The moves it chose from, in their order.",
+                    "description": "What it chose from: the moves in their order, then `approach`.",
                     "type": "array",
                     "items": {
-                      "$ref": "#/$defs/MoveKind"
+                      "$ref": "#/$defs/EnemyChoice"
                     }
                   },
                   "distance": {
@@ -3655,7 +3718,7 @@
                     "format": "float"
                   },
                   "move": {
-                    "$ref": "#/$defs/MoveKind"
+                    "$ref": "#/$defs/EnemyChoice"
                   },
                   "type": {
                     "type": "string",
@@ -4437,7 +4500,7 @@
             ]
           },
           {
-            "description": "An enemy chose a move (step 5c), before that move's first tick.",
+            "description": "An enemy chose a move or to approach (step 5c), before that\nchoice's first tick.",
             "type": "object",
             "properties": {
               "by": {
@@ -4445,10 +4508,10 @@
                 "type": "string"
               },
               "candidates": {
-                "description": "The moves it chose from, in their order.",
+                "description": "What it chose from: the moves in their order, then `approach`.",
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/MoveKind"
+                  "$ref": "#/$defs/EnemyChoice"
                 }
               },
               "distance": {
@@ -4457,7 +4520,7 @@
                 "format": "float"
               },
               "move": {
-                "$ref": "#/$defs/MoveKind"
+                "$ref": "#/$defs/EnemyChoice"
               },
               "type": {
                 "type": "string",
@@ -4563,6 +4626,25 @@
               }
             ]
           },
+          "EnemyChoice": {
+            "description": "What an enemy chose: one of its moves, or walking up to the character\nfor a while; serialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sweep",
+                  "cleave",
+                  "lunge",
+                  "combo"
+                ]
+              },
+              {
+                "description": "Walking up to the character for at most `approach_ticks`.",
+                "type": "string",
+                "const": "approach"
+              }
+            ]
+          },
           "HitAttack": {
             "description": "What hit: the character's light or heavy attack, a swinger, or an\nenemy's move.",
             "type": "string",
@@ -4610,31 +4692,6 @@
                 "description": "The character died.",
                 "type": "string",
                 "const": "died"
-              }
-            ]
-          },
-          "MoveKind": {
-            "description": "One of the moves every enemy has; serialized in lower case.",
-            "oneOf": [
-              {
-                "description": "A wide horizontal swing.",
-                "type": "string",
-                "const": "sweep"
-              },
-              {
-                "description": "A narrow, far-reaching swing.",
-                "type": "string",
-                "const": "cleave"
-              },
-              {
-                "description": "A charge forward, swinging on the way.",
-                "type": "string",
-                "const": "lunge"
-              },
-              {
-                "description": "Several cuts in a row, every other one left to right.",
-                "type": "string",
-                "const": "combo"
               }
             ]
           },

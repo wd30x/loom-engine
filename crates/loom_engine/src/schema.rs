@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(character["props"].as_array().unwrap().len(), 50);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
-            72
+            75
         );
         assert_eq!(
             prop("souls", "character", "stamina_max"),
@@ -206,8 +206,16 @@ mod tests {
         );
         assert_eq!(node[68], "combo_track_speed");
         assert_eq!(
-            node[69..],
+            node[69..72],
             ["lunge_distance", "combo_hits", "combo_gap_ticks"]
+        );
+        assert_eq!(
+            node[72..],
+            [
+                "approach_min_range",
+                "approach_weight_per_meter",
+                "approach_ticks"
+            ]
         );
         assert_eq!(
             prop("souls", "node", "enemy_face_angle")["rule"],
@@ -255,7 +263,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (50 + 72 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (50 + 75 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),
@@ -325,9 +333,9 @@ mod tests {
             },
             Event::EnemyMove {
                 by: "boss".to_owned(),
-                r#move: souls::MoveKind::Lunge,
+                r#move: souls::EnemyChoice::Approach,
                 distance: 6.5,
-                candidates: vec![souls::MoveKind::Lunge],
+                candidates: vec![souls::EnemyChoice::Lunge, souls::EnemyChoice::Approach],
             },
             Event::Hit {
                 by: "boss".to_owned(),

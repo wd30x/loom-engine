@@ -87,7 +87,7 @@
                 ("hurt_radius", 0.7),            // meters: the hurtbox, also what it collides with
                 ("hurt_height", 3.0),            // meters, from the feet up
                 ("hp", 600),                     // full health
-                ("poise", 80),                   // impacts added up past this stagger it
+                ("poise", 50),                   // impacts added up past this stagger it: two heavies
                 ("stagger_ticks", 40),           // how long a stagger lasts
                 ("poise_reset_ticks", 60),       // ticks without a hit before impacts are forgotten
                 ("revive_ticks", 300),           // ticks lying dead before coming back with full health
@@ -150,6 +150,9 @@
                 ("lunge_distance", 5),           // meters the lunge charges, evenly over its active ticks
                 ("combo_hits", 3),               // cuts in the combo
                 ("combo_gap_ticks", 12),         // the wait before each cut after the first
+                ("approach_min_range", 2),       // meters: walking up is a choice only farther than this
+                ("approach_weight_per_meter", 2), // its weight: this per meter beyond, rounded down
+                ("approach_ticks", 30),          // the most ticks one walk up lasts
             ],
             children: [
                 (name: "body", mesh: Capsule(radius: 0.7, height: 3.0), color: (0.28, 0.24, 0.3)),

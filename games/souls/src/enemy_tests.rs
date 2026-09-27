@@ -144,12 +144,14 @@ const TURN: f32 = 180.0_f32.to_radians() / 60.0;
 #[test]
 fn enemy_in_range_of_one_move_chooses_it_alone() {
     // At 3.5 m only the cleave (0..=4) is in range: the sweep ends at 3,
-    // the combo at 2.8, the lunge starts at 4.
+    // the combo at 2.8, the lunge starts at 4. No approach, which would
+    // weigh 3 here.
     let w = [
         ("sweep_weight", 1.0),
         ("cleave_weight", 1.0),
         ("lunge_weight", 1.0),
         ("combo_weight", 1.0),
+        ("approach_weight_per_meter", 0.0),
     ];
     let mut run = Run::new("", &enemy(0.0, -3.5, 180.0, &w));
     let s = run.idle();
@@ -157,9 +159,9 @@ fn enemy_in_range_of_one_move_chooses_it_alone() {
         run.moves(),
         [Event::EnemyMove {
             by: "e".to_owned(),
-            r#move: MoveKind::Cleave,
+            r#move: EnemyChoice::Cleave,
             distance: 3.5,
-            candidates: vec![MoveKind::Cleave],
+            candidates: vec![EnemyChoice::Cleave],
         }]
     );
     let e = &s.enemies[0];
@@ -192,7 +194,7 @@ fn two_candidates_split_the_seeds_first_number_modulo_their_weights() {
         };
         assert_eq!(
             (*r#move, candidates.clone()),
-            (chosen, vec![MoveKind::Sweep, MoveKind::Cleave])
+            (chosen.into(), vec![EnemyChoice::Sweep, EnemyChoice::Cleave])
         );
         // One number taken: the state moved on once.
         assert_eq!(
@@ -224,7 +226,7 @@ fn same_seed_chooses_the_same_moves_and_zero_weight_never() {
                 else {
                     unreachable!()
                 };
-                assert_eq!(candidates, [MoveKind::Cleave, MoveKind::Combo]);
+                assert_eq!(candidates, [EnemyChoice::Cleave, EnemyChoice::Combo]);
                 moves.push(r#move);
             }
         }
@@ -232,7 +234,7 @@ fn same_seed_chooses_the_same_moves_and_zero_weight_never() {
     };
     let first = chosen();
     assert!(first.len() > 10, "{first:?}");
-    assert!(first.contains(&MoveKind::Cleave) && first.contains(&MoveKind::Combo));
+    assert!(first.contains(&EnemyChoice::Cleave) && first.contains(&EnemyChoice::Combo));
     assert_eq!(first, chosen());
 }
 
@@ -264,15 +266,20 @@ fn enemy_facing_away_turns_on_the_spot_until_the_face_angle_then_moves() {
 
 #[test]
 fn enemy_with_no_move_in_range_walks_straight_at_the_character() {
-    let mut run = Run::new("", &enemy(0.0, -5.0, 180.0, &[]));
+    // Nothing to choose, not even the approach: the walk of G4.1, choosing
+    // again every tick, with no approach ticks counted.
+    let w = [("approach_weight_per_meter", 0.0)];
+    let mut run = Run::new("", &enemy(0.0, -5.0, 180.0, &w));
     let mut z = -5.0_f32;
     for t in 1..=20 {
         let s = run.idle();
         z += 0.1;
         assert_eq!(s.enemies[0].state, EnemyCondition::Chase, "tick {t}");
+        assert_eq!(s.enemies[0].chase, 0, "tick {t}");
+        assert_eq!(s.enemies[0].rng, 1, "tick {t}");
         assert_eq!(run.position(), Vec3::new(0.0, 0.0, z), "tick {t}");
+        assert!(run.moves().is_empty(), "tick {t}");
     }
-    assert!(run.moves().is_empty());
 }
 
 #[test]
@@ -434,12 +441,14 @@ fn combo_hits_once_a_cut_and_sweeps_its_even_cut_left_to_right() {
 
 #[test]
 fn lunge_charges_its_distance_evenly_over_its_active_ticks() {
-    // 1 m over 10 active ticks, straight along -Z (facing exactly 0).
+    // 1 m over 10 active ticks, straight along -Z (facing exactly 0). No
+    // approach, which would weigh 8 at 6 m.
     let w = [
         ("lunge_weight", 1.0),
         ("lunge_active_ticks", 10.0),
         ("lunge_distance", 1.0),
         ("lunge_track_speed", 0.0),
+        ("approach_weight_per_meter", 0.0),
     ];
     let mut run = Run::new("", &enemy(0.0, 6.0, 0.0, &w));
     let mut z = 6.0_f32;
@@ -459,6 +468,7 @@ fn lunge_into_a_pillar_corner_slides_off_it() {
         ("lunge_active_ticks", 10.0),
         ("lunge_distance", 3.0),
         ("lunge_track_speed", 0.0),
+        ("approach_weight_per_meter", 0.0),
     ];
     // The pillar's left face at x = 0.2, its near face at z = 3.8.
     let pillar = r#"(name: "pillar", position: (0.7, 1.0, 3.5), scale: (1.0, 2.0, 0.6),
@@ -657,11 +667,13 @@ fn killed_enemy_lies_dead_and_revives_idle_with_its_random_numbers_kept() {
 #[test]
 fn character_leaving_aggro_range_lets_the_running_move_finish_then_idles() {
     // Chosen on tick 1 at 2.9625 m; the character runs off at 0.0625 m a
-    // tick, out of the 3 m aggro range from tick 2.
+    // tick, out of the 3 m aggro range from tick 2. No approach, which
+    // would weigh 1 there.
     let w = [
         ("sweep_weight", 1.0),
         ("sweep_startup_ticks", 10.0),
         ("enemy_aggro_range", 3.0),
+        ("approach_weight_per_meter", 0.0),
     ];
     let mut run = Run::new("", &enemy(0.0, -2.9, 180.0, &w));
     let back = [(MOVE_Y, -1.0)];
@@ -851,9 +863,9 @@ fn enemy_move_comes_first_on_its_tick_before_a_swingers_hit() {
         events[0],
         Event::EnemyMove {
             by: "e".to_owned(),
-            r#move: MoveKind::Sweep,
+            r#move: EnemyChoice::Sweep,
             distance: 1.0,
-            candidates: vec![MoveKind::Sweep],
+            candidates: vec![EnemyChoice::Sweep],
         }
     );
     assert!(
@@ -939,14 +951,282 @@ fn enemy_nodes_are_checked_in_order_with_exact_messages() {
 }
 
 #[test]
-fn enemy_below_the_root_is_a_nested_lock_target_first() {
-    // An enemy must be a lock-on target, and those must be root nodes
-    // already: the enemy's own root check can never be the one reported.
+fn nested_enemy_is_reported_as_a_nested_lock_target() {
+    // An enemy must be a lock-on target, and those must be root nodes: that
+    // check covers the enemy, which has no root check of its own.
     let full = r#"("lock_height", 1), ("hurt_radius", 0.7), ("hurt_height", 2), ("hp", 10),
         ("enemy_speed", 6)"#;
     let nested = format!(r#"(name: "g", children: [(name: "t", props: [{full}])]),"#);
     assert_eq!(
         error_of(&nested),
         "the lock target \"g/t\" must be a root node, and not the camera"
+    );
+}
+
+// ---------------------------------------------------------------- approach
+
+/// The candidates of the only `enemy_move` of the last tick.
+fn chosen(run: &Run) -> (EnemyChoice, Vec<EnemyChoice>) {
+    match &run.moves()[..] {
+        [
+            Event::EnemyMove {
+                r#move, candidates, ..
+            },
+        ] => (*r#move, candidates.clone()),
+        other => panic!("one enemy_move, not {other:?}"),
+    }
+}
+
+#[test]
+fn approach_is_no_choice_within_its_min_range() {
+    // Exactly 2 m, approach_min_range: only the sweep (0..=3).
+    let mut run = Run::new("", &enemy(0.0, -2.0, 180.0, &[("sweep_weight", 1.0)]));
+    run.idle();
+    assert_eq!(chosen(&run), (EnemyChoice::Sweep, vec![EnemyChoice::Sweep]));
+}
+
+#[test]
+fn approach_weight_is_rounded_down_and_needs_one() {
+    // 2 per meter beyond 2 m: floor(2 * (d - 2)) is 1 from 2.5 m on, the
+    // min plus 1 / per meter. With the sweep's 1, the seed's first number
+    // gives r = 1 of 2 and r = 2 of 3: the approach whenever it is there.
+    for (d, weight) in [(2.49, 0), (2.5, 1), (2.51, 1), (2.99, 1), (3.0, 2)] {
+        let mut run = Run::new("", &enemy(0.0, -d, 180.0, &[("sweep_weight", 1.0)]));
+        run.idle();
+        let want = if weight >= 1 {
+            (
+                EnemyChoice::Approach,
+                vec![EnemyChoice::Sweep, EnemyChoice::Approach],
+            )
+        } else {
+            (EnemyChoice::Sweep, vec![EnemyChoice::Sweep])
+        };
+        assert_eq!(chosen(&run), want, "{d} m");
+        assert_eq!(run.enemy().params.approach_weight(d), weight, "{d} m");
+    }
+}
+
+#[test]
+fn approach_alone_is_chosen_facing_the_character_and_turned_to_otherwise() {
+    // No move has weight: 5 m, only the approach (weight 6).
+    let mut run = Run::new("", &enemy(0.0, -5.0, 180.0, &[]));
+    let s = run.idle();
+    assert_eq!(
+        run.moves(),
+        [Event::EnemyMove {
+            by: "e".to_owned(),
+            r#move: EnemyChoice::Approach,
+            distance: 5.0,
+            candidates: vec![EnemyChoice::Approach],
+        }]
+    );
+    assert_eq!(
+        (s.enemies[0].state, s.enemies[0].chase),
+        (EnemyCondition::Chase, 29)
+    );
+    assert_eq!(s.enemies[0].r#move, None);
+    assert_eq!(run.position(), Vec3::new(0.0, 0.0, -5.0 + 0.1));
+    // Facing away, 180° off: it turns on the spot, idle, without choosing.
+    let mut run = Run::new("", &enemy(0.0, -5.0, 0.0, &[]));
+    for t in 1..=40 {
+        let s = run.idle();
+        assert_eq!(
+            (s.enemies[0].state, s.enemies[0].chase),
+            (EnemyCondition::Idle, 0),
+            "tick {t}"
+        );
+        assert!(run.moves().is_empty(), "tick {t}");
+        assert_eq!(run.position(), Vec3::new(0.0, 0.0, -5.0), "tick {t}");
+    }
+    let mut t = 40;
+    while run.moves().is_empty() {
+        t += 1;
+        run.idle();
+        assert!(t < 60, "never chose");
+    }
+    assert_eq!(
+        chosen(&run),
+        (EnemyChoice::Approach, vec![EnemyChoice::Approach])
+    );
+}
+
+#[test]
+fn approach_is_chosen_by_the_seeds_number_like_a_move() {
+    // At 3 m: the sweep's 3 (0..=3), then the approach's 2. Seed 1's first
+    // number modulo 5 is 0, the sweep; seed 3's is 3, past the sweep.
+    for (seed, first, want) in [
+        (1.0, 10_451_216_379_200_822_465_u64, EnemyChoice::Sweep),
+        (3.0, 2_092_789_425_003_139_053, EnemyChoice::Approach),
+    ] {
+        assert_eq!(first % 5, if want == EnemyChoice::Sweep { 0 } else { 3 });
+        let w = [("sweep_weight", 3.0), ("enemy_seed", seed)];
+        let mut run = Run::new("", &enemy(0.0, -3.0, 180.0, &w));
+        run.idle();
+        assert_eq!(
+            chosen(&run),
+            (want, vec![EnemyChoice::Sweep, EnemyChoice::Approach])
+        );
+    }
+}
+
+#[test]
+fn chosen_approach_walks_its_ticks_then_idles_and_chooses_again() {
+    // 10 m, approach only, 5 ticks: a step on each, counting down; the
+    // fifth ends it, and the sixth chooses again.
+    let mut run = Run::new("", &enemy(0.0, -10.0, 180.0, &[("approach_ticks", 5.0)]));
+    let mut z = -10.0_f32;
+    let mut rng = SplitMix64(1);
+    rng.next();
+    for (t, state, chase) in [
+        (1, EnemyCondition::Chase, 4),
+        (2, EnemyCondition::Chase, 3),
+        (3, EnemyCondition::Chase, 2),
+        (4, EnemyCondition::Chase, 1),
+        (5, EnemyCondition::Idle, 0),
+    ] {
+        let s = run.idle();
+        z += 0.1;
+        assert_eq!(
+            (s.enemies[0].state, s.enemies[0].chase),
+            (state, chase),
+            "tick {t}"
+        );
+        assert_eq!(run.position(), Vec3::new(0.0, 0.0, z), "tick {t}");
+        assert_eq!(run.moves().len(), usize::from(t == 1), "tick {t}");
+        assert_eq!(s.enemies[0].rng, rng.0, "tick {t}");
+    }
+    let s = run.idle();
+    rng.next();
+    assert_eq!(chosen(&run).0, EnemyChoice::Approach);
+    assert_eq!(
+        (s.enemies[0].state, s.enemies[0].chase, s.enemies[0].rng),
+        (EnemyCondition::Chase, 4, rng.0)
+    );
+}
+
+#[test]
+fn approach_ends_once_within_its_min_range_then_the_walk_goes_on() {
+    // From 2.55 m (weight 1) at 0.1 m a tick: 2.45 .. 2.05 on ticks 1-5,
+    // and 1.95 on tick 6, within 2 m: idle. Then nothing is left to
+    // choose, so it walks on as in G4.1, with no count.
+    let mut run = Run::new("", &enemy(0.0, -2.55, 180.0, &[]));
+    for t in 1..=5 {
+        let s = run.idle();
+        assert_eq!(
+            (s.enemies[0].state, s.enemies[0].chase),
+            (EnemyCondition::Chase, 30 - t),
+            "tick {t}"
+        );
+    }
+    let s = run.idle();
+    assert_eq!(
+        (s.enemies[0].state, s.enemies[0].chase),
+        (EnemyCondition::Idle, 0)
+    );
+    assert!((run.position().z + 1.95).abs() < 1e-5, "{}", run.position());
+    let s = run.idle();
+    assert_eq!(
+        (s.enemies[0].state, s.enemies[0].chase),
+        (EnemyCondition::Chase, 0)
+    );
+    assert!(run.moves().is_empty());
+    assert!((run.position().z + 1.85).abs() < 1e-5, "{}", run.position());
+}
+
+#[test]
+fn staggered_enemy_drops_its_approach() {
+    // Approaching from 1.2 m (min 0: weight 2) for up to 60 ticks when the
+    // character's attack staggers it.
+    let w = [
+        ("approach_min_range", 0.0),
+        ("approach_ticks", 60.0),
+        ("stagger_ticks", 5.0),
+    ];
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    let mut before = None;
+    let mut s = run.hold(&[ATTACK], &[]);
+    for t in 2..40 {
+        if s.hurtboxes[0].health.unwrap().state == Condition::Stagger {
+            break;
+        }
+        before = Some((s.enemies[0].state, s.enemies[0].chase));
+        s = run.idle();
+        assert!(t < 39, "never staggered");
+    }
+    let (state, chase) = before.expect("approaching before the hit");
+    assert_eq!(state, EnemyCondition::Chase);
+    assert!(chase > 0);
+    assert_eq!(
+        (s.enemies[0].state, s.enemies[0].chase),
+        (EnemyCondition::Stagger, 0)
+    );
+}
+
+#[test]
+fn leaving_the_rest_for_a_dead_character_or_the_aggro_range_zeroes_it() {
+    // A dead character: killed on tick 3, the sweep ends on tick 6 with a
+    // rest of 3, and tick 7 idles with none left.
+    let w = [("sweep_weight", 1.0), ("sweep_arc", 360.0)];
+    let mut run = Run::new(r#"("hp", 1)"#, &enemy(0.0, -1.0, 180.0, &w));
+    let states: Vec<(EnemyCondition, u32)> = (1..=7)
+        .map(|_| {
+            let s = run.idle();
+            (s.enemies[0].state, s.enemies[0].rest)
+        })
+        .collect();
+    assert_eq!(states[5], (EnemyCondition::Rest, 3));
+    assert_eq!(states[6], (EnemyCondition::Idle, 0));
+    // Out of the aggro range: the character runs off as in
+    // character_leaving_aggro_range_lets_the_running_move_finish_then_idles.
+    let w = [
+        ("sweep_weight", 1.0),
+        ("sweep_startup_ticks", 10.0),
+        ("enemy_aggro_range", 3.0),
+        ("enemy_rest_ticks", 10.0),
+        ("approach_weight_per_meter", 0.0),
+    ];
+    let mut run = Run::new("", &enemy(0.0, -2.9, 180.0, &w));
+    let back = [(MOVE_Y, -1.0)];
+    let states: Vec<(EnemyCondition, u32)> = (1..=15)
+        .map(|_| {
+            let s = run.hold(&[], &back);
+            (s.enemies[0].state, s.enemies[0].rest)
+        })
+        .collect();
+    assert_eq!(states[13], (EnemyCondition::Rest, 10));
+    assert_eq!(states[14], (EnemyCondition::Idle, 0));
+}
+
+#[test]
+fn staggered_resting_enemy_has_no_rest_left() {
+    // The sweep misses (0.1 m reach) and ends on tick 6 with a rest of 60;
+    // the character's attack then staggers it.
+    let w = [
+        ("sweep_weight", 1.0),
+        ("sweep_reach", 0.1),
+        ("enemy_rest_ticks", 60.0),
+        ("stagger_ticks", 5.0),
+    ];
+    let mut run = Run::new("", &enemy(0.0, -1.2, 180.0, &w));
+    for _ in 1..=6 {
+        run.idle();
+    }
+    let s = run.game.state();
+    assert_eq!(
+        (s.enemies[0].state, s.enemies[0].rest),
+        (EnemyCondition::Rest, 60)
+    );
+    let mut s = run.hold(&[ATTACK], &[]);
+    for t in 8..40 {
+        if s.hurtboxes[0].health.unwrap().state == Condition::Stagger {
+            break;
+        }
+        assert_eq!(s.enemies[0].state, EnemyCondition::Rest, "tick {t}");
+        s = run.idle();
+        assert!(t < 39, "never staggered");
+    }
+    assert_eq!(
+        (s.enemies[0].state, s.enemies[0].rest),
+        (EnemyCondition::Stagger, 0)
     );
 }
