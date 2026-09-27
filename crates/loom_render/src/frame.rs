@@ -8,7 +8,7 @@ use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 
 use std::ops::Range;
 
-use crate::{MeshKind, TextureId};
+use crate::{MeshId, MeshKind, TextureId};
 
 /// Everything needed to draw one frame.
 #[derive(Debug, Clone, Copy)]
@@ -90,9 +90,23 @@ pub struct DirectionalLight {
     pub intensity: f32,
 }
 
+/// The mesh a [`DrawItem`] draws: a built-in one, or one made with
+/// [`crate::Renderer::create_mesh`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DrawMesh {
+    Kind(MeshKind),
+    Id(MeshId),
+}
+
+impl From<MeshKind> for DrawMesh {
+    fn from(kind: MeshKind) -> Self {
+        Self::Kind(kind)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DrawItem {
-    pub mesh: MeshKind,
+    pub mesh: DrawMesh,
     /// Object to world.
     pub model: Mat4,
     /// Linear RGB.
@@ -484,7 +498,7 @@ mod tests {
         let model = Mat4::from_scale(Vec3::new(4.0, 1.0, 1.0))
             * Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4);
         let draw = GpuDraw::new(&DrawItem {
-            mesh: MeshKind::Cube,
+            mesh: MeshKind::Cube.into(),
             model,
             color: Vec3::ONE,
         });

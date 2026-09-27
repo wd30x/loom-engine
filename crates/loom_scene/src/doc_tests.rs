@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-const SCENES: [(&str, &str); 6] = [
+const SCENES: [(&str, &str); 8] = [
     (
         "souls demo",
         include_str!("../../../games/souls/src/demo.scene.ron"),
@@ -23,6 +23,14 @@ const SCENES: [(&str, &str); 6] = [
     (
         "tiles preview",
         include_str!("../../../assets/scenes/tiles_preview.ron"),
+    ),
+    (
+        "model preview",
+        include_str!("../../../assets/scenes/model_preview.ron"),
+    ),
+    (
+        "model preview side",
+        include_str!("../../../assets/scenes/model_preview_side.ron"),
     ),
 ];
 
@@ -411,4 +419,72 @@ fn edit_node_sets_and_unsets_display_name() {
     doc.edit_node("box", None, &["display_name".to_owned()], &no_props())
         .unwrap();
     assert!(!ron_of(&doc, "box").contains("display_name"));
+}
+
+#[test]
+fn model_is_read_and_written_right_after_the_mesh() {
+    let src = r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+        (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+        (color: (0.5, 0.5, 0.5), model: "assets/models/humanoid.glb", position: (1.0, 0.0, 0.0),
+            name: "knight"),
+    ])"#;
+    let scene = Scene::parse(src).unwrap();
+    let knight = scene.find("knight").unwrap();
+    assert_eq!(
+        scene.node(knight).model,
+        Some(Model {
+            path: "assets/models/humanoid.glb".to_owned(),
+            color: Vec3::splat(0.5),
+        })
+    );
+    assert_eq!(scene.node(knight).mesh, None);
+    assert_eq!(scene.model_nodes(), [knight]);
+    let doc = SceneDoc::parse(src).unwrap();
+    let ron = ron_of(&doc, "knight");
+    assert_eq!(
+        ron,
+        "(\n    name: \"knight\",\n    position: (1.0, 0.0, 0.0),\n    \
+         model: \"assets/models/humanoid.glb\",\n    color: (0.5, 0.5, 0.5),\n)\n"
+    );
+    let once = doc.to_ron();
+    assert_eq!(SceneDoc::parse(&once).unwrap().to_ron(), once);
+}
+
+#[test]
+fn edit_node_sets_and_unsets_model() {
+    let mut doc = small();
+    doc.edit_node(
+        "box",
+        Some(r#"model: "k.glb""#),
+        &["mesh".to_owned()],
+        &no_props(),
+    )
+    .unwrap();
+    assert!(ron_of(&doc, "box").starts_with(
+        "(\n    name: \"box\",\n    position: (1.0, 0.0, 0.0),\n    model: \"k.glb\",\n"
+    ));
+    let scene = Scene::parse(&doc.to_ron()).unwrap();
+    let model = scene.node(scene.find("box").unwrap()).model.clone();
+    assert_eq!(model.map(|m| m.path), Some("k.glb".to_owned()));
+    doc.edit_node("box", None, &["model".to_owned()], &no_props())
+        .unwrap();
+    assert!(!ron_of(&doc, "box").contains("model"));
+    // Both at once breaks a scene rule, with the load message.
+    let mut doc = small();
+    let e = doc
+        .edit_node("box", Some(r#"model: "k.glb""#), &[], &no_props())
+        .map(|_| ())
+        .and_then(|()| {
+            Scene::parse(&doc.to_ron())
+                .map(|_| ())
+                .map_err(|e| EditError(e.to_string()))
+        });
+    assert_eq!(
+        e.map_err(|e| e.0),
+        Err(
+            "node \"box\": mesh, model, sprite and tilemap cannot share a node: \
+             give at most one of them"
+                .to_owned()
+        )
+    );
 }

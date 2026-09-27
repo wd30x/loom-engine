@@ -2956,18 +2956,21 @@ E6.2 审查时定：
 - `color` 可以和 `model` 一起写，这时它是**染色**：模型每个顶点的颜色乘以它。不写就是 `(1, 1, 1)`，也就是原色。`Scene::set_mesh_color` 对模型节点同样有效（受击闪白、死亡变暗这类效果照旧能用）。
 - `loom_scene` 只检查字段本身：路径不是空串，不和上面几个字段同时出现。文件存在与否、内容对不对，由 `loom_engine` 在加载场景时检查，和 sprite sheet 一样：
   - 同一个路径只读一次，不论之后会不会渲染；
-  - 报错写出节点路径、文件路径和原因，例如 `node "boss": model assets/models/humanoid.glb: primitive 2 is not triangles`。
+  - 报错写出节点路径、文件路径和原因，例如 `node "boss": model assets/models/humanoid.glb: mesh 0 primitive 2 is not triangles`（网格序号加图元序号，才定位得到）。
 - **导入规则**（`loom_engine`）：
   - 用 glTF 的默认场景（没有就用第 0 个场景），把其中所有带网格的节点按各自的世界变换（glTF 节点树算出来的）合成**一个网格**；
   - 每个三角形顶点的颜色是它所在图元材质的 `baseColorFactor` 的 RGB（线性，glTF 本来就是线性）；没有材质就是白色；`baseColorFactor` 的 alpha 不用；
   - 顶点数据：位置、法线、颜色。法线用节点世界矩阵的逆转置变换，再归一化；
-  - 下标一律存成 `u32`；
-  - 报错（整个模型不加载）的情况：不是 glTF 2.0；图元不是三角形；缺 `POSITION` 或 `NORMAL`；材质用了贴图；有稀疏访问器（sparse）；默认场景里没有网格。
+  - 下标一律存成 `u32`（`u8`、`u16`、`u32` 都能读）；
+  - 世界变换是镜像（行列式为负）时，三角形绕序翻过来，否则镜像后的面会被背面剔除；
+  - 报错（整个模型不加载）的情况：不是 glTF 2.0；图元不是三角形；缺 `POSITION` 或 `NORMAL`；材质用了贴图；有稀疏访问器（sparse）；默认场景里没有网格；buffer 不在 `.glb` 里（外部 `.bin` 或 data URI，`gltf` crate 没开 `import`，不读外部文件）。缺 `POSITION` 在 `gltf` crate 校验时就被拒绝，报错是它的原文（`not a valid glTF binary: invalid glTF: …`）。
   - 骨骼和动画在 E7.1 不读，模型按绑定姿势画。
 - **渲染**：
   - `loom_render` 加 `Renderer::create_mesh(&[Vertex], &[u32]) -> MeshId`，和 `create_texture` 一样返回句柄；`DrawItem` 的网格可以是内置的，也可以是 `MeshId`；
   - 所有网格（包括内置的）顶点都带颜色，内置网格的顶点颜色是白色。片元颜色是 `顶点颜色 × 节点颜色 × 光照`；乘 1.0 是精确的，所以**已有的截图逐字节不变**；
-  - 上传发生在第一次画它的时候，和贴图一样。
+  - 上传发生在第一次画它的时候，和贴图一样（`Models::draw`）。加载时只读文件、按导入规则检查，不碰 GPU，所以不截图的无头运行照旧不加载 GPU 驱动；GPU 的错误在渲染时才报；
+  - 内置网格仍用 `u16` 下标，`create_mesh` 建的用 `u32`，`GpuMesh` 各自记着下标格式（E7.1 规划者决定：统一成 `u32` 没有好处，还要动已有截图的路径）；
+  - `DrawItem.mesh` 是 `DrawMesh` 枚举：`Kind(MeshKind)` 或 `Id(MeshId)`，`MeshKind` 能 `.into()`。交给别的渲染器建的 `MeshId`，`render` 报 `UnknownMesh`。
 
 ### `loom model`（E7.1 起）
 
@@ -2975,6 +2978,7 @@ E6.2 审查时定：
 
 ```json
 {
+  "status": "ok",
   "path": "assets/models/humanoid.glb",
   "vertices": 1234,
   "triangles": 2000,
@@ -2986,7 +2990,7 @@ E6.2 审查时定：
 ```
 
 - `bounds` 是合成后的网格在模型空间里的包围盒；`materials` 按 glTF 里的顺序；`skins` 的 `joints` 按 skin 里的顺序，`parent` 是父关节的名字（父节点不是关节时为 `null`）。
-- 检查不过时，和别的命令一样按「输入无效」报错，退出码 1。
+- 检查不过时，和别的命令一样输出 `{"status":"error","error":…}`，退出码 1。
 - 键的顺序固定，就是上面的顺序。
 
-**`loom view` 能画模型**：场景里有 `model` 的节点照常画，用来预览，不用跑游戏。仓库里加一个预览场景 `assets/scenes/model_preview.ron`。
+**`loom view` 能画模型**：场景里有 `model` 的节点照常画，用来预览，不用跑游戏。预览场景：`assets/scenes/model_preview.ron`（正面，旁边放 souls 角色现在的胶囊体比大小，smoke H12）和 `model_preview_side.ron`（侧面，看厚度和剑的方向）。

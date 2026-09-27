@@ -9,12 +9,13 @@ use anyhow::{Context, Result};
 use glam::{Mat4, Vec2, Vec3};
 use loom_core::hud::{GLYPH_CELL, Hud, HudItem, HudView, glyph_cell};
 use loom_render::{
-    DirectionalLight, DrawItem, Frame, HudDraw, LineDraw, Projection, RenderError, Renderer,
-    SpriteDraw, TextureId, view_projection,
+    DirectionalLight, DrawItem, DrawMesh, Frame, HudDraw, LineDraw, MeshId, Projection,
+    RenderError, Renderer, SpriteDraw, TextureId, view_projection,
 };
 use loom_scene::{NodeId, Scene};
 
 use crate::ViewArgs;
+use crate::model::Models;
 use crate::report::ViewReport;
 use crate::run::{millis_since, save_screenshot};
 use crate::sheet::Sheets;
@@ -23,17 +24,19 @@ use crate::sheet::Sheets;
 pub(crate) type HudFn<'a> = &'a dyn Fn(&HudView, &mut Hud);
 
 /// Draws `scene` from its camera, with the HUD `hud` lays out (if any) over
-/// it and the debug `lines` on top. `sheets` must have been loaded for
-/// `scene` ([`Sheets::load`]) and only ever be drawn with `renderer`.
-/// Returns `false` if the frame was skipped (zero render size).
+/// it and the debug `lines` on top. `sheets` and `models` must have been
+/// loaded for `scene` ([`Sheets::load`], [`Models::load`]) and only ever be
+/// drawn with `renderer`. Returns `false` if the frame was skipped (zero
+/// render size).
 pub(crate) fn render_scene(
     renderer: &mut Renderer,
     scene: &Scene,
     sheets: &mut Sheets,
+    models: &mut Models,
     lines: &[LineDraw],
     hud: Option<HudFn<'_>>,
 ) -> Result<bool, RenderError> {
-    let draws = mesh_draws(scene);
+    let draws = mesh_draws(scene, |path| models.draw(renderer, path))?;
     let sprites = sprite_draws(renderer, scene, sheets)?;
 
     let camera_id = scene.camera();
@@ -174,21 +177,27 @@ fn hud_draws(
     Ok(draws)
 }
 
-/// One draw per drawn node with a mesh ([`Scene::is_drawn`]), in scene
-/// pre-order.
-fn mesh_draws(scene: &Scene) -> Vec<DrawItem> {
-    scene
-        .ids()
-        .filter(|&id| scene.is_drawn(id))
-        .filter_map(|id| {
-            let mesh = scene.node(id).mesh?;
-            Some(DrawItem {
-                mesh: mesh_kind(mesh.kind),
-                model: scene.world_matrix(id),
-                color: mesh.color,
-            })
-        })
-        .collect()
+/// One draw per drawn node with a mesh or a model ([`Scene::is_drawn`]),
+/// in scene pre-order; `model` gives the mesh of a model's path.
+fn mesh_draws(
+    scene: &Scene,
+    mut model: impl FnMut(&str) -> Result<MeshId, RenderError>,
+) -> Result<Vec<DrawItem>, RenderError> {
+    let mut draws = Vec::new();
+    for id in scene.ids().filter(|&id| scene.is_drawn(id)) {
+        let node = scene.node(id);
+        let (mesh, color) = match (&node.mesh, &node.model) {
+            (Some(mesh), _) => (mesh_kind(mesh.kind).into(), mesh.color),
+            (None, Some(m)) => (DrawMesh::Id(model(&m.path)?), m.color),
+            (None, None) => continue,
+        };
+        draws.push(DrawItem {
+            mesh,
+            model: scene.world_matrix(id),
+            color,
+        });
+    }
+    Ok(draws)
 }
 
 /// The sprite and tilemap nodes to draw ([`Scene::is_drawn`]), in scene
@@ -275,9 +284,11 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
     // No game, so no HUD sheets.
     let mut sheets =
         Sheets::load(&scene, &[]).with_context(|| format!("invalid scene {}", path.display()))?;
+    let mut models =
+        Models::load(&scene).with_context(|| format!("invalid scene {}", path.display()))?;
     let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
     let renderer_init_ms = millis_since(started);
-    render_scene(&mut renderer, &scene, &mut sheets, &[], None)?;
+    render_scene(&mut renderer, &scene, &mut sheets, &mut models, &[], None)?;
     let screenshot = save_screenshot(&renderer, &args.screenshot)?;
     let adapter = renderer.adapter_summary();
     renderer.shutdown();
@@ -491,6 +502,48 @@ mod tests {
     }
 
     #[test]
+    fn model_nodes_draw_their_mesh_id_at_their_world_matrix_tinted_in_pre_order() {
+        let scene = Scene::parse(
+            r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+                (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+                (name: "a", position: (1.0, 0.0, 0.0), mesh: Cube, children: [
+                    (name: "k", position: (0.0, 2.0, 0.0), model: "k.glb",
+                        color: (0.5, 1.0, 1.0)),
+                ]),
+                (name: "j", model: "j.glb"),
+            ])"#,
+        )
+        .unwrap();
+        let mut asked = Vec::new();
+        let draws = mesh_draws(&scene, |path| {
+            asked.push(path.to_owned());
+            Ok(MeshId::from_index(if path == "k.glb" { 7 } else { 3 }))
+        })
+        .unwrap();
+        assert_eq!(asked, ["k.glb", "j.glb"]);
+        assert_eq!(
+            draws,
+            [
+                DrawItem {
+                    mesh: DrawMesh::Kind(loom_render::MeshKind::Cube),
+                    model: Mat4::from_translation(Vec3::X),
+                    color: Vec3::splat(0.8),
+                },
+                DrawItem {
+                    mesh: DrawMesh::Id(MeshId::from_index(7)),
+                    model: Mat4::from_translation(Vec3::new(1.0, 2.0, 0.0)),
+                    color: Vec3::new(0.5, 1.0, 1.0),
+                },
+                DrawItem {
+                    mesh: DrawMesh::Id(MeshId::from_index(3)),
+                    model: Mat4::IDENTITY,
+                    color: Vec3::ONE,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn hidden_mesh_nodes_and_their_subtrees_are_not_drawn() {
         let mut scene = Scene::parse(
             r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
@@ -503,7 +556,8 @@ mod tests {
         )
         .unwrap();
         let colors = |scene: &Scene| {
-            mesh_draws(scene)
+            mesh_draws(scene, |_| unreachable!("the scene has no model"))
+                .unwrap()
                 .iter()
                 .map(|d| d.color)
                 .collect::<Vec<_>>()

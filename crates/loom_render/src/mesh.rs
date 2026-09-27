@@ -29,18 +29,22 @@ impl MeshKind {
     pub(crate) const BUILT_IN: [MeshKind; 3] = [MeshKind::Cube, MeshKind::Plane, MeshKind::Sphere];
 }
 
+/// One vertex of a mesh: position and normal in the mesh's own space,
+/// and a linear RGB color multiplied with the draw item's color. The
+/// built-in meshes are white.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
-pub(crate) struct Vertex {
+pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    pub color: [f32; 3],
 }
 
 impl Vertex {
-    pub const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    pub(crate) const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
 
-    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -52,6 +56,7 @@ impl Vertex {
         Self {
             position: position.to_array(),
             normal: normal.to_array(),
+            color: [1.0; 3],
         }
     }
 }

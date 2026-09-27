@@ -1,7 +1,8 @@
-// Lit, flat-colored meshes. One storage-buffer entry per draw item, picked by
-// instance index. Colors are linear; the sRGB target encodes them.
-//   color * (ambient + max(0, dot(n, -light_dir)) * light_color)
+// Lit meshes. One storage-buffer entry per draw item, picked by instance
+// index. Colors are linear; the sRGB target encodes them.
+//   vertex color * item color * (ambient + max(0, dot(n, -light_dir)) * light_color)
 // where light_color already includes the intensity (zero without a light).
+// The built-in meshes' vertex colors are 1, and multiplying by 1 is exact.
 
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -27,6 +28,7 @@ var<storage, read> draws: array<Draw>;
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) color: vec3<f32>,
 };
 
 struct VertexOut {
@@ -42,7 +44,7 @@ fn vs_main(in: VertexIn, @builtin(instance_index) index: u32) -> VertexOut {
     var out: VertexOut;
     out.clip = globals.view_proj * draw.model * vec4<f32>(in.position, 1.0);
     out.normal = normal_matrix * in.normal;
-    out.color = draw.color.rgb;
+    out.color = draw.color.rgb * in.color;
     return out;
 }
 

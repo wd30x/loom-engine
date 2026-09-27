@@ -66,20 +66,27 @@ pub(crate) struct NodeDesc {
     /// Every component greater than 0. Default (1, 1, 1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<Triple>,
-    /// At most one of `mesh`, `sprite` and `tilemap`.
+    /// At most one of `mesh`, `model`, `sprite` and `tilemap`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh: Option<MeshKind>,
+    /// Path of a glTF binary model (`.glb`), relative to the working
+    /// directory. Not empty. At most one of `mesh`, `model`, `sprite` and
+    /// `tilemap`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub model: Option<String>,
     /// The mesh color, linear RGB, each component from 0 to 1. Default
-    /// (0.8, 0.8, 0.8).
+    /// (0.8, 0.8, 0.8), or (1, 1, 1) with a `model`: a model's color
+    /// tints its vertex colors.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<Triple>,
     /// Makes the node a camera, looking along its -Z axis.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraDesc>,
-    /// At most one of `mesh`, `sprite` and `tilemap`.
+    /// At most one of `mesh`, `model`, `sprite` and `tilemap`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sprite: Option<SpriteDesc>,
-    /// At most one of `mesh`, `sprite` and `tilemap`.
+    /// At most one of `mesh`, `model`, `sprite` and `tilemap`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tilemap: Option<TilemapDesc>,
     /// The scene's one light, if any.
@@ -246,6 +253,7 @@ pub(crate) struct NodePatch {
     pub look_at: Option<Triple>,
     pub scale: Option<Triple>,
     pub mesh: Option<MeshKind>,
+    pub model: Option<String>,
     pub color: Option<Triple>,
     pub camera: Option<CameraDesc>,
     pub sprite: Option<SpriteDesc>,

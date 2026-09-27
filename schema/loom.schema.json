@@ -259,7 +259,7 @@
             ]
           },
           "color": {
-            "description": "The mesh color, linear RGB, each component from 0 to 1. Default\n(0.8, 0.8, 0.8).",
+            "description": "The mesh color, linear RGB, each component from 0 to 1. Default\n(0.8, 0.8, 0.8), or (1, 1, 1) with a `model`: a model's color\ntints its vertex colors.",
             "type": [
               "array",
               "null"
@@ -324,7 +324,7 @@
             ]
           },
           "mesh": {
-            "description": "At most one of `mesh`, `sprite` and `tilemap`.",
+            "description": "At most one of `mesh`, `model`, `sprite` and `tilemap`.",
             "anyOf": [
               {
                 "$ref": "#/$defs/MeshKind"
@@ -333,6 +333,14 @@
                 "type": "null"
               }
             ]
+          },
+          "model": {
+            "description": "Path of a glTF binary model (`.glb`), relative to the working\ndirectory. Not empty. At most one of `mesh`, `model`, `sprite` and\n`tilemap`.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
           },
           "name": {
             "description": "Unique among its siblings.",
@@ -438,7 +446,7 @@
             ]
           },
           "sprite": {
-            "description": "At most one of `mesh`, `sprite` and `tilemap`.",
+            "description": "At most one of `mesh`, `model`, `sprite` and `tilemap`.",
             "anyOf": [
               {
                 "$ref": "#/$defs/SpriteDesc"
@@ -449,7 +457,7 @@
             ]
           },
           "tilemap": {
-            "description": "At most one of `mesh`, `sprite` and `tilemap`.",
+            "description": "At most one of `mesh`, `model`, `sprite` and `tilemap`.",
             "anyOf": [
               {
                 "$ref": "#/$defs/TilemapDesc"

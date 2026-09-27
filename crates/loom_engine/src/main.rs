@@ -6,6 +6,7 @@
 
 mod debug;
 mod games;
+mod model;
 mod output;
 mod reload;
 mod report;
@@ -48,6 +49,9 @@ enum Command {
     /// Print the formats of scene files, props, state dumps, trace lines
     /// and events, as JSON Schema.
     Schema,
+    /// Check a glTF binary model (.glb) by the import rules and describe
+    /// it: size, materials, skins and animations.
+    Model(ModelArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -118,6 +122,13 @@ pub(crate) struct ViewArgs {
     size: Size,
 }
 
+#[derive(Debug, clap::Args)]
+pub(crate) struct ModelArgs {
+    /// The .glb file.
+    #[arg(value_name = "PATH")]
+    path: PathBuf,
+}
+
 /// Render size in physical pixels, both sides non-zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Size {
@@ -171,6 +182,7 @@ fn main() -> ExitCode {
             });
             Ok(())
         }
+        Command::Model(args) => model::describe(&args.path).map(|r| report::emit(&r)),
         // Replies are written as they go; only a startup error is reported below.
         Command::Serve(args) => serve::serve(&args),
     };

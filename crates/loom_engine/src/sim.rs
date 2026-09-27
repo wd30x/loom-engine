@@ -18,6 +18,7 @@ use loom_scene::Scene;
 use crate::RunArgs;
 use crate::debug;
 use crate::games::AnyGame;
+use crate::model::Models;
 use crate::output::ensure_parent_dir;
 use crate::report::{InputReport, TraceReport};
 use crate::sheet::{HudFont, Sheets};
@@ -26,11 +27,12 @@ use crate::trace::Trace;
 use crate::view::{HudFn, render_scene};
 
 /// A scene ready to simulate: the game its top-level `game` names and the
-/// sprite sheets it uses, loaded together so a missing sheet or tag fails
-/// the load like any other invalid scene.
+/// sprite sheets and models it uses, loaded together so a missing sheet,
+/// tag or model fails the load like any other invalid scene.
 pub(crate) struct LoadedScene {
     pub game: AnyGame,
     pub sheets: Sheets,
+    pub models: Models,
 }
 
 impl LoadedScene {
@@ -45,7 +47,12 @@ impl LoadedScene {
 
     fn new(game: AnyGame) -> Result<Self> {
         let sheets = Sheets::load(game.scene(), game.hud_sheets())?;
-        Ok(Self { game, sheets })
+        let models = Models::load(game.scene())?;
+        Ok(Self {
+            game,
+            sheets,
+            models,
+        })
     }
 }
 
@@ -70,6 +77,8 @@ pub(crate) struct Sim {
     game: AnyGame,
     /// Sheets of `game`'s scene; only ever drawn with one renderer.
     sheets: Sheets,
+    /// Models of `game`'s scene; only ever drawn with one renderer.
+    models: Models,
     actions: ActionState,
     /// The game's key bindings.
     bindings: ActionMap,
@@ -136,6 +145,7 @@ impl Sim {
         let mut sim = Self {
             game: loaded.game,
             sheets,
+            models: loaded.models,
             actions: ActionState::new(),
             bindings,
             source,
@@ -169,6 +179,7 @@ impl Sim {
             bindings: loaded.game.bindings(),
             game: loaded.game,
             sheets,
+            models: loaded.models,
             actions: ActionState::new(),
             source: InputSource::Held(TickInput::default()),
             recorder: Some(InputRecorder::new()),
@@ -189,6 +200,7 @@ impl Sim {
         self.game = loaded.game;
         self.sheets = loaded.sheets;
         self.sheets.set_font(self.font.clone());
+        self.models = loaded.models;
         self.actions = ActionState::new();
         if self.recorder.is_some() {
             self.recorder = Some(InputRecorder::new());
@@ -229,6 +241,7 @@ impl Sim {
             bindings: loaded.game.bindings(),
             game: loaded.game,
             sheets,
+            models: loaded.models,
             actions: ActionState::new(),
             source: InputSource::Held(held.clone()),
             recorder: Some(recorder),
@@ -402,7 +415,14 @@ impl Sim {
         let game = &self.game;
         let lay_out = |view: &HudView, items: &mut Hud| game.hud(view, items);
         let hud: Option<HudFn<'_>> = if hud { Some(&lay_out) } else { None };
-        render_scene(renderer, game.scene(), &mut self.sheets, &lines, hud)
+        render_scene(
+            renderer,
+            game.scene(),
+            &mut self.sheets,
+            &mut self.models,
+            &lines,
+            hud,
+        )
     }
 
     /// Whether frames show the HUD: `false` with `--no-hud`.

@@ -34,6 +34,10 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 ron = "0.12.2"
+# glTF 2.0 models (docs/architecture.md section 19): parsing and accessor
+# reading only ("utils"), with names for `loom model`; no image decoding or
+# external file loading ("import")
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
 # JSON Schema of the file and state formats (`loom schema`); the same major
 # version rmcp uses
 schemars = "1.2.2"

@@ -606,11 +606,24 @@ Test-Check 'H11' 'the HUD draws over souls, --no-hud and serve hud false leave i
         '--input', "$out/h9_script.ron", '--no-hud', '--screenshot', "$out/h11_rogue.png")
     Assert-ExitOk $r
     Assert-SameBytes "$out/h9.png" "$out/h11_rogue.png"
-    # Pixel-exact rectangles, blending and discs (loom_render's ignored tests).
+    # Pixel-exact rectangles, blending, discs, glyphs, created meshes and vertex colors
+    # (loom_render's ignored tests).
     $log = cargo test -q -p loom_render -- --ignored 2>&1
     Assert-True ($LASTEXITCODE -eq 0) "loom_render GPU tests failed: $($log -join ' | ')"
     $result = @($log | Where-Object { "$_" -like 'test result: ok. * passed*' })[0]
     $script:detail = "sha256 $((Get-FileHash "$out/h1_a.png").Hash); GPU tests: $result"
+}
+
+Test-Check 'H12' 'view renders the model preview, the same bytes twice' {
+    foreach ($n in 'a', 'b') {
+        $r = Invoke-Loom @('view', '--scene', 'assets/scenes/model_preview.ron', '--screenshot', "$out/h12_$n.png")
+        Assert-ExitOk $r
+        Assert-True ($r.Json.mode -eq 'view') "mode is $($r.Json.mode)"
+    }
+    Assert-SameBytes "$out/h12_a.png" "$out/h12_b.png"
+    $size = Get-PngSize "$out/h12_a.png"
+    Assert-True ($size -eq '1280x720') "PNG is $size"
+    $script:detail = "sha256 $((Get-FileHash "$out/h12_a.png").Hash)"
 }
 
 # ---------------------------------------------------------------- W: window

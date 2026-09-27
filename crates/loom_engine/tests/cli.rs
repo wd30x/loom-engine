@@ -18,6 +18,8 @@ mod flask;
 mod hud;
 #[path = "cli/input.rs"]
 mod input;
+#[path = "cli/model.rs"]
+mod model;
 #[path = "cli/rogue.rs"]
 mod rogue;
 #[path = "cli/run.rs"]

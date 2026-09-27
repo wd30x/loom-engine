@@ -1,0 +1,19 @@
+// Preview of the humanoid model (docs/architecture.md section 19), rendered without a game:
+//   loom view --scene assets/scenes/model_preview.ron --screenshot out/model_preview.png
+// The model stands at the origin facing loom's forward (-Z), towards the camera. 1.2 m to its
+// right (+X, the viewer's left) stands the capsule the souls character uses today, same height,
+// same red, to compare their sizes.
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (0.0, 1.6, -4.2), look_at: (0.4, 0.9, 0.0),
+            camera: (fov_y: 45.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 150.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (20.0, 1.0, 20.0), color: (0.35, 0.35, 0.38)),
+        (name: "knight", model: "assets/models/humanoid.glb"),
+        (name: "capsule", position: (1.2, 0.0, 0.0),
+            mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2)),
+    ],
+)

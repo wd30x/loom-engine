@@ -3,7 +3,7 @@
 
 use wgpu::util::DeviceExt;
 
-use crate::mesh::{self, MeshKind};
+use crate::mesh::{self, MeshKind, Vertex};
 
 /// Per-draw data for every draw item (or sprite) of a frame, read by the
 /// shader by instance index, bound together with the globals. Grows as needed.
@@ -122,6 +122,8 @@ pub(crate) struct GpuMesh {
     pub(crate) vertices: wgpu::Buffer,
     pub(crate) indices: wgpu::Buffer,
     pub(crate) index_count: u32,
+    /// `Uint16` for the built-in meshes, `Uint32` for created ones.
+    pub(crate) index_format: wgpu::IndexFormat,
 }
 
 impl GpuMesh {
@@ -139,6 +141,25 @@ impl GpuMesh {
                 usage: wgpu::BufferUsages::INDEX,
             }),
             index_count: u32::try_from(indices.len()).expect("meshes have few indices"),
+            index_format: wgpu::IndexFormat::Uint16,
+        }
+    }
+
+    /// A mesh from `vertices` and `u32` `indices` (checked by the caller).
+    pub(crate) fn from_data(device: &wgpu::Device, vertices: &[Vertex], indices: &[u32]) -> Self {
+        Self {
+            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("created mesh vertices"),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("created mesh indices"),
+                contents: bytemuck::cast_slice(indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            index_count: u32::try_from(indices.len()).expect("the caller checked the index count"),
+            index_format: wgpu::IndexFormat::Uint32,
         }
     }
 }

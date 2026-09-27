@@ -16,10 +16,11 @@ use std::sync::mpsc;
 use wgpu::util::DeviceExt;
 
 pub use frame::{
-    DirectionalLight, DrawItem, Frame, HudDraw, LineDraw, Projection, SpriteDraw, view_projection,
+    DirectionalLight, DrawItem, DrawMesh, Frame, HudDraw, LineDraw, Projection, SpriteDraw,
+    view_projection,
 };
 use frame::{GpuDraw, GpuGlobals, GpuSprite, HudVertex, LineVertex, hud_vertices, line_vertices};
-pub use mesh::MeshKind;
+pub use mesh::{MeshKind, Vertex};
 
 use buffers::{
     DrawBuffer, GpuMesh, INITIAL_DRAW_CAPACITY, INITIAL_HUD_VERTICES, INITIAL_LINE_VERTICES,
@@ -74,6 +75,12 @@ pub enum RenderError {
     },
     #[error("sprite uses texture {0}, which this renderer did not create")]
     UnknownTexture(u32),
+    #[error("a mesh needs at least one triangle: {0} indices is not a positive multiple of 3")]
+    MeshIndexCount(usize),
+    #[error("mesh index {index} is out of range: the mesh has {vertices} vertices")]
+    MeshIndex { index: u32, vertices: usize },
+    #[error("draw item uses mesh {0}, which this renderer did not create")]
+    UnknownMesh(u32),
 }
 
 /// Handle of a texture created by [`Renderer::create_texture`]; only valid
@@ -82,6 +89,20 @@ pub enum RenderError {
 pub struct TextureId(u32);
 
 impl TextureId {
+    /// A handle by index, for tests of code that builds frames without a
+    /// GPU. [`Renderer::render`] rejects one its renderer did not create.
+    #[doc(hidden)]
+    pub fn from_index(index: u32) -> Self {
+        Self(index)
+    }
+}
+
+/// Handle of a mesh created by [`Renderer::create_mesh`]; only valid with
+/// the renderer that created it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MeshId(u32);
+
+impl MeshId {
     /// A handle by index, for tests of code that builds frames without a
     /// GPU. [`Renderer::render`] rejects one its renderer did not create.
     #[doc(hidden)]
@@ -146,6 +167,9 @@ pub struct Renderer {
     /// each capsule shape at its first use. Shapes that are no longer drawn
     /// (e.g. after a hot reload changed a capsule) stay; there are only a few.
     meshes: Vec<(MeshKind, GpuMesh)>,
+    /// The meshes of [`Renderer::create_mesh`], indexed by [`MeshId`], never
+    /// removed.
+    created_meshes: Vec<GpuMesh>,
     /// Requested size; `(0, 0)` while minimized.
     size: (u32, u32),
     /// `None` while the size is zero.
@@ -293,6 +317,7 @@ impl Renderer {
             hud,
             textures: Vec::new(),
             meshes,
+            created_meshes: Vec::new(),
             size: (0, 0),
             offscreen: None,
             presenter: None,
@@ -327,6 +352,7 @@ impl Renderer {
             hud,
             textures,
             meshes,
+            created_meshes,
             size: _,
             offscreen,
             presenter,
@@ -341,6 +367,7 @@ impl Renderer {
                 (hud, hud_solid_pipeline, hud_textured_pipeline),
                 textures,
                 meshes,
+                created_meshes,
                 pipeline,
                 sprite_pipeline,
                 bind_group_layout,
@@ -405,6 +432,28 @@ impl Renderer {
         let id = u32::try_from(self.textures.len()).expect("far fewer than 2^32 textures");
         self.textures.push(bind_group);
         Ok(TextureId(id))
+    }
+
+    /// Uploads a mesh for [`DrawItem`]s: `indices` into `vertices`, three
+    /// a triangle, counter-clockwise seen from the front.
+    pub fn create_mesh(
+        &mut self,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> Result<MeshId, RenderError> {
+        if indices.is_empty() || !indices.len().is_multiple_of(3) {
+            return Err(RenderError::MeshIndexCount(indices.len()));
+        }
+        if let Some(&index) = indices.iter().find(|&&i| i as usize >= vertices.len()) {
+            return Err(RenderError::MeshIndex {
+                index,
+                vertices: vertices.len(),
+            });
+        }
+        let id = u32::try_from(self.created_meshes.len()).expect("far fewer than 2^32 meshes");
+        self.created_meshes
+            .push(GpuMesh::from_data(&self.device, vertices, indices));
+        Ok(MeshId(id))
     }
 
     /// Current render size in pixels; `(0, 0)` while minimized.
@@ -474,10 +523,18 @@ impl Renderer {
             frame.sprites.len(),
         );
         for item in frame.draws {
-            if !self.meshes.iter().any(|(kind, _)| *kind == item.mesh) {
-                log::debug!("uploading mesh {:?}", item.mesh);
-                self.meshes
-                    .push((item.mesh, GpuMesh::new(&self.device, item.mesh)));
+            match item.mesh {
+                DrawMesh::Kind(kind) => {
+                    if !self.meshes.iter().any(|(k, _)| *k == kind) {
+                        log::debug!("uploading mesh {kind:?}");
+                        self.meshes.push((kind, GpuMesh::new(&self.device, kind)));
+                    }
+                }
+                DrawMesh::Id(MeshId(id)) => {
+                    if self.created_meshes.get(id as usize).is_none() {
+                        return Err(RenderError::UnknownMesh(id));
+                    }
+                }
             }
         }
         let Some(offscreen) = &self.offscreen else {
@@ -543,15 +600,20 @@ impl Renderer {
             pass.set_bind_group(0, &self.draws.bind_group, &[]);
             let mut bound = None;
             for (i, item) in frame.draws.iter().enumerate() {
-                let slot = self
-                    .meshes
-                    .iter()
-                    .position(|(kind, _)| *kind == item.mesh)
-                    .expect("every mesh of this frame was uploaded above");
-                let mesh = &self.meshes[slot].1;
+                let (slot, mesh) = match item.mesh {
+                    DrawMesh::Kind(kind) => {
+                        let slot = self
+                            .meshes
+                            .iter()
+                            .position(|(k, _)| *k == kind)
+                            .expect("every mesh of this frame was uploaded above");
+                        (item.mesh, &self.meshes[slot].1)
+                    }
+                    DrawMesh::Id(MeshId(id)) => (item.mesh, &self.created_meshes[id as usize]),
+                };
                 if bound != Some(slot) {
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+                    pass.set_index_buffer(mesh.indices.slice(..), mesh.index_format);
                     bound = Some(slot);
                 }
                 // The instance index selects this item's per-draw data.
@@ -701,3 +763,7 @@ impl Renderer {
 #[cfg(test)]
 #[path = "hud_gpu_tests.rs"]
 mod hud_gpu_tests;
+
+#[cfg(test)]
+#[path = "mesh_gpu_tests.rs"]
+mod mesh_gpu_tests;

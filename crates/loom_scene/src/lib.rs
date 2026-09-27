@@ -40,6 +40,8 @@ pub fn scene_schema() -> schemars::Schema {
 const VERSION: u32 = 1;
 /// Color of a mesh node without `color`.
 const DEFAULT_COLOR: Vec3 = Vec3::splat(0.8);
+/// A model's default `color`: its own colors, untinted.
+const DEFAULT_MODEL_COLOR: Vec3 = Vec3::ONE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SceneError {
@@ -90,7 +92,7 @@ pub enum Problem {
     CameraProjection,
     #[error("camera ortho height must be greater than 0")]
     OrthoHeight,
-    #[error("mesh, sprite and tilemap cannot share a node: give at most one of them")]
+    #[error("mesh, model, sprite and tilemap cannot share a node: give at most one of them")]
     DrawableConflict,
     #[error("{0} must not be empty")]
     EmptyField(&'static str),
@@ -185,6 +187,16 @@ impl Transform {
 pub struct Mesh {
     pub kind: MeshKind,
     /// Linear RGB.
+    pub color: Vec3,
+}
+
+/// A glTF model (`docs/architecture.md` section 19). The file is read by
+/// `loom_engine`, not here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Model {
+    /// Path of the `.glb`, as written; never empty.
+    pub path: String,
+    /// Linear RGB, multiplied with the model's vertex colors.
     pub color: Vec3,
 }
 
@@ -329,6 +341,7 @@ pub struct Node {
     pub children: Vec<NodeId>,
     pub transform: Transform,
     pub mesh: Option<Mesh>,
+    pub model: Option<Model>,
     pub camera: Option<Camera>,
     pub light: Option<Light>,
     pub character: Option<Character>,
@@ -368,6 +381,8 @@ pub struct Scene {
     colliders: Vec<NodeId>,
     /// Nodes with a sprite or a tilemap, in pre-order.
     sprite_nodes: Vec<NodeId>,
+    /// Nodes with a model, in pre-order.
+    model_nodes: Vec<NodeId>,
     ambient: Vec3,
     /// The top-level `game`: which game runs the scene. Never empty.
     game: Option<String>,
@@ -399,6 +414,7 @@ impl Scene {
             orbit_camera: None,
             colliders: Vec::new(),
             sprite_nodes: Vec::new(),
+            model_nodes: Vec::new(),
         };
         let roots = builder.add_siblings(&file.nodes, None, "", None)?;
         let mut scene = Self {
@@ -410,6 +426,7 @@ impl Scene {
             orbit_camera: None,
             colliders: builder.colliders,
             sprite_nodes: builder.sprite_nodes,
+            model_nodes: builder.model_nodes,
             ambient,
             game: file.game.clone(),
         };
@@ -522,12 +539,14 @@ impl Scene {
         Ok(())
     }
 
-    /// Sets the mesh color of `id`, drawn from the next frame on. The color
-    /// follows the scene file's rule for `color` (finite, every component
-    /// in `[0, 1]`); on an error nothing changes.
+    /// Sets the mesh color of `id` (a model's tint for a model node),
+    /// drawn from the next frame on. The color follows the scene file's
+    /// rule for `color` (finite, every component in `[0, 1]`); on an error
+    /// nothing changes.
     pub fn set_mesh_color(&mut self, id: NodeId, color: Vec3) -> Result<(), MeshColorError> {
         let path = || self.path(id);
-        if self.nodes[id.0].mesh.is_none() {
+        let node = &self.nodes[id.0];
+        if node.mesh.is_none() && node.model.is_none() {
             return Err(MeshColorError::NoMesh(path()));
         }
         if self::color((color.x, color.y, color.z), "mesh color").is_err() {
@@ -536,8 +555,12 @@ impl Scene {
                 color,
             });
         }
-        if let Some(mesh) = &mut self.nodes[id.0].mesh {
+        let node = &mut self.nodes[id.0];
+        if let Some(mesh) = &mut node.mesh {
             mesh.color = color;
+        }
+        if let Some(model) = &mut node.model {
+            model.color = color;
         }
         Ok(())
     }
@@ -601,6 +624,11 @@ impl Scene {
         &self.sprite_nodes
     }
 
+    /// Every node with a [`Model`], in pre-order.
+    pub fn model_nodes(&self) -> &[NodeId] {
+        &self.model_nodes
+    }
+
     /// Ambient light, linear RGB.
     pub fn ambient(&self) -> Vec3 {
         self.ambient
@@ -633,6 +661,7 @@ struct Builder<'a> {
     orbit_camera: Option<(NodeId, &'a OrbitCameraDesc)>,
     colliders: Vec<NodeId>,
     sprite_nodes: Vec<NodeId>,
+    model_nodes: Vec<NodeId>,
 }
 
 impl<'a> Builder<'a> {
@@ -674,6 +703,9 @@ impl<'a> Builder<'a> {
             }
             if node.sprite.is_some() || node.tilemap.is_some() {
                 self.sprite_nodes.push(id);
+            }
+            if node.model.is_some() {
+                self.model_nodes.push(id);
             }
             if node.light.is_some() {
                 if let Some(first) = self.light {
@@ -752,6 +784,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     };
     let mesh_color = match desc.color {
         Some(c) => color(c, "color")?,
+        None if desc.model.is_some() => DEFAULT_MODEL_COLOR,
         None => DEFAULT_COLOR,
     };
     let camera = desc.camera.as_ref().map(camera).transpose()?;
@@ -798,11 +831,15 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     }
     let drawables = [
         desc.mesh.is_some(),
+        desc.model.is_some(),
         desc.sprite.is_some(),
         desc.tilemap.is_some(),
     ];
     if drawables.iter().filter(|&&d| d).count() > 1 {
         return Err(Problem::DrawableConflict);
+    }
+    if desc.model.as_deref() == Some("") {
+        return Err(Problem::EmptyField("model"));
     }
     let sprite = desc.sprite.as_ref().map(sprite).transpose()?;
     let tilemap = desc.tilemap.as_ref().map(tilemap).transpose()?;
@@ -832,6 +869,10 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
         },
         mesh: desc.mesh.map(|kind| Mesh {
             kind,
+            color: mesh_color,
+        }),
+        model: desc.model.as_ref().map(|path| Model {
+            path: path.clone(),
             color: mesh_color,
         }),
         camera,

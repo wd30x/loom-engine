@@ -1,0 +1,18 @@
+// The humanoid model from its right side (docs/architecture.md section 19), to check its depth
+// and which way the sword points:
+//   loom view --scene assets/scenes/model_preview_side.ron --screenshot out/model_preview_side.png
+// The model faces -Z, the viewer's right; the capsule stands 1.2 m behind it (+Z).
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (4.2, 1.6, 0.4), look_at: (0.0, 0.9, 0.4),
+            camera: (fov_y: 45.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 60.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (20.0, 1.0, 20.0), color: (0.35, 0.35, 0.38)),
+        (name: "knight", model: "assets/models/humanoid.glb"),
+        (name: "capsule", position: (0.0, 0.0, 1.2),
+            mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2)),
+    ],
+)

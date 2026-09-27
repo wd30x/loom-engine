@@ -856,10 +856,14 @@ fn sprites_and_tilemaps_parse_and_are_listed_in_pre_order() {
 fn mesh_sprite_and_tilemap_cannot_share_a_node() {
     let sprite = r#"sprite: (sheet: "s.json", tag: "t")"#;
     let tilemap = r#"tilemap: (sheet: "s.json", legend: [('.', "t")], rows: ["."])"#;
+    let model = r#"model: "k.glb""#;
     for components in [
         format!("mesh: Cube, {sprite}"),
         format!("mesh: Cube, {tilemap}"),
         format!("{sprite}, {tilemap}"),
+        format!("mesh: Cube, {model}"),
+        format!("{model}, {sprite}"),
+        format!("{model}, {tilemap}"),
     ] {
         let p = node_problem(&format!("(name: \"n\", {components})"), "n");
         assert_eq!(p, Problem::DrawableConflict, "{components}");
@@ -1132,4 +1136,31 @@ fn hidden_parent_hides_its_subtree_from_drawing_until_shown_again() {
     // Hiding the child alone leaves the parent drawn.
     scene.set_visible(b, false);
     assert!(scene.is_drawn(g) && !scene.is_drawn(b));
+}
+
+#[test]
+fn empty_model_path_is_a_scene_error_naming_the_node() {
+    let err = Scene::parse(&scene_with(
+        r#"(name: "g", children: [(name: "k", model: "")]),"#,
+    ))
+    .unwrap_err();
+    assert_eq!(err.to_string(), "node \"g/k\": model must not be empty");
+}
+
+#[test]
+fn model_color_defaults_to_white_and_tints_like_a_mesh_color() {
+    let mut scene = Scene::parse(&scene_with(
+        r#"(name: "k", model: "k.glb"), (name: "c", mesh: Cube),"#,
+    ))
+    .unwrap();
+    let (k, c) = (scene.find("k").unwrap(), scene.find("c").unwrap());
+    assert_eq!(scene.node(k).model.as_ref().unwrap().color, Vec3::ONE);
+    assert_eq!(scene.node(c).mesh.unwrap().color, Vec3::splat(0.8));
+    scene.set_mesh_color(k, Vec3::new(1.0, 0.5, 0.0)).unwrap();
+    assert_eq!(
+        scene.node(k).model.as_ref().unwrap().color,
+        Vec3::new(1.0, 0.5, 0.0)
+    );
+    assert!(scene.set_mesh_color(k, Vec3::splat(2.0)).is_err());
+    assert_eq!(scene.model_nodes(), [k]);
 }
