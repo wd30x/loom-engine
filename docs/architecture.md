@@ -147,6 +147,8 @@ loom view [OPTIONS]        只加载场景、画一帧，不跑任何游戏逻�
     --screenshot <PATH>    必填
     --size <WxH>           默认 1280x720
 
+loom schema                输出机器可读的格式说明（E5.4 起，第 17 节）：场景文件、每个游戏的 props、状态导出、事件
+
 loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
     --scene <PATH>         同 run；不给时用内置演示场景
     --size <WxH>           截图的默认尺寸，默认 1280x720
@@ -1662,6 +1664,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 | `remove_node` | `{"path":"..."}` | 删一个节点和它的整个子树（E5.3 起） |
 | `edit_scene` | `{"set":"RON 字段"}` | 改顶层的 `camera`、`ambient`（E5.3 起）。`version`、`game` 不能改 |
 | `save_scene` | `{"path":"..."}` | 把当前场景的规范格式写进文件（自动创建父目录）（E5.3 起）。`{"path":…}` |
+| `schema` | 无 | 和 `loom schema` 的 `schema` 字段相同的内容（E5.4 起，第 17 节） |
 | `quit` | 无 | `{}`，然后退出 |
 
 ### 运行中编辑（E5.3 起）
@@ -1735,6 +1738,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
   - `describe`、`load_scene`、`reset`、`input`、`step`、`state`、`screenshot`、`record`，E5.1 起加 `trace`（参数 `path` 可以省略，省略就是停止）。
   - E5.2 起 `screenshot` 多一个可选参数 `debug_draw`，同 serve。
   - E5.3 起加 `scene`、`node`、`edit_node`、`add_node`、`remove_node`、`edit_scene`、`save_scene`。
+  - E5.4 起加 `schema`。
   - **没有 `quit`**：子进程的生命周期由适配程序管理。
   - 工具的参数和 serve 方法的 params 一一对应；参数的 JSON Schema 由 rmcp 按参数结构体生成。
 - **结果**：
@@ -1998,4 +2002,66 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 - 调试绘制不改变模拟：开不开，状态导出、轨迹、录制都逐字节相同。
 - 没开调试绘制时，截图和 E5.2 之前逐字节相同（`lines` 为空时不发绘制命令）。
 - 开着的截图同样确定：同一个状态、同一个后端，PNG 逐字节相同。不同后端之间可能差几个像素，和网格一样（第 3、4 节），smoke 不做跨后端比较。
+
+## 17. 格式说明 `loom schema`（E5.4 起）
+
+用户决定（2026-09-27）：
+- **和代码同源**：结构用 `schemars` 在同一个 Rust 类型上生成 JSON Schema，`///` 注释就是说明文字；props 的名字、默认值、取值规则直接从游戏现有的参数表导出。改代码，说明就跟着变。
+- 覆盖范围由规划者定：**场景文件和 props**、**状态导出和事件**，也就是写场景、读状态时要用的。输入脚本、键位表格式简单，`describe` 已经列出动作和轴；serve 的参数 MCP 已经有 schema。这两类以后有需要再加。
+
+**输出**：`loom schema` 的 stdout 照第 6 节只有一个 JSON 对象：`{"status":"ok","schema":{…}}`。`schema` 的结构：
+
+```json
+{
+  "loom_schema": 1,
+  "scene": { JSON Schema },
+  "games": {
+    "rogue": { "props": {…}, "state_dump": { JSON Schema }, "trace_line": { JSON Schema }, "event": { JSON Schema } },
+    "souls": { … }
+  }
+}
+```
+
+- `loom_schema`：这份说明本身的格式版本，现在是 1。
+- JSON Schema 用 schemars 1.x 默认的 draft 2020-12。对象的键按上面的顺序；`games` 按游戏名排序。
+- **`scene`**：场景文件（第 10 节）的结构，从 `loom_scene` 的文件结构类型生成。
+  - 场景文件是 RON，这里按它的 serde 结构描述：元组是定长数组，可选字段可以不写（RON 里写成裸值），`mesh` 这类枚举是 serde 的外部标签形式。schema 的顶层 `description` 里写明这几条对应关系。
+  - `deny_unknown_fields` 体现为 `additionalProperties: false`。
+  - 结构以外的规则（名字的正则、`scale > 0`、`near < far` 等）写在对应字段的 `///` 注释里。能直接用 schemars 属性表达的（名字的 `pattern`、`version` 的取值）就用属性。
+- **`props`**：按节点的种类分组，每组是一个列表，每项：
+
+```json
+{ "name": "stamina_max", "default": 100.0, "rule": { "kind": "positive" }, "unit": "stamina points", "description": "…" }
+```
+
+  - `default`：没有默认值（必须写，或者写了才开启某种功能）时是 `null`。
+  - `rule` 的 `kind`：
+    - `positive`（> 0）；
+    - `at_least`（`min`，≥ min）；
+    - `whole`（`min`，可选的 `max`：整数，含两端）；
+    - `below`（`min`、`max`：`min ≤ v < max`）；
+    - `arc`（0 < v ≤ 360）。
+    - 两个游戏用到的规则都要能表示；新规则加进这个列表。
+  - `unit`、`description`：英文，写在游戏的参数表里（表多一两列），和代码同一处维护。演示场景里每个 prop 的英文注释可以直接拿来用。
+  - souls 的分组：
+    - `character`：角色节点的 50 个；
+    - `node`：其他节点的 17 个。
+    - 每组另有 `requires`：哪些 prop 必须和哪个一起写，例如 `hp` 的 4 个跟着 `hp`；
+    - `constraints`：跨 prop 的规则，写成字符串，例如 `"lock_range <= lock_break_range"`。
+  - rogue 的分组：`player`、`zombie`（第 15 节）。
+- **`state_dump`**：这个游戏的完整状态导出（第 6 节，包括顶层的 `tick`、`nodes` 等），`game` 是这个游戏的状态类型。
+- **`event`**：这个游戏的事件（第 11、15 节「事件」），每种 `type` 一个分支。
+- **`trace_line`**：轨迹的一行（第 6 节「轨迹」）。
+
+**提交进仓库**：生成的结果写在 `schema/loom.schema.json`（`schema` 字段的内容，pretty 格式，末尾换行）。
+- 有测试比较它和生成的结果，不同就失败。设了环境变量 `LOOM_UPDATE_SCHEMA=1` 时，测试改为重写这个文件。
+- 所以格式一变，提交的 diff 里就看得见；AI 不运行程序也能读。
+
+**保证**（都有测试）：
+- 仓库里所有场景文件，按文件结构类型解析、再序列化成 JSON 之后，都符合 `scene`。
+- CLI 测试里所有状态导出的期望值，都符合对应游戏的 `state_dump`；轨迹测试写出的每一行，都符合 `trace_line`。
+- 每个游戏参数表里的每一项都出现在 `props` 里，默认值相同。这一条由生成方式保证，测试里抽查几项。
+- 校验用 `jsonschema` crate，只作开发依赖。
+
+**已知限制**：`constraints` 和 `requires` 是写在代码里的文字，和真正做检查的代码在同一个文件，但没有机制保证两者一致。改检查时要记得改它们（写进 TODO 的「测试覆盖的已知薄弱处」）。
 
