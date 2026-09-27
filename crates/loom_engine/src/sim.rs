@@ -188,6 +188,47 @@ impl Sim {
         self.scene_source.as_deref()
     }
 
+    /// A serve session on `loaded`, an edit of this one's scene whose text
+    /// is `source`, run from tick 0 to this session's tick on the input
+    /// recorded so far: the same data `record` writes. The held input and
+    /// the recording carry over unchanged; a running trace moves over and
+    /// is written again from tick 0 (`docs/architecture.md` section 13,
+    /// "运行中编辑"). Only writing the trace can fail, and then the trace
+    /// is gone.
+    pub fn rerun(&mut self, loaded: LoadedScene, source: String) -> Result<Self> {
+        let InputSource::Held(held) = &self.source else {
+            bail!("only a serve session is edited");
+        };
+        let recorder = self
+            .recorder
+            .clone()
+            .context("a serve session always records")?;
+        let mut player = ScriptPlayer::new(recorder.clone().finish());
+        let mut sim = Self {
+            bindings: loaded.game.bindings(),
+            game: loaded.game,
+            sheets: loaded.sheets,
+            actions: ActionState::new(),
+            source: InputSource::Held(held.clone()),
+            recorder: Some(recorder),
+            trace: None,
+            debug_draw: None,
+            scene_path: self.scene_path.clone(),
+            scene_source: Some(source),
+        };
+        if let Some(mut trace) = self.trace.take() {
+            trace.restart()?;
+            sim.trace = Some(trace);
+        }
+        sim.trace_line()?;
+        for _ in 0..self.game.clock().tick() {
+            sim.actions.advance(player.next_tick());
+            sim.game.tick(&sim.actions);
+            sim.trace_line()?;
+        }
+        Ok(sim)
+    }
+
     /// Runs one tick: sample this tick's input, advance the action state,
     /// record, step the game, then trace. Only writing the trace can fail.
     pub fn tick(&mut self) -> Result<()> {

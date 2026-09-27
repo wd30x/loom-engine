@@ -4344,7 +4344,7 @@ mod tests {
         const ORANGE: Vec3 = Vec3::new(1.0, 0.55, 0.1);
         const DARK_RED: Vec3 = Vec3::new(0.5, 0.1, 0.1);
         const RED: Vec3 = Vec3::new(1.0, 0.15, 0.15);
-        const LIGHT_GRAY: Vec3 = Vec3::new(0.8, 0.8, 0.8);
+        const MAGENTA: Vec3 = Vec3::new(1.0, 0.2, 0.9);
         const WHITE: Vec3 = Vec3::new(0.9, 0.9, 0.9);
         const YELLOW: Vec3 = Vec3::new(1.0, 0.9, 0.1);
         const BLUE: Vec3 = Vec3::new(0.3, 0.5, 1.0);
@@ -4535,12 +4535,12 @@ mod tests {
         }
 
         #[test]
-        fn demo_scene_colliders_are_light_gray_boxes_the_stake_block_among_them() {
+        fn demo_scene_colliders_are_magenta_boxes_the_stake_block_among_them() {
             let run = Run::on(include_str!("demo.scene.ron"));
             let l = lines(&run, &["colliders"]);
             // Three pillars, the wall, three dummy blocks and the stake's.
             assert_eq!(l.len(), 8 * 12);
-            assert!(l.iter().all(|l| l.color == LIGHT_GRAY));
+            assert!(l.iter().all(|l| l.color == MAGENTA));
             // The stake at (6, 0, 2), its block 0.3 x 1.6 x 0.3 at 0.8 up.
             for end in l[7 * 12..].iter().flat_map(|l| [l.a, l.b]) {
                 let d = end - Vec3::new(6.0, 0.8, 2.0);

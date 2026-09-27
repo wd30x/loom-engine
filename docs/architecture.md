@@ -501,7 +501,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`position`、`rotation`、`look_at`、`scale`、`mesh`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
 - 没写的可选字段不写；`props`、`children` 为空时不写；`sprite.alternates` 为空时不写。写了的字段原样保留，即使等于默认值（比如 `scale: (1.0, 1.0, 1.0)`）。
 - 旋转保留文件里写的欧拉角（度），不换成四元数；`look_at` 也原样保留。
-- 数字用 ron 的输出（最短的能精确还原的十进制）；`props` 的值是 f64，其余是 f32。
+- 数字用 ron 的输出（最短的能精确还原的十进制）；`props` 的值是 f64，其余是 f32。`props` 里写成整数的值写出来带小数点，比如 `("hp", 100)` 变成 `("hp", 100.0)`，解析结果相同。
 - **没有注释**：原文件里的注释会丢。所以 `save_scene` 建议另存新文件，要合回原文件时由人或 AI 手工改。
 - 保证：
   - `parse(规范格式(文件))` 和 `parse(文件)` 得到的场景完全相同（变换逐位相同）；
@@ -1679,11 +1679,14 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 3. 从 tick 0 用录下的输入（上次 `load_scene`/`reset` 以来的，和 `record` 写出的相同）重跑到编辑前的 tick；
 4. 用新的场景和游戏替换旧的。
 
-- 任何一步失败：回复错误（-32602，消息说明原因，校验错误的文案同加载场景），**什么都不变**。
+- 任何一步失败：回复错误（-32602，消息说明原因），**什么都不变**。
+  - 校验错误的文案是加载场景时的原因本身，不带 `load_scene` 回复里的 `invalid scene source: ` 前缀（E5.3 审查时按实现定下）。
+  - 编辑操作本身的错误文案（`EditError`）：`no node at "<路径>"`、`edit_node needs set, unset or props`、`set cannot give children: use add_node and remove_node`、`<字段> is both in set and in unset`、`unset cannot remove name`、`unset cannot remove props: set props: [] instead`、`unset cannot remove children: use remove_node`、`unset: unknown field "<f>", expected one of …`、`unset lists "<f>" twice`、`prop "<名字>" is not on the node "<路径>"`、`index <N> is past the end: "<父节点>" has <M> children`（根上是 `the root has <M> children`）、`edit_scene cannot change version`（`game`、`nodes` 同理）。`set` 片段的解析错误是 `set: <行>:<列>: <ron 的错误>`，行列按片段本身算；`add_node` 的是 `ron: <ron 的错误>`。
+  - 唯一的例外：重跑中途写轨迹失败时，回复 Engine 错误，会话仍是编辑前的，但轨迹已经丢了（历史要重写，原文件保不住）。只在 IO 出错时发生，接受（E5.3 审查时定）。
 - 成功：result `{"tick":当前tick}`，和编辑前相同。
 - **保持的输入**不变。**录制**不变：它只有输入，和场景无关。
 - **轨迹**：正在写轨迹时，文件清空，从 tick 0 重写到当前 tick（历史变了）。重跑期间的事件不出现在任何回复里。
-- 编辑一直保留，直到下一次 `load_scene`。`reset` 回到**改后场景**的 tick 0。
+- 编辑一直保留，直到下一次 `load_scene`。`describe` 的 `scene` 仍是加载时的路径，磁盘上的文件不变，差别看 `edited`。`reset` 回到**改后场景**的 tick 0。
 - 保证：编辑后 `state` 的内容，等于 `loom run --headless --scene <save_scene 写出的文件> --input <record 写出的脚本> --frames <tick> --dump-state` 的结果（tick 为 0 时就是改后场景的初始状态）。
 - 代价：每次编辑都要重跑当前 tick 数那么多个 tick。无头模式下 souls 的一个 tick 是微秒级，几千 tick 之内可以忽略。
 

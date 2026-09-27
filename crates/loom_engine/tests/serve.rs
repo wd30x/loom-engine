@@ -127,7 +127,7 @@ fn describe_lists_the_demo_bindings_sorted_without_a_scene_path() {
     axes.sort_unstable();
     assert_eq!(
         *r,
-        json!({"tick_hz": 60, "tick": 0, "game": "souls", "scene": null, "actions": actions, "axes": axes})
+        json!({"tick_hz": 60, "tick": 0, "game": "souls", "scene": null, "edited": false, "actions": actions, "axes": axes})
     );
     assert_eq!(r["axes"], json!(["look_x", "look_y", "move_x", "move_y"]));
     assert_eq!(r["actions"], json!(["attack", "heavy", "lock", "roll"]));
@@ -1034,4 +1034,446 @@ fn trace_that_fails_to_close_after_quit_exits_1_without_another_stdout_line() {
     drop(lock);
     assert_eq!(rest, "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n");
     assert_eq!(status.code(), Some(1));
+}
+
+// ---------------------------------------------------------------- editing
+
+/// Pushes requests, ids following on, that play the first 212 ticks of
+/// `kill_requests`' script: three light hits on dummy_b, then a heavy one
+/// on tick 212. With `trace`, a trace is started after tick 100.
+fn play_to_212(requests: &mut Vec<String>, trace: Option<&std::path::Path>) {
+    let plan: [(Value, u64); 11] = [
+        (json!({"actions": {"lock": true}}), 1),
+        (
+            json!({"actions": {"lock": false}, "axes": {"move_y": 1.0}}),
+            94,
+        ),
+        (json!({"axes": {"move_y": 0.0}}), 4),
+        (json!({"actions": {"attack": true}}), 1),
+        (json!({"actions": {"attack": false}}), 14),
+        (json!({"actions": {"attack": true}}), 1),
+        (json!({"actions": {"attack": false}}), 29),
+        (json!({"actions": {"attack": true}}), 1),
+        (json!({"actions": {"attack": false}}), 44),
+        (json!({"actions": {"heavy": true}}), 1),
+        (json!({"actions": {"heavy": false}}), 22),
+    ];
+    let mut tick = 0;
+    for (input, ticks) in plan {
+        requests.push(req(requests.len() as u64 + 1, "input", input));
+        let params = json!({"ticks": ticks});
+        requests.push(req(requests.len() as u64 + 1, "step", params));
+        tick += ticks;
+        if let (Some(trace), 100) = (trace, tick) {
+            let params = json!({"path": path_str(trace)});
+            requests.push(req(requests.len() as u64 + 1, "trace", params));
+        }
+    }
+    assert_eq!(tick, 212);
+}
+
+/// Pushes a request with the next id; returns its index in the replies.
+fn push(requests: &mut Vec<String>, method: &str, params: Value) -> usize {
+    requests.push(req(requests.len() as u64 + 1, method, params));
+    requests.len() - 1
+}
+
+/// The raw text of a reply's result, as written.
+fn raw_result(line: &str) -> &str {
+    let rest = &line[line.find(r#","result":"#).expect("a result") + 10..];
+    rest.strip_suffix('}')
+        .expect("the reply ends with the result")
+}
+
+/// `loom run --headless --scene <scene> --input <record> --frames <frames>`
+/// with `extra` arguments.
+fn replay(
+    scene: &std::path::Path,
+    record: &std::path::Path,
+    frames: u64,
+    extra: &[&std::path::Path; 2],
+) {
+    let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .args(["run", "--headless", "--scene"])
+        .arg(scene)
+        .arg("--input")
+        .arg(record)
+        .args(["--frames", &frames.to_string()])
+        .args(extra)
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("loom run can be started");
+    assert!(out.status.success(), "{out:?}");
+}
+
+#[test]
+fn state_after_a_poise_edit_equals_replaying_the_saved_scene_and_recording() {
+    let dir = test_dir("state_after_a_poise_edit_equals_replaying_the_saved_scene_and_recording");
+    let (scene, record, dump) = (
+        dir.join("poise70.scene.ron"),
+        dir.join("rec.ron"),
+        dir.join("dump.json"),
+    );
+    let mut requests = Vec::new();
+    play_to_212(&mut requests, None);
+    let before = push(&mut requests, "state", json!({}));
+    let edit = push(
+        &mut requests,
+        "edit_node",
+        json!({"path": "dummy_b", "props": {"poise": 70}}),
+    );
+    let after = push(&mut requests, "state", json!({}));
+    let save = push(
+        &mut requests,
+        "save_scene",
+        json!({"path": path_str(&scene)}),
+    );
+    let rec = push(&mut requests, "record", json!({"path": path_str(&record)}));
+    let source = push(&mut requests, "scene", json!({}));
+    let session = serve_raw(&requests);
+    assert_eq!(session.code, 0);
+    assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
+    let replies: Vec<Value> = session
+        .lines
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("JSON"))
+        .collect();
+    assert_eq!(*result(&replies[edit]), json!({"tick": 212}));
+    assert_eq!(*result(&replies[save]), json!({"path": path_str(&scene)}));
+    assert_eq!(
+        *result(&replies[rec]),
+        json!({"path": path_str(&record), "ticks": 212})
+    );
+
+    // By hand: light hits on ticks 110, 140 and 170 add impacts of 10 each,
+    // the heavy one on tick 212 adds 30 (no 60 ticks without a hit between
+    // them). With poise 25 the third light hit (30 > 25) staggers and
+    // clears the impacts, and the heavy one (30 > 25) staggers again. With
+    // poise 70 the impacts add up to 60: no stagger. Hp: 100 - 3 x 20 - 35.
+    let dummy_b = |i: usize| result(&replies[i])["game"]["hurtboxes"][1].clone();
+    assert_eq!(dummy_b(before)["node"], "dummy_b");
+    assert_eq!(
+        dummy_b(before)["health"],
+        json!({"hp": 5.0, "state": "stagger", "state_ticks": 30, "impact": 0.0, "impact_wait": 60})
+    );
+    assert_eq!(
+        dummy_b(after)["health"],
+        json!({"hp": 5.0, "state": "ok", "state_ticks": 0, "impact": 60.0, "impact_wait": 60})
+    );
+
+    let saved = fs::read_to_string(&scene).expect("the scene was saved");
+    assert_eq!(result(&replies[source])["source"], saved.as_str());
+    assert_eq!(result(&replies[source])["edited"], true);
+    assert!(saved.contains("(\"poise\", 70.0),"), "{saved}");
+
+    replay(
+        &scene,
+        &record,
+        212,
+        &[std::path::Path::new("--dump-state"), &dump],
+    );
+    let dumped: String = fs::read_to_string(&dump)
+        .expect("the state dump was written")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert_eq!(raw_result(&session.lines[after]), dumped);
+}
+
+#[test]
+fn failed_edit_replies_the_load_message_and_leaves_state_tick_and_scene_as_they_were() {
+    let mut requests = vec![
+        req(1, "input", json!({"axes": {"move_y": 1.0}})),
+        req(2, "step", json!({"ticks": 20})),
+    ];
+    let looks = ["state", "describe", "scene"];
+    for method in looks {
+        push(&mut requests, method, json!({}));
+    }
+    let edit = push(
+        &mut requests,
+        "edit_node",
+        json!({"path": "dummy_b", "props": {"poise": -1}}),
+    );
+    for method in looks {
+        push(&mut requests, method, json!({}));
+    }
+    // The same scene loaded as text: its message, after the load's own
+    // prefix.
+    let at = DEMO_SCENE
+        .find("\"dummy_b\"")
+        .expect("dummy_b is in the demo");
+    let (head, tail) = DEMO_SCENE.split_at(at);
+    let source = format!(
+        "{head}{}",
+        tail.replacen("(\"poise\", 25)", "(\"poise\", -1)", 1)
+    );
+    let load = push(&mut requests, "load_scene", json!({"source": source}));
+    let session = serve_raw(&requests);
+    assert_eq!(session.code, 0);
+    assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
+    for i in 0..looks.len() {
+        let (was, is) = (&session.lines[2 + i], &session.lines[edit + 1 + i]);
+        assert_eq!(raw_result(was), raw_result(is));
+    }
+    let reply: Value = serde_json::from_str(&session.lines[edit]).expect("JSON");
+    assert_eq!(error_code(&reply), -32602);
+    let message = reply["error"]["message"].as_str().expect("a message");
+    assert_eq!(
+        message,
+        r#"the node "dummy_b": prop "poise" must be at least 0, got -1"#
+    );
+    let loaded: Value = serde_json::from_str(&session.lines[load]).expect("JSON");
+    assert_eq!(
+        loaded["error"]["message"],
+        format!("invalid scene source: {message}")
+    );
+}
+
+#[test]
+fn node_ron_keeps_the_spawn_point_while_its_transform_follows_the_player() {
+    let replies = serve(&[
+        req(1, "input", json!({"axes": {"move_y": 1.0}})),
+        req(2, "step", json!({"ticks": 30})),
+        req(3, "node", json!({"path": "player"})),
+        req(4, "state", json!({})),
+        req(5, "node", json!({"path": "dummy_b/body"})),
+        req(6, "node", json!({"path": "dummy_b/nope"})),
+    ]);
+    let node = result(&replies[2]);
+    assert_eq!(node["path"], "player");
+    assert_eq!(node["children"], json!(["visor"]));
+    let ron = node["ron"].as_str().expect("ron is text");
+    assert!(
+        ron.starts_with("(\n    name: \"player\",\n    position: (0.0, 0.0, 0.0),\n"),
+        "{ron}"
+    );
+    assert!(!ron.contains("children"), "{ron}");
+    let now = &result(&replies[3])["nodes"]["player"];
+    assert_eq!(node["transform"], *now);
+    assert_ne!(now["position"], json!([0.0, 0.0, 0.0]));
+    assert_eq!(
+        *result(&replies[4]),
+        json!({
+            "path": "dummy_b/body",
+            "ron": "(\n    name: \"body\",\n    mesh: Capsule(\n        radius: 0.4,\n        height: 1.8,\n    ),\n    color: (0.45, 0.5, 0.6),\n)\n",
+            "children": [],
+            "transform": {"position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0]},
+        })
+    );
+    assert_eq!(error_code(&replies[5]), -32602);
+    assert_eq!(
+        replies[5]["error"]["message"],
+        r#"no node at "dummy_b/nope""#
+    );
+}
+
+#[test]
+fn added_dummy_with_hp_is_among_the_hurtboxes_after_the_rerun() {
+    let dummy = r#"(name: "dummy_d", position: (0.0, 0.0, -3.0),
+        props: [("hurt_radius", 0.4), ("hurt_height", 1.8), ("hp", 50)],
+        children: [(name: "body", mesh: Capsule(radius: 0.4, height: 1.8))])"#;
+    let replies = serve(&[
+        req(1, "step", json!({"ticks": 10})),
+        req(2, "add_node", json!({"parent": null, "ron": dummy})),
+        req(3, "state", json!({})),
+        req(4, "node", json!({"path": "dummy_d/body"})),
+        req(
+            5,
+            "add_node",
+            json!({"parent": "dummy_d", "index": 2, "ron": "(name: \"x\")"}),
+        ),
+        req(
+            6,
+            "add_node",
+            json!({"parent": "dummy_d", "ron": "(name: \"body\")"}),
+        ),
+    ]);
+    assert_eq!(*result(&replies[1]), json!({"tick": 10}));
+    let state = result(&replies[2]);
+    assert_eq!(state["tick"], 10);
+    let hurtboxes = state["game"]["hurtboxes"]
+        .as_array()
+        .expect("hurtboxes is a list");
+    let added = hurtboxes.last().expect("a hurtbox");
+    assert_eq!(added["node"], "dummy_d");
+    assert_eq!(added["health"]["hp"], 50.0);
+    assert_eq!(hurtboxes.len(), 5);
+    assert_eq!(
+        state["nodes"]["dummy_d"]["position"],
+        json!([0.0, 0.0, -3.0])
+    );
+    assert_eq!(result(&replies[3])["children"], json!([]));
+    assert_eq!(error_code(&replies[4]), -32602);
+    assert_eq!(
+        replies[4]["error"]["message"],
+        r#"index 2 is past the end: "dummy_d" has 1 children"#
+    );
+    // Rejected by the load's rules, in the load's words.
+    assert_eq!(error_code(&replies[5]), -32602);
+    let message = replies[5]["error"]["message"].as_str().expect("a message");
+    assert!(message.contains("\"dummy_d/body\""), "{message}");
+}
+
+#[test]
+fn removing_the_stake_leaves_no_swingers() {
+    let replies = serve(&[
+        req(1, "step", json!({"ticks": 5})),
+        req(2, "state", json!({})),
+        req(3, "remove_node", json!({"path": "stake"})),
+        req(4, "state", json!({})),
+        req(5, "remove_node", json!({"path": "stake"})),
+        req(6, "node", json!({"path": "stake/post"})),
+    ]);
+    let swingers = |i: usize| result(&replies[i])["game"]["swingers"].clone();
+    assert_eq!(swingers(1)[0]["node"], "stake");
+    assert_eq!(*result(&replies[2]), json!({"tick": 5}));
+    assert_eq!(swingers(3), json!([]));
+    assert_eq!(result(&replies[3])["tick"], 5);
+    assert!(result(&replies[3])["nodes"].get("stake/post").is_none());
+    assert_eq!(error_code(&replies[4]), -32602);
+    assert_eq!(replies[4]["error"]["message"], r#"no node at "stake""#);
+    assert_eq!(error_code(&replies[5]), -32602);
+}
+
+#[test]
+fn edit_scene_sets_the_ambient_light_and_refuses_to_change_the_game() {
+    let replies = serve(&[
+        req(1, "scene", json!({})),
+        req(2, "edit_scene", json!({"set": "ambient: (0.5, 0.5, 0.5)"})),
+        req(3, "scene", json!({})),
+        req(4, "edit_scene", json!({"set": "game: \"rogue\""})),
+        req(5, "edit_scene", json!({"set": "ambient: (0.5, 0.5)"})),
+        req(6, "describe", json!({})),
+    ]);
+    let before = result(&replies[0]);
+    assert_eq!(before["edited"], false);
+    let before = before["source"].as_str().expect("source is text");
+    assert!(
+        before.contains("\n    ambient: (0.2, 0.2, 0.25),\n"),
+        "{before}"
+    );
+    assert_eq!(*result(&replies[1]), json!({"tick": 0}));
+    let after = result(&replies[2]);
+    assert_eq!(after["edited"], true);
+    assert_eq!(
+        after["source"],
+        before.replace("ambient: (0.2, 0.2, 0.25)", "ambient: (0.5, 0.5, 0.5)")
+    );
+    assert_eq!(error_code(&replies[3]), -32602);
+    assert_eq!(
+        replies[3]["error"]["message"],
+        "edit_scene cannot change game"
+    );
+    assert_eq!(error_code(&replies[4]), -32602);
+    assert_eq!(
+        replies[4]["error"]["message"],
+        "set: 1:19: Expected a tuple of size 3 but found 2 elements instead"
+    );
+    assert_eq!(result(&replies[5])["game"], "souls");
+}
+
+#[test]
+fn reset_restarts_the_edited_scene_and_load_scene_drops_the_edit() {
+    let replies = serve(&[
+        req(1, "step", json!({"ticks": 10})),
+        req(
+            2,
+            "edit_node",
+            json!({"path": "player", "set": "position: (2.0, 0.0, -1.0)"}),
+        ),
+        req(3, "reset", json!({})),
+        req(4, "state", json!({})),
+        req(5, "describe", json!({})),
+        req(6, "load_scene", json!({})),
+        req(7, "describe", json!({})),
+        req(8, "state", json!({})),
+        req(9, "scene", json!({})),
+    ]);
+    assert_eq!(*result(&replies[1]), json!({"tick": 10}));
+    assert_eq!(*result(&replies[2]), json!({"tick": 0}));
+    let state = result(&replies[3]);
+    assert_eq!(state["tick"], 0);
+    assert_eq!(state["game"]["player"]["position"], json!([2.0, 0.0, -1.0]));
+    assert_eq!(result(&replies[4])["edited"], true);
+    assert_eq!(result(&replies[6])["edited"], false);
+    let state = result(&replies[7]);
+    assert_eq!(state["game"]["player"]["position"], json!([0.0, 0.0, 0.0]));
+    assert_eq!(result(&replies[8])["edited"], false);
+}
+
+#[test]
+fn edit_while_tracing_rewrites_the_trace_from_tick_0_as_the_replay_writes_it() {
+    let dir = test_dir("edit_while_tracing_rewrites_the_trace_from_tick_0_as_the_replay_writes_it");
+    let (served, scene, record, replayed) = (
+        dir.join("served.jsonl"),
+        dir.join("scene.ron"),
+        dir.join("rec.ron"),
+        dir.join("replayed.jsonl"),
+    );
+    let mut requests = Vec::new();
+    play_to_212(&mut requests, Some(&served));
+    let edit = push(
+        &mut requests,
+        "edit_node",
+        json!({"path": "dummy_b", "props": {"poise": 70}}),
+    );
+    push(
+        &mut requests,
+        "save_scene",
+        json!({"path": path_str(&scene)}),
+    );
+    push(&mut requests, "record", json!({"path": path_str(&record)}));
+    let stop = push(&mut requests, "trace", json!({}));
+    let session = serve_raw(&requests);
+    assert_eq!(session.code, 0);
+    assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
+    // No events from the rerun in any reply.
+    assert_eq!(raw_result(&session.lines[edit]), r#"{"tick":212}"#);
+    assert_eq!(
+        raw_result(&session.lines[stop]),
+        format!(r#"{{"path":{},"lines":213}}"#, json!(path_str(&served)))
+    );
+
+    replay(
+        &scene,
+        &record,
+        212,
+        &[std::path::Path::new("--trace"), &replayed],
+    );
+    let served = fs::read_to_string(&served).expect("the session traced");
+    let replayed = fs::read_to_string(&replayed).expect("the replay traced");
+    assert_eq!(served.lines().count(), 213);
+    assert_eq!(served, replayed);
+}
+
+#[test]
+fn edit_at_tick_0_swaps_the_scene_without_running_a_tick() {
+    let dir = test_dir("edit_at_tick_0_swaps_the_scene_without_running_a_tick");
+    let trace = dir.join("t.jsonl");
+    let replies = serve(&[
+        req(1, "trace", json!({"path": path_str(&trace)})),
+        req(
+            2,
+            "edit_node",
+            json!({"path": "player", "set": "position: (2.0, 0.0, -1.0)"}),
+        ),
+        req(3, "state", json!({})),
+        req(4, "trace", json!({})),
+    ]);
+    assert_eq!(*result(&replies[1]), json!({"tick": 0}));
+    let state = result(&replies[2]);
+    assert_eq!(state["tick"], 0);
+    assert_eq!(state["game"]["player"]["position"], json!([2.0, 0.0, -1.0]));
+    assert_eq!(
+        *result(&replies[3]),
+        json!({"path": path_str(&trace), "lines": 1})
+    );
+    let written = fs::read_to_string(&trace).expect("the trace was written");
+    let line: Value = serde_json::from_str(written.trim_end()).expect("one JSON line");
+    assert_eq!(line["tick"], 0);
+    assert_eq!(
+        line["state"]["game"]["player"]["position"],
+        json!([2.0, 0.0, -1.0])
+    );
 }

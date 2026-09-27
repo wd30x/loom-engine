@@ -13,6 +13,11 @@ pub fn bindings() -> ActionMap {
         .expect("the embedded demo bindings are valid (checked by a unit test)")
 }
 
+/// The text of the scene used without `--scene`.
+pub fn demo_scene_source() -> &'static str {
+    DEMO_SCENE
+}
+
 /// The scene used without `--scene`.
 pub fn demo_scene() -> Scene {
     Scene::parse(DEMO_SCENE).expect("the embedded demo scene is valid (checked by a unit test)")

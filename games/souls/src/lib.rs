@@ -14,7 +14,7 @@ mod game;
 mod health;
 mod moves;
 
-pub use demo::{bindings, demo_scene};
+pub use demo::{bindings, demo_scene, demo_scene_source};
 pub use events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
 pub use game::{
     ATTACK, CameraState, DEBUG_CATEGORIES, Game, GameError, GameState, HEAVY, HurtboxState, LOCK,

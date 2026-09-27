@@ -2,16 +2,21 @@
 //! `IMPLICIT_SOME`, so optional fields are written bare (`mesh: Cube`, not
 //! `mesh: Some(Cube)`). Every struct denies unknown fields: ron would
 //! otherwise silently ignore a misspelled one.
+//!
+//! Serializing these structs gives the canonical format
+//! (`docs/architecture.md` section 10, "规范格式"): fields in declaration
+//! order, absent optional fields and empty lists left out.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) type Triple = (f32, f32, f32);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SceneFile {
     pub version: u32,
     /// Which game runs the scene; `loom_scene` knows no game names.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub game: Option<String>,
     /// Path of the active camera node.
     pub camera: String,
@@ -20,41 +25,54 @@ pub(crate) struct SceneFile {
     pub nodes: Vec<NodeDesc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NodeDesc {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Triple>,
     /// YXZ Euler angles in degrees.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Triple>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub look_at: Option<Triple>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<Triple>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh: Option<MeshKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<Triple>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraDesc>,
-    pub light: Option<LightDesc>,
-    pub character: Option<CharacterDesc>,
-    pub orbit_camera: Option<OrbitCameraDesc>,
-    pub collider: Option<ColliderKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sprite: Option<SpriteDesc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tilemap: Option<TilemapDesc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light: Option<LightDesc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub character: Option<CharacterDesc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orbit_camera: Option<OrbitCameraDesc>,
     /// Numbers for the game to interpret, in file order. A list, not a map:
     /// ron silently keeps the last of two duplicate map keys.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub props: Vec<(String, f64)>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collider: Option<ColliderKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<NodeDesc>,
 }
 
 /// Static collision shapes, sized and placed by the node's transform.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum ColliderKind {
     /// Unit cube like `mesh: Cube`.
     Box,
 }
 
 /// Mesh shapes. The first three are unit sized; size them with `scale`.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub enum MeshKind {
     /// Edge 1, centered at the origin.
     Cube,
@@ -68,19 +86,21 @@ pub enum MeshKind {
     Capsule { radius: f32, height: f32 },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CameraDesc {
     /// Perspective: vertical field of view in degrees. Exactly one of
     /// `fov_y` and `ortho` is given.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fov_y: Option<f32>,
     /// Orthographic.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ortho: Option<OrthoDesc>,
     pub near: f32,
     pub far: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OrthoDesc {
     /// World length the view covers vertically; the width follows the
@@ -88,18 +108,18 @@ pub(crate) struct OrthoDesc {
     pub height: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SpriteDesc {
     /// Path of an Aseprite json-array sprite sheet.
     pub sheet: String,
     pub tag: String,
     /// Other tags the game may switch the sprite to while it runs.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternates: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TilemapDesc {
     /// Path of an Aseprite json-array sprite sheet.
@@ -110,14 +130,14 @@ pub(crate) struct TilemapDesc {
     pub rows: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LightDesc {
     pub color: Triple,
     pub intensity: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CharacterDesc {
     /// Meters per second.
@@ -126,7 +146,7 @@ pub(crate) struct CharacterDesc {
     pub turn_speed: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OrbitCameraDesc {
     /// Path (from a root) of the node with the `character` component.
@@ -142,4 +162,39 @@ pub(crate) struct OrbitCameraDesc {
     pub collision_radius: f32,
     /// Meters per second the camera moves back out once unblocked.
     pub return_speed: f32,
+}
+
+/// The fields `edit_node`'s `set` may give: the node's own, every one
+/// optional, plus `children` so it can be refused with its own message.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NodePatch {
+    pub name: Option<String>,
+    pub position: Option<Triple>,
+    pub rotation: Option<Triple>,
+    pub look_at: Option<Triple>,
+    pub scale: Option<Triple>,
+    pub mesh: Option<MeshKind>,
+    pub color: Option<Triple>,
+    pub camera: Option<CameraDesc>,
+    pub sprite: Option<SpriteDesc>,
+    pub tilemap: Option<TilemapDesc>,
+    pub light: Option<LightDesc>,
+    pub character: Option<CharacterDesc>,
+    pub orbit_camera: Option<OrbitCameraDesc>,
+    pub props: Option<Vec<(String, f64)>>,
+    pub collider: Option<ColliderKind>,
+    pub children: Option<ron::Value>,
+}
+
+/// The top-level fields `edit_scene`'s `set` may give, plus `version` and
+/// `game` so they can be refused with their own message.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScenePatch {
+    pub camera: Option<String>,
+    pub ambient: Option<Triple>,
+    pub version: Option<ron::Value>,
+    pub game: Option<ron::Value>,
+    pub nodes: Option<ron::Value>,
 }

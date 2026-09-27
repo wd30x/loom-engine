@@ -20,8 +20,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use loom_scene::{EditError, SceneDoc, Transform};
+
 use crate::debug;
 use crate::games::AnyEvent;
+use crate::output::ensure_parent_dir;
 use crate::report::RunAdapter;
 use crate::run::save_screenshot;
 use crate::sim::{LoadedScene, Sim};
@@ -53,6 +56,7 @@ pub(crate) fn serve(args: &ServeArgs) -> Result<()> {
     };
     let mut session = Session {
         sim,
+        edited: false,
         renderer: None,
         size: args.size,
         quit: false,
@@ -70,6 +74,8 @@ pub(crate) fn serve(args: &ServeArgs) -> Result<()> {
 
 struct Session {
     sim: Sim,
+    /// The scene was edited since it was loaded (`describe`'s `edited`).
+    edited: bool,
     /// Created by the first `screenshot`; a session without one never
     /// touches the GPU.
     renderer: Option<Renderer>,
@@ -132,6 +138,7 @@ impl Session {
                         tick: self.tick(),
                         game: self.sim.game().name(),
                         scene: self.sim.scene_path(),
+                        edited: self.edited,
                         actions,
                         axes,
                     },
@@ -156,6 +163,7 @@ impl Session {
                     .pass_trace_to(&mut sim)
                     .map_err(ServeError::Engine)?;
                 self.sim = sim;
+                self.edited = false;
                 reply(
                     id,
                     LoadSceneResult {
@@ -292,6 +300,65 @@ impl Session {
                     }
                 }
             }
+            "scene" => {
+                let NoParams {} = parse_params(params)?;
+                reply(
+                    id,
+                    SceneResult {
+                        source: self.doc()?.to_ron(),
+                        edited: self.edited,
+                    },
+                )
+            }
+            "node" => {
+                let PathParams { path } = parse_params(params)?;
+                let (ron, children) = self.doc()?.node_ron(&path).map_err(invalid)?;
+                let scene = self.sim.game().scene();
+                let node = scene
+                    .find(&path)
+                    .context("the scene is built from the document, node for node")
+                    .map_err(ServeError::Engine)?;
+                reply(
+                    id,
+                    NodeResult {
+                        transform: scene.transform(node),
+                        path,
+                        ron,
+                        children,
+                    },
+                )
+            }
+            "edit_node" => {
+                let EditNodeParams {
+                    path,
+                    set,
+                    unset,
+                    props,
+                } = parse_params(params)?;
+                self.edit(|doc| doc.edit_node(&path, set.as_deref(), &unset, &props))?;
+                reply(id, TickResult { tick: self.tick() })
+            }
+            "add_node" => {
+                let AddNodeParams { parent, index, ron } = parse_params(params)?;
+                self.edit(|doc| doc.add_node(parent.as_deref(), index, &ron))?;
+                reply(id, TickResult { tick: self.tick() })
+            }
+            "remove_node" => {
+                let PathParams { path } = parse_params(params)?;
+                self.edit(|doc| doc.remove_node(&path))?;
+                reply(id, TickResult { tick: self.tick() })
+            }
+            "edit_scene" => {
+                let EditSceneParams { set } = parse_params(params)?;
+                self.edit(|doc| doc.edit_scene(&set))?;
+                reply(id, TickResult { tick: self.tick() })
+            }
+            "save_scene" => {
+                let SaveSceneParams { path } = parse_params(params)?;
+                let source = self.doc()?.to_ron();
+                let saved = save_text(&path, &source).map_err(ServeError::Engine)?;
+                reply(id, SavedResult { path: saved })
+            }
             "quit" => {
                 let NoParams {} = parse_params(params)?;
                 self.quit = true;
@@ -307,6 +374,35 @@ impl Session {
 
     fn tick(&self) -> u64 {
         self.sim.game().clock().tick()
+    }
+
+    /// The current scene as a document: its text as loaded, or as the last
+    /// edit wrote it.
+    fn doc(&self) -> Result<SceneDoc, ServeError> {
+        let source = self
+            .sim
+            .scene_source()
+            .unwrap_or_else(|| souls::demo_scene_source());
+        SceneDoc::parse(source)
+            .context("the current scene's text parses: it was loaded from it")
+            .map_err(ServeError::Engine)
+    }
+
+    /// One edit (`docs/architecture.md` section 13, "运行中编辑"): `change`
+    /// the document, load its canonical text like any scene, run it from
+    /// tick 0 to the current tick on the recorded input, and only then
+    /// replace the session. A failed change or load changes nothing.
+    fn edit(
+        &mut self,
+        change: impl FnOnce(&mut SceneDoc) -> Result<(), EditError>,
+    ) -> Result<(), ServeError> {
+        let mut doc = self.doc()?;
+        change(&mut doc).map_err(invalid)?;
+        let source = doc.to_ron();
+        let loaded = LoadedScene::from_source(&source).map_err(ServeError::InvalidParams)?;
+        self.sim = self.sim.rerun(loaded, source).map_err(ServeError::Engine)?;
+        self.edited = true;
+        Ok(())
     }
 
     /// A fresh session on the current scene, from the text it was loaded
@@ -357,6 +453,20 @@ fn sim_from_file(path: &Path) -> Result<Sim> {
         Some(path.display().to_string()),
         Some(source),
     ))
+}
+
+/// Writes `text` to `path`, creating parent directories. Returns the path
+/// as given.
+fn save_text(path: &Path, text: &str) -> Result<String> {
+    ensure_parent_dir(path)?;
+    std::fs::write(path, text).with_context(|| format!("writing scene {}", path.display()))?;
+    log::info!("scene saved to {}", path.display());
+    Ok(path.display().to_string())
+}
+
+/// An edit's own error (path, field, fragment) as a params error.
+fn invalid(e: EditError) -> ServeError {
+    ServeError::InvalidParams(anyhow!(e))
 }
 
 /// A session on scene text given inline.
@@ -587,6 +697,45 @@ struct RecordParams {
     path: PathBuf,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathParams {
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditNodeParams {
+    path: String,
+    set: Option<String>,
+    #[serde(default)]
+    unset: Vec<String>,
+    /// A number sets or adds the prop, `null` removes it.
+    #[serde(default)]
+    props: BTreeMap<String, Option<f64>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddNodeParams {
+    /// `None` (or `null`): a root node.
+    parent: Option<String>,
+    index: Option<usize>,
+    ron: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditSceneParams {
+    set: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveSceneParams {
+    path: PathBuf,
+}
+
 /// A path starts a trace; none stops it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -603,6 +752,8 @@ struct Describe<'a> {
     /// The current scene's game.
     game: &'static str,
     scene: Option<String>,
+    /// The scene was edited since it was loaded.
+    edited: bool,
     /// Sorted by name.
     actions: Vec<&'a str>,
     /// Sorted by name.
@@ -659,6 +810,29 @@ struct ScreenshotResult {
 struct RecordResult {
     path: String,
     ticks: u64,
+}
+
+#[derive(Serialize)]
+struct SceneResult {
+    /// The canonical text of the current scene.
+    source: String,
+    edited: bool,
+}
+
+#[derive(Serialize)]
+struct NodeResult<'a> {
+    path: String,
+    /// The node as the scene file writes it, without its children.
+    ron: String,
+    /// The names of its children, in order.
+    children: Vec<String>,
+    /// Its local transform as the game has set it now.
+    transform: &'a Transform,
+}
+
+#[derive(Serialize)]
+struct SavedResult {
+    path: String,
 }
 
 #[derive(Serialize)]

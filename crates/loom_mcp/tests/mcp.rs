@@ -184,11 +184,18 @@ fn tools_forward_to_loom_serve_and_keep_its_numbers_exact() {
     assert_eq!(
         names,
         [
+            "add_node",
             "describe",
+            "edit_node",
+            "edit_scene",
             "input",
             "load_scene",
+            "node",
             "record",
+            "remove_node",
             "reset",
+            "save_scene",
+            "scene",
             "screenshot",
             "state",
             "step",
@@ -304,5 +311,45 @@ fn screenshot_tool_takes_debug_draw_as_true_or_names_and_forwards_it() {
         text.starts_with(r#"error -32602: unknown debug draw category "hitboxes""#),
         "{text}"
     );
+    assert_eq!(mcp.close(), 0);
+}
+
+#[test]
+fn edit_tools_forward_props_with_null_and_a_root_node_without_parent() {
+    let loom = loom_exe();
+    let mut mcp = Mcp::start(&loom);
+    assert!(!mcp.call("step", json!({"ticks": 5})).0);
+    // A number changes a prop, null removes one.
+    let props = json!({"path": "dummy_b", "props": {"poise": 70, "lock_height": null}});
+    assert_eq!(
+        mcp.call("edit_node", props.clone()),
+        (false, r#"{"tick":5}"#.to_owned())
+    );
+    let box_ron = r#"(name: "box", position: (0.0, 0.5, 2.0), mesh: Cube)"#;
+    assert_eq!(
+        mcp.call("add_node", json!({"ron": box_ron})),
+        (false, r#"{"tick":5}"#.to_owned())
+    );
+    let (is_error, node) = mcp.call("node", json!({"path": "dummy_b"}));
+    assert!(!is_error, "{node}");
+    let direct = serve_result(
+        &loom,
+        &[
+            json!(["step", {"ticks": 5}]),
+            json!(["edit_node", props]),
+            json!(["add_node", {"parent": null, "ron": box_ron}]),
+            json!(["node", {"path": "dummy_b"}]),
+        ],
+    );
+    assert_eq!(node, direct);
+    assert!(node.contains(r#"(\"poise\", 70.0),"#), "{node}");
+    assert!(!node.contains(r#"\"lock_height\""#), "{node}");
+    let (is_error, scene) = mcp.call("scene", json!({}));
+    assert!(!is_error, "{scene}");
+    assert!(scene.contains(r#"name: \"box\""#), "{scene}");
+
+    let (is_error, text) = mcp.call("edit_scene", json!({"set": "game: \"rogue\""}));
+    assert!(is_error, "{text}");
+    assert_eq!(text, "error -32602: edit_scene cannot change game");
     assert_eq!(mcp.close(), 0);
 }

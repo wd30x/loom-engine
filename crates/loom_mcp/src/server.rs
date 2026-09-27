@@ -26,7 +26,11 @@ same calls always give the same results. `record` writes the input so far as a s
 same state, which makes a regression test. `step` also returns the events of the ticks it \
 ran (hits, dropped presses, actions starting and ending, ...); `trace` writes every tick's events \
 and full state to a JSONL file; `screenshot` can overlay debug wireframes (`debug_draw`: hit \
-shapes, attack sectors, colliders, lock-on). Relative paths are relative to the repository root.";
+shapes, attack sectors, colliders, lock-on). `scene` and `node` show the scene file; \
+`edit_node`, `add_node`, `remove_node` and `edit_scene` change it, and after each edit the \
+session runs again from tick 0 to the current tick on the recorded input; `save_scene` writes \
+the edited scene, which with `record`'s script replays to the same state. Relative paths are \
+relative to the repository root.";
 
 /// The first line of a result after the previous session died.
 const NEW_SESSION_NOTE: &str = "note: new loom session, tick starts at 0";
@@ -112,6 +116,62 @@ pub struct TraceArgs {
     pub path: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NodeArgs {
+    /// Node path, names joined by "/" from a root node, e.g. "dummy_b/body".
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditNodeArgs {
+    /// Node path, names joined by "/" from a root node, e.g. "dummy_b/body".
+    pub path: String,
+    /// Fields to replace, written as in the scene file, e.g.
+    /// "position: (1.0, 0.0, 2.0), color: (1.0, 0.0, 0.0)". `props` given here replaces the
+    /// whole list; `children` cannot be given (use add_node and remove_node).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<String>,
+    /// Optional fields to remove, e.g. ["mesh", "look_at"]. Not name, props or children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unset: Option<Vec<String>>,
+    /// Props to merge, by name: a number changes the prop or adds it at the end, null removes
+    /// it. Applied after set and unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<BTreeMap<String, Option<f64>>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddNodeArgs {
+    /// Path of the parent node; omit it (or null) to add a root node.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// Position among the siblings, from 0. Default: last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    /// The node as written in the scene file, children included, e.g.
+    /// "(name: \"box\", position: (0.0, 0.5, 0.0), mesh: Cube)".
+    pub ron: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditSceneArgs {
+    /// Top-level fields to replace, written as in the scene file: `camera` (a node path) and
+    /// `ambient`, e.g. "ambient: (0.5, 0.5, 0.5)". Not version, game or nodes.
+    pub set: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SaveSceneArgs {
+    /// Scene file (RON) to write, relative to the repository root; parent directories are
+    /// created.
+    pub path: String,
+}
+
 #[tool_router]
 impl LoomServer {
     pub fn new(bridge: Bridge) -> Self {
@@ -122,7 +182,8 @@ impl LoomServer {
     }
 
     /// Describe the session: tick rate (60 Hz), current tick, scene path (null for the
-    /// built-in or inline scene), and the names of the input actions and axes, sorted.
+    /// built-in or inline scene), whether the scene was edited since it was loaded, and the
+    /// names of the input actions and axes, sorted.
     #[tool]
     async fn describe(&self) -> Result<CallToolResult, McpError> {
         Ok(self.forward("describe", Map::new()).await)
@@ -139,7 +200,8 @@ impl LoomServer {
         Ok(self.forward("load_scene", to_params(&args)).await)
     }
 
-    /// Restart the current scene at tick 0, clearing the held input and the recording.
+    /// Restart the current scene at tick 0, clearing the held input and the recording. An
+    /// edited scene restarts as edited.
     #[tool]
     async fn reset(&self) -> Result<CallToolResult, McpError> {
         Ok(self.forward("reset", Map::new()).await)
@@ -236,6 +298,77 @@ impl LoomServer {
         Parameters(args): Parameters<TraceArgs>,
     ) -> Result<CallToolResult, McpError> {
         Ok(self.forward("trace", to_params(&args)).await)
+    }
+
+    /// The current scene file as text, in canonical form (comments are not kept), and whether
+    /// it was edited since it was loaded.
+    #[tool]
+    async fn scene(&self) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("scene", Map::new()).await)
+    }
+
+    /// One node: `ron`, the node as the scene file writes it (without its children), the
+    /// names of its children, and `transform`, its local transform as the game has set it now
+    /// (the two can differ: a character's file position is where it starts).
+    #[tool]
+    async fn node(
+        &self,
+        Parameters(args): Parameters<NodeArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("node", to_params(&args)).await)
+    }
+
+    /// Change a node of the scene file: `set`, then `unset`, then `props`. The edited scene is
+    /// checked like a loaded one, then run again from tick 0 to the current tick on the input
+    /// recorded so far; the held input and the recording stay. If anything fails, nothing
+    /// changes. Returns the tick, unchanged.
+    #[tool]
+    async fn edit_node(
+        &self,
+        Parameters(args): Parameters<EditNodeArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("edit_node", to_params(&args)).await)
+    }
+
+    /// Add a node (with any children) to the scene file, then run again from tick 0 like
+    /// edit_node.
+    #[tool]
+    async fn add_node(
+        &self,
+        Parameters(args): Parameters<AddNodeArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("add_node", to_params(&args)).await)
+    }
+
+    /// Remove a node and its whole subtree from the scene file, then run again from tick 0
+    /// like edit_node.
+    #[tool]
+    async fn remove_node(
+        &self,
+        Parameters(args): Parameters<NodeArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("remove_node", to_params(&args)).await)
+    }
+
+    /// Change the scene file's top-level `camera` or `ambient`, then run again from tick 0
+    /// like edit_node.
+    #[tool]
+    async fn edit_scene(
+        &self,
+        Parameters(args): Parameters<EditSceneArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("edit_scene", to_params(&args)).await)
+    }
+
+    /// Write the current scene file, edits included, in canonical form. With the script
+    /// `record` writes, `loom run --headless --scene <path> --input <script> --frames <tick>
+    /// --dump-state <file>` replays to the current state.
+    #[tool]
+    async fn save_scene(
+        &self,
+        Parameters(args): Parameters<SaveSceneArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("save_scene", to_params(&args)).await)
     }
 }
 

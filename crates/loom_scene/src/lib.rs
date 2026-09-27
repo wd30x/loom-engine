@@ -9,6 +9,9 @@
 //! The tree is simulation state: its structure is fixed after parsing, only
 //! transforms change.
 
+mod doc;
+#[cfg(test)]
+mod doc_tests;
 mod file;
 
 use std::collections::BTreeSet;
@@ -16,6 +19,7 @@ use std::collections::BTreeSet;
 use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use serde::Serialize;
 
+pub use doc::{EditError, SceneDoc};
 pub use file::MeshKind;
 use file::{
     CameraDesc, ColliderKind, NodeDesc, OrbitCameraDesc, SceneFile, SpriteDesc, TilemapDesc, Triple,
@@ -353,9 +357,12 @@ impl Scene {
     /// `docs/architecture.md` section 10. Semantic errors name the node by
     /// path; the caller adds the file path.
     pub fn parse(src: &str) -> Result<Self, SceneError> {
-        let options = ron::Options::default()
-            .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
-        let file: SceneFile = options.from_str(src)?;
+        SceneDoc::parse(src)?.build()
+    }
+
+    /// Validates a parsed scene file and builds the scene from it: the
+    /// part of [`Scene::parse`] after the RON syntax.
+    pub(crate) fn from_file(file: &SceneFile) -> Result<Self, SceneError> {
         if file.version != VERSION {
             return Err(SceneError::UnsupportedVersion(file.version));
         }
@@ -383,7 +390,7 @@ impl Scene {
             colliders: builder.colliders,
             sprite_nodes: builder.sprite_nodes,
             ambient,
-            game: file.game,
+            game: file.game.clone(),
         };
         // The target is a path from a root, resolved once the whole tree
         // exists: it may name a node that comes later in the file.
@@ -413,9 +420,9 @@ impl Scene {
             scene.orbit_camera = Some(id);
         }
         scene.camera = match scene.find(&file.camera) {
-            None => return Err(SceneError::CameraNotFound(file.camera)),
+            None => return Err(SceneError::CameraNotFound(file.camera.clone())),
             Some(id) if scene.node(id).camera.is_none() => {
-                return Err(SceneError::NotACamera(file.camera));
+                return Err(SceneError::NotACamera(file.camera.clone()));
             }
             Some(id) => id,
         };
