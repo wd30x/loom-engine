@@ -429,6 +429,7 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `name` | 字符串 | 必填 | `^[a-z][a-z0-9_]*$`；同一父节点下不能重名 |
+| `display_name` | 字符串 | 无 | 给人看的名字（E6.2 起），例如 Boss 血条上的名字。引擎不解释，只要求不是空字符串（报错 `the node "<路径>": display_name must not be empty`）；游戏自己决定能用哪些字符。规范格式里写在 `name` 后面 |
 | `position` | `(x, y, z)` | `(0, 0, 0)` | 在父节点空间里 |
 | `rotation` | `(x, y, z)` 度 | `(0, 0, 0)` | YXZ 欧拉角（第 5 节） |
 | `look_at` | `(x, y, z)` | 无 | 让节点的 -Z 指向父节点空间里的这个点，+Y 朝上。**不能和 `rotation` 同时写** |
@@ -2171,6 +2172,32 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 3. Boss 血条；
 4. 锁定点。
 
+**文字和图标**（E6.2 起）：
+- **图标**：
+  - `hud_sheets()` 声明 `assets/art/souls_hud.json`，里面两个 tag：`flask`（金色小瓶子）、`soul`（淡色的魂）；
+  - 每个 16×16，用 Aseprite MCP 画，`.aseprite` 源文件一起提交。
+- **原素瓶**（左下角）：
+  - 图标 `flask` 在 `(40, 720 - 72)`，`scale` 2（32×32）；
+  - 瓶数的文字在 `(80, 720 - 63)`，`scale` 2，颜色 `(0.95, 0.92, 0.85, 1)`；
+  - 瓶数是 0 时，图标的 `color` 是 `(0.35, 0.35, 0.35, 1)`，看起来是空瓶；其余时候是白色。
+- **魂**（右下角）：
+  - 数字右对齐，右端在 `W - 40`：文字的 `at.x = W - 40 - text_width`，`y = 720 - 63`，颜色同瓶数；
+  - 图标 `soul` 在数字左边 8 个单位：`(at.x - 8 - 32, 720 - 72)`，`scale` 2；
+  - 0 个魂也照常显示 `0`。
+- **Boss 名字**：
+  - 写了 `boss_bar` 1 的敌人，如果节点有 `display_name`，名字画在它的 Boss 血条上面：`(血条的 x, 血条的 y - 20)`，`scale` 2，颜色 `(0.9, 0.88, 0.8, 1)`；
+  - 没有 `display_name` 就只画条。
+  - Boss 血条每个往上挪的距离从 30 改成 **40**，给名字留地方。
+  - 校验：写了 `boss_bar` 1 的敌人，`display_name` 里只能有 32 到 126 的字符，否则报 `the node "<路径>": display_name has a character the HUD font lacks: '<字符>'`。这条检查接在节点检查的最后。
+- Boss 场景的 Boss 写 `display_name: "Iudex Gundyr"`。
+- **画的顺序**：
+  1. 血条；
+  2. 耐力条；
+  3. 每个 Boss 的血条，然后是它的名字；
+  4. 原素瓶；
+  5. 魂；
+  6. 锁定点。
+
 **已知限制**（E6.1）：
 - Boss 血条没有延迟条。
 - HUD 的大小跟着画面高度缩放；截图不是 720 高时，条的边缘可能落在半个像素上。
@@ -2353,7 +2380,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 | `input` | `{"actions":{"名字":true/false},"axes":{"名字":数值}}`，两项都可以省略 | 设置**保持的输入**（电平语义，和输入脚本一样），从下一个 tick 起生效，直到再次修改。没提到的动作和轴不变。轴的值按 `canonical_axis_value` 规范化（`-0.0` 变成 `0.0`）。result 是修改后的完整输入：`{"actions":[按下的动作，排序],"axes":{非零的轴}}` |
 | `step` | `{"ticks":N}`，N ≥ 1，省略为 1 | 用保持的输入跑 N 个 tick。`{"tick":跑完之后的tick,"events":[...]}`。`events`（E5.1 起）是这 N 个 tick 里发出的全部事件，按先后排列，每个事件在 `type` 前面多一个 `tick` 字段：`{"tick":57,"type":"hit",…}` |
 | `state` | 无 | 状态导出的内容（第 6 节），作为 JSON 值，不是字符串 |
-| `screenshot` | `{"path":"...","size":[W,H],"debug_draw":…}`，`size`、`debug_draw` 可以省略 | 把**当前状态**渲染成 PNG（自动创建父目录）。`debug_draw`（E5.2 起）是 `true`（全部类别）、类别名的数组或 `false`，省略就是 `false`，规则同 `--debug-draw`（第 16 节）；类别名写错回复 -32602。`{"path":...,"size":[W,H],"adapter":{...},"render_ms":毫秒}` |
+| `screenshot` | `{"path":"...","size":[W,H],"debug_draw":…,"hud":…}`，`size`、`debug_draw`、`hud` 可以省略 | 把**当前状态**渲染成 PNG（自动创建父目录）。`debug_draw`（E5.2 起）是 `true`（全部类别）、类别名的数组或 `false`，省略就是 `false`，规则同 `--debug-draw`（第 16 节）；类别名写错回复 -32602。`hud`（E6.1 起）是 `true` 或 `false`，省略就是 `true`（第 18 节）。`{"path":...,"size":[W,H],"adapter":{...},"render_ms":毫秒}` |
 | `record` | `{"path":"..."}` | 把从上次 `load_scene`/`reset`（或启动）以来的输入写成输入脚本，规范形式和 `--record` 相同。`{"path":...,"ticks":当前tick}` |
 | `trace` | `{"path":"..."}` 开始，`{}` 停止（E5.1 起） | 开始：把轨迹（第 6 节「轨迹」）写进 `path`（自动创建父目录，已有的文件清空），立刻写一行当前 tick，这一行的 `events` 是当前 tick 发出的事件（tick 0 是 `[]`）；之后每跑一个 tick 写一行。已经在写别的文件时，先停掉那个。result `{"path":…,"tick":当前tick}`。停止：写完并关闭，result `{"path":停掉的路径或null,"lines":写了几行}`。`load_scene`、`reset` 时文件清空，从新的 tick 0 重新写；`quit` 和适配程序退出时写完关闭 |
 | `scene` | 无 | 当前场景的规范格式全文（E5.3 起）：`{"source":"RON 文本","edited":是否编辑过}` |
@@ -2436,6 +2463,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 - **工具**：每个 serve 方法对应一个 MCP 工具，名字和方法相同。
   - `describe`、`load_scene`、`reset`、`input`、`step`、`state`、`screenshot`、`record`，E5.1 起加 `trace`（参数 `path` 可以省略，省略就是停止）。
   - E5.2 起 `screenshot` 多一个可选参数 `debug_draw`，同 serve。
+  - E6.2 起 `screenshot` 多一个可选参数 `hud`，同 serve（第 18 节）。
   - E5.3 起加 `scene`、`node`、`edit_node`、`add_node`、`remove_node`、`edit_scene`、`save_scene`。
   - E5.4 起加 `schema`。
   - **没有 `quit`**：子进程的生命周期由适配程序管理。
@@ -2820,3 +2848,46 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 - **smoke 的 H4**：两个后端都加 `--no-hud` 比较。
 - **报告的 `hud`**：反映的是开关，和 `debug_draw` 一样。游戏什么都不画时也是 `true`。
 - **MCP 的 `screenshot` 工具**：E6.1 时还没有 `hud` 参数，总是带 HUD；E6.2 补上透传。
+
+### 文字和图片（E6.2 起）
+
+用户决定（2026-09-27）：
+- **像素字体**：5×7 的字形放在 6×8 的格子里，带完整 ASCII（大小写、数字、标点），HUD 里放大 2 倍，字高 14。
+- **Boss 名字来自节点的新字段** `display_name`（第 10 节）。
+- **原素瓶和魂用小图标加数字**，图标和字体一样用 Aseprite 画。
+
+**字体**：引擎自带一张字形图，属于引擎，不属于哪个游戏。
+- 文件：
+  - `assets/fonts/loom_5x7.aseprite`：源文件；
+  - `assets/fonts/loom_5x7.json`、`.png`：导出，第 14 节的 `json-array` 格式，只有 1 帧。
+  - 用 Aseprite MCP 画，PNG 和 `.aseprite` 走 LFS（`.gitattributes` 已覆盖 `assets/**`）。
+- 布局：
+  - 整张图 96×48，16 列 6 行，每格 6×8；
+  - 字符码 `c`（32 到 126）在第 `(c - 32) % 16` 列、第 `(c - 32) / 16` 行；最后一格（127）空着；
+  - 字形占格子左上角的 5×7，第 6 列和第 8 行空着，就是字间距和行间距；
+  - 字形是白色不透明，其余全透明。
+- **读取**：`loom run`、serve 启动时，按第 14 节的规则读一次，路径相对当前工作目录。
+  - 不论画不画 HUD 都读；`loom view` 不读。
+  - 另外检查图片是 96×48，否则报错 `the HUD font assets/fonts/loom_5x7.json: <原因>`，退出码同场景错误。
+
+**新的绘制项**（`loom_core::hud::HudItem`）：
+- `Text { at: Vec2, scale: f32, color: Vec4, text: String }`：
+  - `at` 是第一个字的格子左上角；
+  - 每个字前进 `6 × scale`，不换行；
+  - 字形像素的颜色是 `color`；
+  - 32 到 126 以外的字符画成 `?`。
+  - `Hud::text_width(text, scale)`：`(6 × 字数 - 1) × scale`，0 个字时是 0。用来右对齐。
+- `Image { sheet: &'static str, tag: &'static str, at: Vec2, scale: f32, color: Vec4 }`：
+  - 画 sheet 里这个 tag 的第一帧，左上角在 `at`，每个贴图像素占 `scale` 个 HUD 单位；
+  - 颜色是贴图颜色乘以 `color`，传白色就是原色。
+- **图片要先声明**：
+  - 游戏提供 `hud_sheets() -> &'static [(&'static str, &'static [&'static str])]`，列出 sheet 路径和用到的 tag；
+  - 引擎在加载场景时按第 14 节的规则读它们、检查 tag。
+  - 画的时候遇到没声明的 sheet 或 tag，这一项不画，打一条 `error` 日志；测试保证游戏不会这样用。
+- 文字和图片都照 sprite 的做法：
+  - 用 `textureLoad` 直接取像素；
+  - alpha < 0.5 的片元丢掉，其余的颜色是 `texel.rgb × color.rgb`、alpha 是 `color.a`，再照常混合。
+- 和矩形、圆点混在同一个列表里，按顺序画。
+- 想让字形像素落在整数个屏幕像素上，`at` 和 `scale` 要让 `HUD 单位 × 高 / 720` 是整数。1280×720 时，`at` 取整数、`scale` 取 2 就行。
+
+**MCP**：`loom-mcp` 的 `screenshot` 工具加 `hud` 参数，透传给 serve，规则同 serve（第 13 节）。
