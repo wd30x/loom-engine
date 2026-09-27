@@ -453,6 +453,11 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
   - 节点没有 `mesh` 时返回错误：`the node "<路径>" has no mesh`；
   - 颜色的分量必须有限、在 0 到 1 之间（和场景文件的 `color` 同一条规则），否则返回错误：`the node "<路径>": mesh color components must be between 0 and 1, got [r, g, b]`（glam `Vec3` 的 Display 格式）；
   - 出错时不改任何东西。颜色是模拟状态的一部分（游戏在 tick 里改），但不进状态导出的 `nodes`。
+- **运行中隐藏**（G3.3 起）：游戏用 `Scene::set_visible(id, bool)` 隐藏或重新显示一个节点。
+  - 隐藏的节点和它的**整个子树**都不画，网格、精灵、瓦片地图都算。`Scene::is_drawn(id)` 返回「自己和所有祖先都可见」，`loom_engine` 收集绘制项时用它过滤。
+  - 只影响画不画：变换、组件、碰撞体都照旧。相机、光源节点被隐藏也照常起作用。
+  - 场景文件里没有对应的字段，加载时所有节点都可见。和颜色一样，可见性是模拟状态的一部分，但不进状态导出的 `nodes`。
+  - 不会失败，没有返回值。
 
 ### 热重载
 
@@ -544,7 +549,8 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 - `camera.distance`（G1.7 起）：`cam_distance`，相机当前离 `pivot` 的距离
 - `player` 的 `stamina`、`stamina_wait`、`action`、`action_tick`、`invulnerable`（G2.1 起）见下文「耐力、翻滚、冲刺」
 - `game.lock`（G3.1 起，在 `camera` 后面）见下文「锁定」
-- `game.hurtboxes`（G3.2 起，在 `lock` 后面）见下文「命中判定」
+- `game.hurtboxes`（G3.2 起，在 `lock` 后面）见下文「命中判定」；每项的 `health`（G3.3 起）见下文「血量、韧性、死亡」
+- G3.3 起第 0 步和第 1 步之间多一个第 0b 步（受伤方的计时），见下文「血量、韧性、死亡」
 
 ### 耐力、翻滚、冲刺（G2.1 起）
 
@@ -768,7 +774,7 @@ attack_tick(a):                                           // S、A、R 是 a 的
 **锁定目标**：带 prop `lock_height` 的节点（第 10 节的 `props`）。锁定点在节点位置上方 `lock_height` 米处，相机对准的是这个点。
 - 目标必须是**根节点**，并且不能是相机节点。每个 tick 从场景读它的位置（G3.1 的目标不会动，G4 的敌人会动）。
 - 目标的先后顺序是场景的先序。「相等时取先出现的」都按这个顺序。
-- 角色节点之外的节点，props 只认 `lock_height`（G3.2 起还有 `hurt_radius`、`hurt_height`，见下文「命中判定」），写了别的名字就报错（防拼写错误）。
+- 角色节点之外的节点，props 只认 `lock_height`（G3.2 起还有 `hurt_radius`、`hurt_height`，见下文「命中判定」；G3.3 起还有 `hp` 等 5 个，见「血量、韧性、死亡」），写了别的名字就报错（防拼写错误）。
 - 演示场景里放了三个假人 `dummy_a`、`dummy_b`、`dummy_c`：
   - 根节点带 `lock_height`；
   - 子节点 `body` 是胶囊体网格，子节点 `block` 是挡路的 `collider: Box`（角色不能穿过假人）。
@@ -855,7 +861,7 @@ if lock == null {
 
 acquire():                                    // 离视线方向最近的
     best = null
-    for t in 目标（先序）:
+    for t in 目标（先序）:                     // G3.3 起跳过死掉的目标
         d = hdist(position, t)
         if d == 0.0 || d > lock_range: continue
         a = |wrap(bearing(position, t) - yaw)|    // yaw 是本 tick 开始时的值
@@ -866,7 +872,7 @@ acquire():                                    // 离视线方向最近的
 switch_target(side):                          // 那一侧离当前目标方向最近的
     cur = bearing(position, lock)
     best = null
-    for t in 目标（先序），t != lock:
+    for t in 目标（先序），t != lock:          // G3.3 起跳过死掉的目标
         d = hdist(position, t)
         if d == 0.0 || d > lock_range: continue
         δ = wrap(bearing(position, t) - cur)       // 正数在左边，负数在右边
@@ -906,7 +912,7 @@ if lock != null {
 - **不检查视线**：隔着柱子也能锁定，被挡住也不解锁。
 - 目标之间方向完全相同（`δ == 0`，一个挡在另一个正后方）时，后面那个换不过去。
 - 画面上没有锁定标记（要有 HUD 或者额外的标记节点），目前在状态导出的 `lock` 里看。
-- 目标不会死，所以不会因为目标死亡而解锁。这是 G3.3 的事。
+- 目标不会死，所以不会因为目标死亡而解锁。G3.3 起会了，见下文「血量、韧性、死亡」。
 
 ### 命中判定（G3.2 起）
 
@@ -970,7 +976,7 @@ if lock != null {
     half = arc * 0.5
     lo   = -half + (k - 1) as f32 * slice                     // 本 tick 扫过的一段，相对 facing，正数在左
     hi   = -half + k as f32 * slice
-    for h in 受击判定（先序），h 不在 struck 里:
+    for h in 受击判定（先序），h 不在 struck 里:          // G3.3 起还要跳过死掉的
         if swept(position, facing, reach, lo, hi, h) {
             h.hits += 1; h.last_hit = { tick, attack: a, combo }
             struck 加上 h
@@ -1000,13 +1006,14 @@ ray(θ):                                                        // 从 p 出发�
 - 命中检查用滑动**之后**的 `position`。出招期间 `facing` 不变（转向只在前摇里）。
 - `d` 为零（圆心正好在角色位置）时 `bearing` 给 0，两种分支算出的 `dist` 都是 0，算命中。
 - 同一个 tick 里按先序逐个检查，命中的都记下。
-- 命中不改变角色、相机、锁定的任何状态：**不攻击时和攻击时，`player`、`camera`、`lock` 都和 G3.1 逐位相同**。
+- 命中不改变角色、相机、锁定的任何状态：**不攻击时和攻击时，`player`、`camera`、`lock` 都和 G3.1 逐位相同**。G3.3 起有两处例外：死掉的受击判定不再被打中（检查时直接跳过，`struck` 也不加它）；命中后按下文「血量、韧性、死亡」扣血，打死锁定目标时解锁。
 - 只用加减乘除、`sqrt`、`abs`、`min`、`max`、`clamp` 和 libm 的 `sinf`、`cosf`、`atan2f`，符合第 4 节。
 
 **闪白**：第 6 步写完节点之后，对每个受击判定：
 - 如果 `last_hit` 不是 `null`，并且 `tick - last_hit.tick < 8`，把它子树（包括自己）里每个带 `mesh` 的节点的颜色设成 `(1, 1, 1)`；
 - 否则设回加载时场景里的颜色。
-- 闪白的时长（8 tick）和颜色是 `souls` 里的常量，不是 prop：G3.3 有了硬直之后很可能换掉，不值得调。
+- 闪白的时长（8 tick）和颜色是 `souls` 里的常量，不是 prop。G3.3 起保留闪白，作为命中的即时反馈；硬直另有姿势表现。
+- G3.3 起的例外：`hp_bar` 节点不闪；死掉的受击判定不闪而是变暗。见下文「血量、韧性、死亡」的「表现」。
 - 命中那个 tick 画出来就已经是白的，一共白 8 个 tick。
 - 颜色用 `Scene::set_mesh_color`（第 10 节「渲染」）。节点颜色不在状态导出的 `nodes` 里，要看状态就看 `last_hit.tick`。
 
@@ -1015,7 +1022,146 @@ ray(θ):                                                        // 从 p 出发�
 - 每一刀都从右往左扫，连段不左右交替。
 - 受击判定是平顶的圆柱，角色的挥砍高度范围是一个水平的带子。
 - 只有角色打别人：角色没有受击判定，假人不会还手（G4）。
-- 命中只计数和闪白：没有血量、硬直、击退、顿帧（G3.3）。
+- 命中只计数和闪白：没有血量、硬直、击退、顿帧（G3.3 加了血量、硬直、死亡）。
+
+### 血量、韧性、死亡（G3.3 起）
+
+用户决定（2026-09-27）：
+- **假人和角色都会受伤**，场景里加一个按固定节奏挥砍的木桩来打角色。拆成两个切片：G3.3 做受击判定一方（假人）的血量、韧性、死亡和血条；G3.4 做角色的受击判定和木桩。
+- **韧性，黑魂 3 式**：每招有冲击值，累计超过对方的韧性才硬直；一段时间不挨打，累计就清零。轻攻击要连几下才打出硬直，重攻击一下就行。
+- **死了倒下、变暗，过一段时间原地满血复活**，像训练场的木桩，演示场景可以一直反复打。死掉的不能被锁定，也不会再被打中。
+- **头顶的方块血条**：受伤方头顶的细长方块，按剩余血量缩短。它在 3D 空间里，不是永远正对屏幕。
+
+**受伤方**：带 prop `hp` 的受击判定。
+- 节点 props（非角色节点）在 G3.2 的三个之后再多 5 个：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `hp` | 无 | > 0。满血的血量。写了它，这个受击判定才会受伤；不写就和 G3.2 一样，只计数和闪白 |
+| `poise` | 0 | ≥ 0。韧性：累计冲击值**超过**它就硬直。0 表示每次挨打（冲击值 > 0）都硬直 |
+| `stagger_ticks` | 30 | 整数 ≥ 1。硬直持续的 tick 数 |
+| `poise_reset_ticks` | 60 | 整数 ≥ 1。这么多 tick 不挨打，累计冲击值清零 |
+| `revive_ticks` | 180 | 整数 ≥ 1。死后躺多少 tick 复活 |
+
+- 后 4 个必须和 `hp` 一起写，可以省略（用默认值）。
+- `hp` 必须和 `hurt_radius`、`hurt_height` 一起写：打不到的东西没有血量可言。
+- **血条**：受伤方如果有一个名叫 `hp_bar` 的**直接子节点**，它就是血条，必须带 `mesh`。
+  - 游戏按剩余血量改它的局部 `scale.x` 和 `position.x`，左端（局部 -X 端）不动；
+  - 场景里写的 `scale.x` 是满血时的长度。
+  - 可以没有血条。不是受伤方的节点，名叫 `hp_bar` 的子节点没有特殊含义。
+
+角色的 props 多 4 个：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `attack_damage` | 20 | > 0。轻攻击每次命中扣的血 |
+| `heavy_damage` | 35 | > 0 |
+| `attack_impact` | 10 | ≥ 0。轻攻击的冲击值 |
+| `heavy_impact` | 30 | ≥ 0 |
+
+- 演示场景的假人：`hp` 100、`poise` 25。
+  - 轻攻击每下 20 血、冲击 10：第 3 下累计 30，超过 25，硬直；第 5 下打死。
+  - 重攻击每下 35 血、冲击 30：一下就硬直，第 3 下打死。
+- 新的报错：
+  - `the node "<路径>": prop "<p>" must be at least 0, got v`（`poise`）
+  - `the node "<路径>": prop "<p>" must be a whole number of at least 1, got v`（三个 `_ticks`）
+  - `the node "<路径>": prop "<p>" needs hp`（写了后 4 个之一却没写 `hp`）
+  - `the node "<路径>": hp needs hurt_radius and hurt_height`
+  - `the node "<路径>": its hp_bar needs a mesh`
+  - `unknown prop` 的 `known:` 名单改成 `lock_height, hurt_radius, hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks`。
+  - 角色的 4 个新 prop 用已有的文案：`must be greater than 0`（两个 `_damage`）、`must be at least 0`（两个 `_impact`）。
+- 检查顺序：
+  - 角色的 4 个新参数接在 G3.2 参数的后面（同一张表）。
+  - 节点：每个节点依次查：
+    1. 不认识的名字；
+    2. 8 个 prop 的取值，按上面名单的顺序；
+    3. 两个 hurt prop 是否成对；
+    4. `hp` 有没有受击判定；
+    5. 后 4 个有没有 `hp`，按名单顺序报第一个；
+    6. 根节点；
+    7. 血条有没有 mesh。
+
+**状态**：受伤方的状态存在它的受击判定里。
+- `game.hurtboxes` 的每一项在 `last_hit` 后面多一个 `health`，不是受伤方时是 `null`：
+
+```json
+{ "node": "dummy_b", "hits": 3, "last_hit": { … },
+  "health": { "hp": 40.0, "state": "stagger", "state_ticks": 30, "impact": 0.0, "impact_wait": 60 } }
+```
+
+- `hp`：当前血量，f32，0 到满血。
+- `state`：`"ok"`、`"stagger"`（硬直）、`"dead"`。
+- `state_ticks`：硬直或死亡还剩多少 tick，`ok` 时是 0。
+- `impact`：累计的冲击值，f32。
+- `impact_wait`：还剩多少 tick 累计冲击值清零，0 表示没有在等。
+- 加载时：满血，`ok`，其余都是 0。
+
+**每个 tick**：
+- 新的**第 0b 步**，在第 0 步（翻滚键）之后、第 1 步之前。对每个受伤方（先序）：
+
+```text
+if state != ok {
+    state_ticks -= 1
+    if state_ticks == 0 {
+        if state == dead { hp = hp_max }
+        state = ok
+    }
+}
+if impact_wait > 0 {
+    impact_wait -= 1
+    if impact_wait == 0 { impact = 0.0 }
+}
+```
+
+- **命中**（「命中判定」伪代码里 `h.hits += 1` 那一处）：先按 G3.2 记 `hits`、`last_hit`、`struck`，然后如果 `h` 是受伤方：
+
+```text
+hp = max(hp - damage_of(a), 0.0)
+if hp == 0.0 {
+    state = dead; state_ticks = revive_ticks
+    impact = 0.0; impact_wait = 0
+    if lock 是 h 的节点 { lock = null }       // 下一个 tick 起相机照常转
+} else {
+    impact = impact + impact_of(a); impact_wait = poise_reset_ticks
+    if impact > poise {
+        state = stagger; state_ticks = stagger_ticks
+        impact = 0.0
+    }
+}
+```
+
+- 命中检查跳过 `state == dead` 的受击判定。硬直中照常能被打中：累计冲击值再次超过韧性时，硬直重新计时。
+- 计时放在 tick 开头，所以命中那个 tick 算硬直（或死亡）的第 1 个 tick：硬直的状态导出一共出现 `stagger_ticks` 个 tick，第 `stagger_ticks + 1` 个 tick 开头变回 `ok`。复活同理，复活那个 tick 已经是满血的 `ok`。
+- 同理，最后一次命中之后，第 `poise_reset_ticks` 个 tick 开头累计冲击值清零。
+- **锁定**：`acquire()` 和 `switch_target()` 跳过死掉的目标（目标节点同时是受伤方，并且 `state == dead`）。锁定中的目标被打死时立刻解锁，见上面的伪代码。
+- 只用加减乘除、`max` 和比较，符合第 4 节。
+
+**表现**：在「闪白」那一步里一起做，对每个受击判定：
+- **颜色**：子树里除了血条以外的 mesh：
+  - 死了：场景原色乘以 0.4（变暗）；
+  - 没死、在闪白：白色；
+  - 否则：原色。
+  - 血条永远用它自己的原色。
+- **姿势**：受击判定节点的局部旋转设成 `base * Quat::from_rotation_x(tilt)`，`base` 是加载时的旋转：
+  - `ok`：`tilt = 0`，也就是 `base` 本身；
+  - `stagger`：`tilt = 20°`，向后仰（节点朝 -Z，向后是往 +Z 倒）；
+  - `dead`：`tilt = 90°`，向后躺平。
+- **血条**：受伤方有血条时，`frac = hp / hp_max`：
+  - `scale.x = width * frac`，`position.x = x0 - width * (1 - frac) / 2`，`width`、`x0` 是场景里的 `scale.x`、`position.x`；
+  - 死了隐藏血条（`Scene::set_visible`，第 10 节「渲染」），复活时重新显示。死了 `frac` 是 0，缩放成 0 的方块没法正常画，所以要隐藏。
+- 变暗系数 0.4、两个角度都是 `souls` 的常量，和闪白一样。
+- 姿势和血条改的是节点的局部变换，所以会出现在状态导出的 `nodes` 里。
+
+**演示场景**：三个假人都是受伤方：`hp` 100、`poise` 25，其余用默认值。
+- 每个假人加一个血条子节点：`(name: "hp_bar", position: (0.0, 2.1, 0.0), scale: (0.8, 0.08, 0.08), mesh: Cube, color: (0.8, 0.1, 0.1))`。
+- 内置场景 `--frames 60` 的截图会变（多了三根血条），要换基准。
+
+**已知限制**（G3.3）：
+- **尸体仍然挡路**：碰撞体在加载时算好，假人倒下后，它原来站的地方仍然挡路。
+- 姿势只是绕节点原点转，没有动画，状态一变就立刻到位。
+- 血条是 3D 空间里的方块，从侧面看会变窄，从正后方看左右是反的。
+- 硬直和死亡对假人只是姿势：假人本来就不会动。「硬直中不能行动」要等 G3.4 的木桩和角色。
+- 没有击退、顿帧。
 
 ### 碰撞（G1.3 起）
 
