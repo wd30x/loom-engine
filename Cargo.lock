@@ -1187,6 +1187,7 @@ name = "loom_core"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "libm",
  "log",
  "ron",
  "serde",
