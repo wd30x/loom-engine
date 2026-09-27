@@ -1275,15 +1275,22 @@ fn node_ron_keeps_the_spawn_point_while_its_transform_follows_the_player() {
     ]);
     let node = result(&replies[2]);
     assert_eq!(node["path"], "player");
-    assert_eq!(node["children"], json!(["visor", "flask"]));
+    assert_eq!(node["children"], json!(["flask"]));
     let ron = node["ron"].as_str().expect("ron is text");
     assert!(
         ron.starts_with("(\n    name: \"player\",\n    position: (0.0, 0.0, 0.0),\n"),
         "{ron}"
     );
     assert!(!ron.contains("children"), "{ron}");
-    let now = &result(&replies[3])["nodes"]["player"];
-    assert_eq!(node["transform"], *now);
+    // The state dump's node has what its animation plays besides.
+    let mut now = result(&replies[3])["nodes"]["player"].clone();
+    let animation = now
+        .as_object_mut()
+        .expect("a node")
+        .remove("animation")
+        .expect("the demo's character is animated");
+    assert_eq!(animation["clip"], "run");
+    assert_eq!(node["transform"], now);
     assert_ne!(now["position"], json!([0.0, 0.0, 0.0]));
     assert_eq!(
         *result(&replies[4]),

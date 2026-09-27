@@ -1,0 +1,29 @@
+// Preview of the souls knight's movement clips (docs/architecture.md sections 11 and 19),
+// rendered without a game, in place:
+//   loom view --scene assets/scenes/knight_moves.ron --ticks 0,10,20,30 --size 720x480 --screenshot out/knight_moves.png
+// Six knights face loom's forward (-Z), seen from the front, a little to their left and above.
+// Front row, left to right on screen: idle, run, sprint; back row: run_left, run_right,
+// run_back.
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (-2.4, 3.9, -6.6), look_at: (0.0, 0.5, 1.7),
+            camera: (fov_y: 45.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 150.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (30.0, 1.0, 30.0), color: (0.35, 0.35, 0.38)),
+        (name: "idle", position: (2.2, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("idle", "assets/anims/humanoid/idle.ron")], play: "idle")),
+        (name: "run", position: (0.0, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("run", "assets/anims/humanoid/run.ron")], play: "run")),
+        (name: "sprint", position: (-2.2, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("sprint", "assets/anims/humanoid/sprint.ron")], play: "sprint")),
+        (name: "run_left", position: (3.2, 0.0, 3.2), model: "assets/models/humanoid.glb",
+            animation: (clips: [("run_left", "assets/anims/humanoid/run_left.ron")], play: "run_left")),
+        (name: "run_right", position: (1.0, 0.0, 3.2), model: "assets/models/humanoid.glb",
+            animation: (clips: [("run_right", "assets/anims/humanoid/run_right.ron")], play: "run_right")),
+        (name: "run_back", position: (-1.2, 0.0, 3.2), model: "assets/models/humanoid.glb",
+            animation: (clips: [("run_back", "assets/anims/humanoid/run_back.ron")], play: "run_back")),
+    ],
+)

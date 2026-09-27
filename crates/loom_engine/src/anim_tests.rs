@@ -129,7 +129,8 @@ fn skin(v: &SkinnedVertex, m: &[Mat4]) -> Vec3 {
 /// The model-space pose of `skeleton` by `clip` alone, `t` ticks in.
 fn pose_by(skeleton: &Skeleton, clip: &Clip, t: u64) -> Vec<Mat4> {
     pose(skeleton, |bone| {
-        clip.sample(bone, t).unwrap_or((Quat::IDENTITY, Vec3::ZERO))
+        clip.sample(bone, t * loom_scene::CTICKS)
+            .unwrap_or((Quat::IDENTITY, Vec3::ZERO))
     })
 }
 

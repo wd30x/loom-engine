@@ -336,7 +336,10 @@ mod tests {
     fn scene_without_character_fails_to_reload() {
         let t0 = Instant::now();
         let mut w = watcher(t0);
-        let no_character = GOOD.replace("character: (run_speed: 4.0, turn_speed: 720.0),", "");
+        let no_character = GOOD.replace(
+            "character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),",
+            "",
+        );
         let Poll::Failed(e) = poll_with(&mut w, t0 + CHECK_INTERVAL, 2, &no_character) else {
             panic!("expected a failure");
         };

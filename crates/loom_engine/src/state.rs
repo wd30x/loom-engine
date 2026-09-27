@@ -96,24 +96,34 @@ impl NodeState {
     }
 }
 
-/// What an animated model plays.
+/// What an animated model plays (`docs/architecture.md` section 19,
+/// "播放速度和片段起点").
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct AnimationState {
     /// The clip playing.
     pub clip: String,
-    /// The tick it started at.
+    /// The tick this stretch of it is counted from.
     pub start: u64,
+    /// The clip time at `start`, in hundredths of a tick.
+    pub offset: u64,
+    /// Playing speed in percent: 100 is as written, 0 holds still.
+    pub rate: u32,
     /// The clip blended from, `null` until the first switch.
     pub from: Option<ClipStart>,
+    /// The tick the blend from `from` starts at.
+    pub blend_start: u64,
     /// Ticks the blend from `from` takes; 0 switches at once.
     pub blend: u64,
 }
 
-/// A clip and the tick it started at.
+/// A clip and how its time runs: `offset` hundredths of a tick at tick
+/// `start`, then `rate` a tick.
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct ClipStart {
     pub clip: String,
     pub start: u64,
+    pub offset: u64,
+    pub rate: u32,
 }
 
 impl AnimationState {
@@ -121,10 +131,15 @@ impl AnimationState {
         Self {
             clip: a.playing.clone(),
             start: a.start,
-            from: a.from.as_ref().map(|(clip, start)| ClipStart {
-                clip: clip.clone(),
-                start: *start,
+            offset: a.offset,
+            rate: a.rate,
+            from: a.from.as_ref().map(|f| ClipStart {
+                clip: f.clip.clone(),
+                start: f.start,
+                offset: f.offset,
+                rate: f.rate,
             }),
+            blend_start: a.blend_start,
             blend: a.blend,
         }
     }

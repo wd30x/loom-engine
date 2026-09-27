@@ -674,7 +674,10 @@ fn rotated_character_starts_facing_its_rotation() {
 #[test]
 fn game_rejects_a_scene_without_a_character() {
     // Without a character the orbit camera cannot exist either: drop both.
-    let src = demo_with("character: (run_speed: 4.0, turn_speed: 720.0),", "");
+    let src = demo_with(
+        "character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),",
+        "",
+    );
     let start = src.find(",\n            orbit_camera: (").unwrap();
     let end = src.find("return_speed: 4.0)").unwrap() + "return_speed: 4.0)".len();
     let src = format!("{}{}", &src[..start], &src[end..]);
@@ -846,14 +849,20 @@ fn wrap_maps_plus_pi_to_minus_pi() {
 
 #[test]
 fn game_rejects_a_character_without_a_capsule_mesh() {
-    let src = demo_with("mesh: Capsule(radius: 0.35, height: 1.8),", "mesh: Cube,");
+    // The G3.3 scene still draws its character as a capsule.
+    let old_form = |new: &str| {
+        let old = "mesh: Capsule(radius: 0.35, height: 1.8),";
+        assert!(G3_3_DEMO.contains(old));
+        G3_3_DEMO.replace(old, new)
+    };
+    let src = old_form("mesh: Cube,");
     let err = Game::from_source(&src).unwrap_err();
     assert!(
         matches!(err, GameError::NotACapsule(ref p) if p == "player"),
         "{err}"
     );
     assert!(err.to_string().contains("Capsule mesh"), "{err}");
-    let src = demo_with("mesh: Capsule(radius: 0.35, height: 1.8),", "");
+    let src = old_form("");
     assert!(matches!(
         Game::from_source(&src),
         Err(GameError::NotACapsule(_))
@@ -895,13 +904,14 @@ fn game_rejects_a_run_speed_too_fast_for_the_radius() {
 
 #[test]
 fn game_rejects_a_collider_that_moves_with_the_player() {
+    // The flask is the character's child.
     let src = demo_with(
-        "mesh: Cube, color: (0.9, 0.85, 0.3)),",
-        "mesh: Cube, color: (0.9, 0.85, 0.3), collider: Box),",
+        "mesh: Cube, color: (0.9, 0.7, 0.2)),",
+        "mesh: Cube, color: (0.9, 0.7, 0.2), collider: Box),",
     );
     let err = Game::from_source(&src).unwrap_err();
     assert!(
-        matches!(err, GameError::MovingCollider(ref p) if p == "player/visor"),
+        matches!(err, GameError::MovingCollider(ref p) if p == "player/flask"),
         "{err}"
     );
     assert!(

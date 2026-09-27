@@ -653,6 +653,19 @@ Test-Check 'H14' 'view --debug-draw films the animation preview with its skeleto
     $script:detail = "sha256 $((Get-FileHash "$out/h14_a.png").Hash)"
 }
 
+Test-Check 'H15' 'view --ticks films the knight action clips, the same bytes twice' {
+    foreach ($n in 'a', 'b') {
+        $r = Invoke-Loom @('view', '--scene', 'assets/scenes/knight_attacks.ron', '--ticks', '6,12,20,25,40',
+            '--size', '720x480', '--screenshot', "$out/h15_$n.png")
+        Assert-ExitOk $r
+        Assert-True (($r.Json.ticks -join ',') -eq '6,12,20,25,40') "ticks are $($r.Json.ticks -join ',')"
+    }
+    Assert-SameBytes "$out/h15_a.png" "$out/h15_b.png"
+    $size = Get-PngSize "$out/h15_a.png"
+    Assert-True ($size -eq '3600x480') "PNG is $size"
+    $script:detail = "sha256 $((Get-FileHash "$out/h15_a.png").Hash)"
+}
+
 # ---------------------------------------------------------------- W: window
 
 if (-not $HeadlessOnly) {

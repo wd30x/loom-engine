@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-const SCENES: [(&str, &str); 9] = [
+const SCENES: [(&str, &str); 11] = [
     (
         "souls demo",
         include_str!("../../../games/souls/src/demo.scene.ron"),
@@ -35,6 +35,14 @@ const SCENES: [(&str, &str); 9] = [
     (
         "anim preview",
         include_str!("../../../assets/scenes/anim_preview.ron"),
+    ),
+    (
+        "knight moves",
+        include_str!("../../../assets/scenes/knight_moves.ron"),
+    ),
+    (
+        "knight attacks",
+        include_str!("../../../assets/scenes/knight_attacks.ron"),
     ),
 ];
 
@@ -389,6 +397,30 @@ fn display_name_is_read_and_written_right_after_the_name() {
     assert_eq!(
         ron_of(&doc, "boss"),
         "(\n    name: \"boss\",\n    display_name: \"Iudex Gundyr\",\n    mesh: Cube,\n)\n"
+    );
+}
+
+#[test]
+fn character_capsule_is_written_after_turn_speed() {
+    let src = r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+        (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+        (name: "hero", character: (capsule: (height: 1.8, radius: 0.35), turn_speed: 720.0, run_speed: 4.0)),
+    ])"#;
+    let doc = SceneDoc::parse(src).unwrap();
+    assert_eq!(
+        ron_of(&doc, "hero"),
+        "(
+    name: \"hero\",
+    character: (
+        run_speed: 4.0,
+        turn_speed: 720.0,
+        capsule: (
+            radius: 0.35,
+            height: 1.8,
+        ),
+    ),
+)
+"
     );
 }
 

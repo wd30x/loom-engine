@@ -15,6 +15,20 @@ pub enum GameError {
     NotRoot(String),
     #[error("the character {0:?} needs a Capsule mesh: it is also the collision shape")]
     NotACapsule(String),
+    #[error("the character {0:?} has a model, so it needs character.capsule: the collision shape")]
+    ModelWithoutCapsule(String),
+    #[error(
+        "the character {0:?} has both a mesh and character.capsule: the collision shape is given twice"
+    )]
+    CapsuleAndMesh(String),
+    #[error("the character {0:?} has a model, so it needs an animation: the game plays its clips")]
+    ModelWithoutAnimation(String),
+    #[error(
+        "the character {0:?} has character.capsule, so it needs a model: the capsule is not drawn"
+    )]
+    CapsuleWithoutModel(String),
+    #[error("the character {character:?}: its animation needs a clip {clip:?}")]
+    MissingClip { character: String, clip: String },
     #[error(
         "the character {0:?} must not be scaled: the capsule is drawn scaled but collides unscaled"
     )]

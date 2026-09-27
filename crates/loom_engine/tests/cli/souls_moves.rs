@@ -6,7 +6,8 @@ use std::fs;
 use serde_json::Value;
 
 use super::common::{
-    assert_f32_bits, g2_3_demo, run_headless_replay, run_headless_replay_on, test_dir, write_file,
+    assert_f32_bits, g2_3_demo, repo_root, run_headless_replay, run_headless_replay_on, test_dir,
+    write_file,
 };
 
 /// The souls moves script: tap roll while running forward (a roll from
@@ -407,4 +408,53 @@ fn souls_stake_hits_staggers_is_rolled_through_then_kills_and_the_character_resp
     // ((763 - 1) % 120 + 1) before G5.1, starts again: 0, then this tick's
     // step 5c makes it 1.
     assert_eq!(dump["game"]["swingers"][0]["swing_tick"], 1);
+}
+
+/// The built-in scene with its character drawn the old way: a capsule
+/// mesh of the same size, no model (`docs/architecture.md` section 11,
+/// "模型和动画").
+fn demo_as_capsule() -> String {
+    let src = fs::read_to_string(repo_root().join("games/souls/src/demo.scene.ron"))
+        .expect("the demo scene");
+    let model = src.find("            model: ").expect("the model line");
+    let character =
+        "character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),";
+    let end = src.find(character).expect("the character line") + character.len();
+    format!(
+        "{}            mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2),
+                     character: (run_speed: 4.0, turn_speed: 720.0),{}",
+        &src[..model],
+        &src[end..]
+    )
+}
+
+#[test]
+fn modeled_and_capsule_characters_dump_the_same_game_state() {
+    let dir = test_dir("modeled_and_capsule_characters_dump_the_same_game_state");
+    let capsule = write_file(&dir, "capsule.ron", &demo_as_capsule());
+    // Lock-on, a light combo and a kill; running, hits, a stagger, a roll,
+    // a death and the respawn.
+    for (name, script, frames) in [
+        ("kill", SOULS_KILL_SCRIPT, "450"),
+        ("stake", SOULS_STAKE_SCRIPT, "763"),
+    ] {
+        let script = write_file(&dir, &format!("{name}.ron"), script);
+        let dumps = [None, Some(capsule.as_path())].map(|scene| {
+            let state = dir.join(format!("{name}_{}.json", scene.is_some()));
+            run_headless_replay_on(scene, frames, &script, &state);
+            let dump: Value = serde_json::from_str(
+                &fs::read_to_string(&state).expect("the state dump was written"),
+            )
+            .expect("JSON");
+            dump
+        });
+        let [modeled, plain] = &dumps;
+        assert!(modeled["nodes"]["player"].get("animation").is_some());
+        assert!(plain["nodes"]["player"].get("animation").is_none());
+        assert_eq!(
+            serde_json::to_string_pretty(&modeled["game"]).expect("JSON"),
+            serde_json::to_string_pretty(&plain["game"]).expect("JSON"),
+            "{name}"
+        );
+    }
 }

@@ -13,12 +13,14 @@ fn clip(length: u64, looping: bool, channels: &str) -> Clip {
     .unwrap()
 }
 
+/// At whole tick `t`.
 fn rotation_at(c: &Clip, t: u64) -> Quat {
-    c.sample("b", t).unwrap().0
+    c.sample("b", t * CTICKS).unwrap().0
 }
 
+/// At whole tick `t`.
 fn translation_at(c: &Clip, t: u64) -> Vec3 {
-    c.sample("b", t).unwrap().1
+    c.sample("b", t * CTICKS).unwrap().1
 }
 
 fn assert_quat_near(a: Quat, b: Quat) {
@@ -116,9 +118,9 @@ fn rotation_takes_the_shortest_way_between_keyframes() {
 #[test]
 fn unlisted_bones_sample_to_none_and_listed_ones_have_neutral_missing_channels() {
     let c = clip(10, true, "translation: [(0, (0.0, 1.0, 0.0))]");
-    assert_eq!(c.sample("other", 3), None);
+    assert_eq!(c.sample("other", 300), None);
     assert_eq!(
-        c.sample("b", 3),
+        c.sample("b", 300),
         Some((Quat::IDENTITY, Vec3::new(0.0, 1.0, 0.0)))
     );
     let empty = Clip::parse("(length: 1, looping: true, bones: {})").unwrap();
@@ -227,4 +229,35 @@ fn clip_file_writes_back_as_one_keyframe_a_line() {
         )
     );
     assert_eq!(Clip::parse(&ron).unwrap(), Clip::parse(src).unwrap());
+}
+
+#[test]
+fn clip_time_between_ticks_interpolates_by_hundredths_of_a_tick() {
+    let c = clip(
+        40,
+        false,
+        "translation: [(0, (0.0, 0.0, 0.0)), (10, (1.0, 0.0, 0.0)), (40, (4.0, 0.0, 0.0))]",
+    );
+    let at = |ctick| c.sample("b", ctick).unwrap().1.x;
+    // 2.5 ticks of 10: a quarter of the way, by the formula's f32 quotient.
+    let along = |a: f32, b: f32, s: f32| Vec3::new(a, 0.0, 0.0).lerp(Vec3::new(b, 0.0, 0.0), s).x;
+    assert_eq!(at(250), along(0.0, 1.0, 250.0 / 1000.0));
+    assert_eq!(at(1001), along(1.0, 4.0, 1.0 / 3000.0));
+    // Exactly on a keyframe's hundredths: its own value.
+    assert_eq!(at(1000), 1.0);
+    // Past the end of a one-shot clip: its last value.
+    assert_eq!(at(4001), 4.0);
+}
+
+#[test]
+fn looping_clip_wraps_clip_time_at_its_length_in_hundredths() {
+    let c = clip(
+        10,
+        true,
+        "translation: [(0, (0.0, 0.0, 0.0)), (10, (1.0, 0.0, 0.0))]",
+    );
+    let at = |ctick| c.sample("b", ctick).unwrap().1.x;
+    assert_eq!(at(1050), at(50));
+    assert_eq!(at(1000), 0.0);
+    assert_eq!(at(999), Vec3::ZERO.lerp(Vec3::X, 999.0 / 1000.0).x);
 }

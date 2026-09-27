@@ -9,8 +9,24 @@
     nodes: [
         (name: "ground", mesh: Plane, scale: (40.0, 1.0, 40.0), color: (0.35, 0.35, 0.38)),
         (name: "player", position: (0.0, 0.0, 8.0),
-            mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2),
-            character: (run_speed: 4.0, turn_speed: 720.0),
+            // The knight model plays a clip for what the character does (docs/architecture.md
+            // section 11, "模型和动画"); `capsule` is what collides and is hit.
+            model: "assets/models/humanoid.glb",
+            animation: (clips: [
+                ("idle", "assets/anims/humanoid/idle.ron"),
+                ("run", "assets/anims/humanoid/run.ron"),
+                ("run_left", "assets/anims/humanoid/run_left.ron"),
+                ("run_right", "assets/anims/humanoid/run_right.ron"),
+                ("run_back", "assets/anims/humanoid/run_back.ron"),
+                ("sprint", "assets/anims/humanoid/sprint.ron"),
+                ("roll", "assets/anims/humanoid/roll.ron"),
+                ("backstep", "assets/anims/humanoid/backstep.ron"),
+                ("attack1", "assets/anims/humanoid/attack1.ron"),
+                ("attack2", "assets/anims/humanoid/attack2.ron"),
+                ("attack3", "assets/anims/humanoid/attack3.ron"),
+                ("heavy", "assets/anims/humanoid/heavy.ron"),
+            ], play: "idle"),
+            character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),
             // Stamina, roll, sprint and backstep (docs/architecture.md section 11). Every value
             // here is the default: leaving a prop out gives the same game.
             props: [
@@ -72,9 +88,6 @@
                 ("bloodstain_range", 1.5),       // meters: how close the character picks its souls back up
             ],
             children: [
-                // Marks the facing: the capsule looks the same from every side.
-                (name: "visor", position: (0.0, 1.5, -0.3), scale: (0.4, 0.15, 0.3),
-                    mesh: Cube, color: (0.9, 0.85, 0.3)),
                 // The estus flask: shown only while drinking.
                 (name: "flask", position: (0.5, 1.2, -0.3), scale: (0.12, 0.25, 0.12),
                     mesh: Cube, color: (0.9, 0.7, 0.2)),

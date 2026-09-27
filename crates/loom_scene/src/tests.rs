@@ -39,7 +39,6 @@ fn demo_scene_parses_into_the_character_scene_tree() {
         [
             "ground",
             "player",
-            "player/visor",
             "player/flask",
             "pillars",
             "pillars/a",
@@ -92,13 +91,12 @@ fn demo_scene_parses_into_the_character_scene_tree() {
     assert_eq!(scene.orbit_camera(), scene.find("main_cam"));
     assert_eq!(scene.ambient(), Vec3::new(0.2, 0.2, 0.25));
     let player = scene.node(scene.find("player").unwrap());
-    assert_eq!(
-        player.mesh.map(|m| m.kind),
-        Some(MeshKind::Capsule {
-            radius: 0.35,
-            height: 1.8
-        })
-    );
+    // A knight model, colliding as a capsule.
+    assert!(player.mesh.is_none());
+    let model = player.model.as_ref().unwrap();
+    assert_eq!(model.path, "assets/models/humanoid.glb");
+    assert_eq!(model.animation.as_ref().unwrap().clips.len(), 12);
+    assert_eq!(player.character.unwrap().capsule, Some((0.35, 1.8)));
     assert_eq!(player.transform.position, Vec3::ZERO);
 }
 
@@ -423,7 +421,8 @@ fn character_capsule_and_orbit_camera_parse_with_their_values() {
         node.character,
         Some(Character {
             run_speed: 4.0,
-            turn_speed_degrees: 720.0
+            turn_speed_degrees: 720.0,
+            capsule: None,
         })
     );
     assert_eq!(
@@ -490,6 +489,38 @@ fn scene_rejects_non_positive_character_speeds() {
         let p = node_problem(&hero("radius: 0.35, height: 1.8", character), "hero");
         assert_eq!(p, Problem::CharacterSpeed, "{character}");
     }
+}
+
+#[test]
+fn character_capsule_field_is_read_with_its_two_numbers() {
+    let scene = Scene::parse(&scene_with(
+        "(name: \"hero\", model: \"k.glb\",          character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.3, height: 1.7)))",
+    ))
+    .unwrap();
+    let hero = scene.node(scene.find("hero").unwrap());
+    assert_eq!(hero.character.unwrap().capsule, Some((0.3, 1.7)));
+}
+
+#[test]
+fn scene_rejects_a_character_capsule_without_two_positive_numbers() {
+    for capsule in ["radius: 0.0, height: 1.8", "radius: 0.35, height: -1.0"] {
+        let p = node_problem(
+            &format!(
+                "(name: \"hero\", model: \"k.glb\",                  character: (run_speed: 4.0, turn_speed: 720.0, capsule: ({capsule})))"
+            ),
+            "hero",
+        );
+        assert_eq!(p, Problem::CharacterCapsule, "{capsule}");
+        assert_eq!(
+            p.to_string(),
+            "character capsule radius and height must be greater than 0"
+        );
+    }
+    // Unlike a capsule mesh, a short one is fine: the game draws a model.
+    Scene::parse(&scene_with(
+        "(name: \"hero\", character: (run_speed: 4.0, turn_speed: 720.0,          capsule: (radius: 0.5, height: 0.5)))",
+    ))
+    .unwrap();
 }
 
 #[test]
@@ -1181,7 +1212,10 @@ fn animation_is_read_with_its_clips_and_the_playing_one_from_tick_0() {
                 .into(),
             playing: "walk".to_owned(),
             start: 0,
+            offset: 0,
+            rate: 100,
             from: None,
+            blend_start: 0,
             blend: 0,
         })
     );

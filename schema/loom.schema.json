@@ -133,10 +133,42 @@
           "far"
         ]
       },
+      "CapsuleDesc": {
+        "description": "An upright capsule standing on the node's origin.",
+        "type": "object",
+        "properties": {
+          "height": {
+            "description": "Meters from the bottom to the top, greater than 0.",
+            "type": "number",
+            "format": "float"
+          },
+          "radius": {
+            "description": "Meters, greater than 0.",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "radius",
+          "height"
+        ]
+      },
       "CharacterDesc": {
         "description": "Makes the node the character the game moves.",
         "type": "object",
         "properties": {
+          "capsule": {
+            "description": "The upright capsule the character collides and is hit with, when\nthe node draws something else (a model). The game says when it is\nneeded.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CapsuleDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "run_speed": {
             "description": "Meters per second, greater than 0.",
             "type": "number",
@@ -906,11 +938,17 @@
         ],
         "$defs": {
           "AnimationState": {
-            "description": "What an animated model plays.",
+            "description": "What an animated model plays (`docs/architecture.md` section 19,\n\"播放速度和片段起点\").",
             "type": "object",
             "properties": {
               "blend": {
                 "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "blend_start": {
+                "description": "The tick the blend from `from` starts at.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -930,8 +968,20 @@
                   }
                 ]
               },
+              "offset": {
+                "description": "The clip time at `start`, in hundredths of a tick.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "description": "Playing speed in percent: 100 is as written, 0 holds still.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "start": {
-                "description": "The tick it started at.",
+                "description": "The tick this stretch of it is counted from.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -940,16 +990,29 @@
             "required": [
               "clip",
               "start",
+              "offset",
+              "rate",
               "from",
+              "blend_start",
               "blend"
             ]
           },
           "ClipStart": {
-            "description": "A clip and the tick it started at.",
+            "description": "A clip and how its time runs: `offset` hundredths of a tick at tick\n`start`, then `rate` a tick.",
             "type": "object",
             "properties": {
               "clip": {
                 "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               },
               "start": {
                 "type": "integer",
@@ -959,7 +1022,9 @@
             },
             "required": [
               "clip",
-              "start"
+              "start",
+              "offset",
+              "rate"
             ]
           },
           "GameState": {
@@ -1163,11 +1228,17 @@
         ],
         "$defs": {
           "AnimationState": {
-            "description": "What an animated model plays.",
+            "description": "What an animated model plays (`docs/architecture.md` section 19,\n\"播放速度和片段起点\").",
             "type": "object",
             "properties": {
               "blend": {
                 "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "blend_start": {
+                "description": "The tick the blend from `from` starts at.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -1187,8 +1258,20 @@
                   }
                 ]
               },
+              "offset": {
+                "description": "The clip time at `start`, in hundredths of a tick.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "description": "Playing speed in percent: 100 is as written, 0 holds still.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "start": {
-                "description": "The tick it started at.",
+                "description": "The tick this stretch of it is counted from.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -1197,16 +1280,29 @@
             "required": [
               "clip",
               "start",
+              "offset",
+              "rate",
               "from",
+              "blend_start",
               "blend"
             ]
           },
           "ClipStart": {
-            "description": "A clip and the tick it started at.",
+            "description": "A clip and how its time runs: `offset` hundredths of a tick at tick\n`start`, then `rate` a tick.",
             "type": "object",
             "properties": {
               "clip": {
                 "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               },
               "start": {
                 "type": "integer",
@@ -1216,7 +1312,9 @@
             },
             "required": [
               "clip",
-              "start"
+              "start",
+              "offset",
+              "rate"
             ]
           },
           "Event": {
@@ -3177,11 +3275,17 @@
             ]
           },
           "AnimationState": {
-            "description": "What an animated model plays.",
+            "description": "What an animated model plays (`docs/architecture.md` section 19,\n\"播放速度和片段起点\").",
             "type": "object",
             "properties": {
               "blend": {
                 "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "blend_start": {
+                "description": "The tick the blend from `from` starts at.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -3201,8 +3305,20 @@
                   }
                 ]
               },
+              "offset": {
+                "description": "The clip time at `start`, in hundredths of a tick.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "description": "Playing speed in percent: 100 is as written, 0 holds still.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "start": {
-                "description": "The tick it started at.",
+                "description": "The tick this stretch of it is counted from.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -3211,7 +3327,10 @@
             "required": [
               "clip",
               "start",
+              "offset",
+              "rate",
               "from",
+              "blend_start",
               "blend"
             ]
           },
@@ -3298,11 +3417,21 @@
             ]
           },
           "ClipStart": {
-            "description": "A clip and the tick it started at.",
+            "description": "A clip and how its time runs: `offset` hundredths of a tick at tick\n`start`, then `rate` a tick.",
             "type": "object",
             "properties": {
               "clip": {
                 "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               },
               "start": {
                 "type": "integer",
@@ -3312,7 +3441,9 @@
             },
             "required": [
               "clip",
-              "start"
+              "start",
+              "offset",
+              "rate"
             ]
           },
           "Condition": {
@@ -4005,11 +4136,17 @@
             ]
           },
           "AnimationState": {
-            "description": "What an animated model plays.",
+            "description": "What an animated model plays (`docs/architecture.md` section 19,\n\"播放速度和片段起点\").",
             "type": "object",
             "properties": {
               "blend": {
                 "description": "Ticks the blend from `from` takes; 0 switches at once.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "blend_start": {
+                "description": "The tick the blend from `from` starts at.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -4029,8 +4166,20 @@
                   }
                 ]
               },
+              "offset": {
+                "description": "The clip time at `start`, in hundredths of a tick.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "description": "Playing speed in percent: 100 is as written, 0 holds still.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "start": {
-                "description": "The tick it started at.",
+                "description": "The tick this stretch of it is counted from.",
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0
@@ -4039,7 +4188,10 @@
             "required": [
               "clip",
               "start",
+              "offset",
+              "rate",
               "from",
+              "blend_start",
               "blend"
             ]
           },
@@ -4126,11 +4278,21 @@
             ]
           },
           "ClipStart": {
-            "description": "A clip and the tick it started at.",
+            "description": "A clip and how its time runs: `offset` hundredths of a tick at tick\n`start`, then `rate` a tick.",
             "type": "object",
             "properties": {
               "clip": {
                 "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rate": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               },
               "start": {
                 "type": "integer",
@@ -4140,7 +4302,9 @@
             },
             "required": [
               "clip",
-              "start"
+              "start",
+              "offset",
+              "rate"
             ]
           },
           "Condition": {

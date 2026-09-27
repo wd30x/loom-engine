@@ -1,0 +1,163 @@
+// Run: two steps a 40-tick loop, written for 4 m/s (RUN_CLIP_SPEED,
+// docs/architecture.md section 11, "模型和动画"): 1.33 m a step, 3 steps
+// a second. The node does not move; the game moves it and plays the
+// clip faster or slower with the speed, so the feet do not slide.
+// Rotations are YXZ degrees about each bone's position along the model's
+// axes (+X right, +Y up, -Z forward); see assets/anims/README.md for which
+// way each bone turns.
+//
+// Each foot is on the ground 8 ticks of 20: the left one from tick 0
+// (landing 0.27 m ahead of its hip) to 8 (pushing off 0.27 m behind),
+// the right one from 20 to 28; in between both feet are off the
+// ground. The body leans 12 degrees forward, lowest at mid-stance
+// (ticks 4 and 24), highest in the air (14 and 34). The arms swing
+// against the legs, the sword arm less, the blade forward and down.
+(
+    length: 40,
+    looping: true,
+    bones: {
+        // The legs. Stance keys are worked out so the ankle keeps still on the
+        // ground while the body travels; swing keys lift the leg and bring it
+        // round. +X lifts a thigh forward, Z opens it sideways (-Z the left one
+        // out, +Z the right one), -X bends a knee, +X tips the toes up. The
+        // right leg does what the left one did one step earlier.
+        "upper_leg_l": (rotation: [
+            (0, (28.0, 0.0, 0.0)),
+            (2, (28.7, 0.0, 0.0)),
+            (4, (21.6, 0.0, 0.0)),
+            (6, (10.1, 0.0, 0.0)),
+            (8, (-4.4, 0.0, 0.0)),
+            (12, (-8.0, 0.0, 0.0)),
+            (16, (5.0, 0.0, 0.0)),
+            (20, (25.0, 0.0, 0.0)),
+            (26, (45.0, 0.0, 0.0)),
+            (32, (48.0, 0.0, 0.0)),
+            (36, (38.0, 0.0, 0.0)),
+            (40, (28.0, 0.0, 0.0)),
+        ]),
+        "lower_leg_l": (rotation: [
+            (0, (-18.2, 0.0, 0.0)),
+            (2, (-38.4, 0.0, 0.0)),
+            (4, (-43.8, 0.0, 0.0)),
+            (6, (-40.4, 0.0, 0.0)),
+            (8, (-30.5, 0.0, 0.0)),
+            (12, (-75.0, 0.0, 0.0)),
+            (16, (-105.0, 0.0, 0.0)),
+            (20, (-110.0, 0.0, 0.0)),
+            (26, (-80.0, 0.0, 0.0)),
+            (32, (-40.0, 0.0, 0.0)),
+            (36, (-20.0, 0.0, 0.0)),
+            (40, (-18.2, 0.0, 0.0)),
+        ]),
+        "foot_l": (rotation: [
+            (0, (-3.8, 0.0, 0.0)),
+            (2, (9.6, 0.0, 0.0)),
+            (4, (22.2, 0.0, 0.0)),
+            (6, (22.3, 0.0, 0.0)),
+            (8, (12.9, 0.0, 0.0)),
+            (12, (10.0, 0.0, 0.0)),
+            (16, (20.0, 0.0, 0.0)),
+            (20, (25.0, 0.0, 0.0)),
+            (26, (20.0, 0.0, 0.0)),
+            (32, (10.0, 0.0, 0.0)),
+            (36, (0.0, 0.0, 0.0)),
+            (40, (-3.8, 0.0, 0.0)),
+        ]),
+        "upper_leg_r": (rotation: [
+            (0, (25.0, 0.0, 0.0)),
+            (6, (45.0, 0.0, 0.0)),
+            (12, (48.0, 0.0, 0.0)),
+            (16, (38.0, 0.0, 0.0)),
+            (20, (28.0, 0.0, 0.0)),
+            (22, (28.7, 0.0, 0.0)),
+            (24, (21.6, 0.0, 0.0)),
+            (26, (10.1, 0.0, 0.0)),
+            (28, (-4.4, 0.0, 0.0)),
+            (32, (-8.0, 0.0, 0.0)),
+            (36, (5.0, 0.0, 0.0)),
+            (40, (25.0, 0.0, 0.0)),
+        ]),
+        "lower_leg_r": (rotation: [
+            (0, (-110.0, 0.0, 0.0)),
+            (6, (-80.0, 0.0, 0.0)),
+            (12, (-40.0, 0.0, 0.0)),
+            (16, (-20.0, 0.0, 0.0)),
+            (20, (-18.2, 0.0, 0.0)),
+            (22, (-38.4, 0.0, 0.0)),
+            (24, (-43.8, 0.0, 0.0)),
+            (26, (-40.4, 0.0, 0.0)),
+            (28, (-30.5, 0.0, 0.0)),
+            (32, (-75.0, 0.0, 0.0)),
+            (36, (-105.0, 0.0, 0.0)),
+            (40, (-110.0, 0.0, 0.0)),
+        ]),
+        "foot_r": (rotation: [
+            (0, (25.0, 0.0, 0.0)),
+            (6, (20.0, 0.0, 0.0)),
+            (12, (10.0, 0.0, 0.0)),
+            (16, (0.0, 0.0, 0.0)),
+            (20, (-3.8, 0.0, 0.0)),
+            (22, (9.6, 0.0, 0.0)),
+            (24, (22.2, 0.0, 0.0)),
+            (26, (22.3, 0.0, 0.0)),
+            (28, (12.9, 0.0, 0.0)),
+            (32, (10.0, 0.0, 0.0)),
+            (36, (20.0, 0.0, 0.0)),
+            (40, (25.0, 0.0, 0.0)),
+        ]),
+        // The body bobs: 4.5 cm down landing, 6 cm at mid-stance, 1 cm in the air.
+        "hips": (translation: [
+            (0, (0.000, -0.045, 0.000)),
+            (4, (0.000, -0.060, 0.000)),
+            (8, (0.000, -0.045, 0.000)),
+            (14, (0.000, -0.010, 0.000)),
+            (20, (0.000, -0.045, 0.000)),
+            (24, (0.000, -0.060, 0.000)),
+            (28, (0.000, -0.045, 0.000)),
+            (34, (0.000, -0.010, 0.000)),
+            (40, (0.000, -0.045, 0.000)),
+        ]),
+        // Leaning forward: -X on spine and chest; the chest turns with the
+        // arms (+Y is to the left), the head against both so it looks ahead.
+        "spine": (rotation: [
+            (0, (-6.0, 0.0, 0.0)),
+            (40, (-6.0, 0.0, 0.0)),
+        ]),
+        "chest": (rotation: [
+            (0, (-6.0, 5.0, 0.0)),
+            (20, (-6.0, -5.0, 0.0)),
+            (40, (-6.0, 5.0, 0.0)),
+        ]),
+        "head": (rotation: [
+            (0, (10.0, -5.0, 0.0)),
+            (20, (10.0, 5.0, 0.0)),
+            (40, (10.0, -5.0, 0.0)),
+        ]),
+        // Arms: +X swings forward, -X back; +Z brings the left arm in to
+        // the body, -Z the right one; the elbows bend forward (+X).
+        "upper_arm_l": (rotation: [
+            (0, (-35.0, 0.0, 25.0)),
+            (20, (35.0, 0.0, 25.0)),
+            (40, (-35.0, 0.0, 25.0)),
+        ]),
+        "lower_arm_l": (rotation: [
+            (0, (70.0, 0.0, 0.0)),
+            (20, (85.0, 0.0, 0.0)),
+            (40, (70.0, 0.0, 0.0)),
+        ]),
+        "upper_arm_r": (rotation: [
+            (0, (20.0, 0.0, -20.0)),
+            (20, (-10.0, 0.0, -20.0)),
+            (40, (20.0, 0.0, -20.0)),
+        ]),
+        "lower_arm_r": (rotation: [
+            (0, (45.0, 0.0, 0.0)),
+            (40, (45.0, 0.0, 0.0)),
+        ]),
+        // The blade tipped 12 degrees down from how the hand holds it.
+        "weapon": (rotation: [
+            (0, (-12.0, 0.0, 0.0)),
+            (40, (-12.0, 0.0, 0.0)),
+        ]),
+    },
+)

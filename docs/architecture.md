@@ -2219,7 +2219,7 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 - 新写法：`model` 加 `animation`，`character` 里写 `capsule`。
   - 胶囊体的 `radius`、`height` 就是以前 `mesh: Capsule` 的那两个数：碰撞、受击、各种「小于胶囊体半径」的检查都用它。
   - 规则：
-    - 有 `model` 没 `capsule`、有 `capsule` 又有 `mesh`、有 `model` 没 `animation`，都报错（`GameError`，文案照 `NotACapsule` 的格式，写进 FEEDBACK）；
+    - 有 `model` 没 `capsule`、有 `capsule` 又有 `mesh`、有 `model` 没 `animation`、有 `capsule` 却没有 `model`（E7.4 实现时加：否则角色看不见），都报错（`GameError`）；
     - `capsule` 的两个数都要 > 0。
   - `loom_scene` 只检查 `capsule` 本身（两个数 > 0），和 `mesh` 的组合由 souls 查。
 - 状态导出的 `game` 部分和写法无关：同样的输入，两种写法的 `game` 逐字节相同（有测试）。
@@ -2248,7 +2248,7 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
    - `rate = round(100 × 默认这一段的 tick 数 / 实际这一段的 tick 数)`；
    - `blend`：前摇是 3，出招、后摇是 0（同一个片段接着播）。
 3. `action` 是 `sprint`：片段 `sprint`，速度 `rate = round(100 × sprint_speed / SPRINT_CLIP_SPEED)`。
-4. `action` 是 `idle`，而且这个 tick 的移动输入不为零（第 2 步的 `v`）：
+4. `action` 是 `idle`，健康状态是 `ok`（E7.4 实现时加：硬直、死亡时 `action` 也是 `idle`，摇杆可能还推着），而且这个 tick 的移动输入不为零（第 2 步的 `v`）：
    - 用移动方向 `dir` 和角色朝向算：`forward = (-sin f, 0, -cos f)`、`right = (cos f, 0, -sin f)`（`f` 是 `facing`），`a = dot(dir, forward)`、`b = dot(dir, right)`。
      - `a >= |b|`：`run`；
      - `-a > |b|`：`run_back`；
@@ -2265,6 +2265,9 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
   - 其余（站、跑、横移、冲刺之间，以及从攻击、翻滚出来）都用 6。
 - 片段相同、只是速度变了：调 `set_clip_rate`。速度相同就什么都不调。
 - `round` 用 `libm::roundf`；速度算出来小于 1 时取 1（片段不会停住）。
+- 动作的最后一个 tick 里 `action` 已经回到 `idle`，所以这个 tick 就开始往 `idle` 过渡，片段最后一格播不到（例如轻攻击后摇最多播到 2800 ctick）。有 6 tick 的过渡，看不出跳变，E7.4 审查时接受。
+- 每一段第一个 tick 的片段时间正好是这一段的起点，所以动作第 k 个 tick 显示的是片段的第 k - 1 格。
+- 攻击片段出招第一帧的剑尖可以高于 `swing_high`（重攻击最高约 2.2 m）：高度范围说的是判定扇形，画面只要大致对应（E7.4 审查时定）。
 
 **颜色**：
 - 角色的模型节点也参与闪白、死亡变暗。
@@ -2272,7 +2275,8 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 - 变暗照旧乘 `DEAD_DIM`。
 
 **场景**：`demo.scene.ron`（内置演示）和 `assets/scenes/boss.ron` 的角色改成新写法，用 `assets/models/humanoid.glb` 和 `assets/anims/humanoid/` 下的片段。
-- 这两个场景的状态导出多了 `nodes.player.animation`，`game` 部分逐字节不变；
+- 角色原来标朝向的 `visor` 子节点删掉了（模型有面甲，看得出朝向）；
+- 这两个场景的状态导出多了 `nodes.player.animation`、少了 `player/visor`，`game` 部分逐字节不变；
 - 截图的基准要重录。
 
 ### 碰撞（G1.3 起）

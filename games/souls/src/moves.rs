@@ -496,6 +496,8 @@ pub(crate) struct Params {
     pub tap_ticks: u32,
     /// Meters per tick: `sprint_speed / 60`.
     pub sprint_step: f32,
+    /// Meters per second.
+    pub sprint_speed: f32,
     /// Stamina per tick: `sprint_cost / 60`.
     pub sprint_drain: f32,
     pub roll: Move,
@@ -546,6 +548,15 @@ pub(crate) struct Lock {
     /// `look_x` summed up to this switches targets.
     pub switch_threshold: f32,
     pub switch_cooldown_ticks: u32,
+}
+
+/// The default of the character prop `name` in [`PARAMS`].
+pub(crate) fn default_of(name: &str) -> f64 {
+    PARAMS
+        .iter()
+        .find(|spec| spec.name == name)
+        .and_then(|spec| spec.default)
+        .expect("only names from PARAMS are asked for, and every one has a default")
 }
 
 /// Rules across the character's props, checked after each value, in this
@@ -636,6 +647,7 @@ impl Params {
             delay_ticks: ticks("stamina_delay_ticks"),
             tap_ticks: ticks("tap_ticks"),
             sprint_step: get("sprint_speed") as f32 / 60.0,
+            sprint_speed: get("sprint_speed") as f32,
             sprint_drain: get("sprint_cost") as f32 / 60.0,
             roll: movement("roll"),
             backstep: movement("backstep"),

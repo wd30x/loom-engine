@@ -1,0 +1,32 @@
+// Preview of the souls knight's action clips (docs/architecture.md sections 11 and 19),
+// rendered without a game, in place; the clips play once and then hold their last pose. A film
+// strip of it is smoke H15:
+//   loom view --scene assets/scenes/knight_attacks.ron --ticks 6,12,20,25,40 --size 720x480 --screenshot out/knight_attacks.png
+// Tick 6 is in every attack's startup, 12 in a light attack's active part (10-14), 20 in its
+// recovery; 20 is also in the heavy attack's startup (0-22), 25 in its active part (22-27) and
+// 40 in its recovery. Six knights face loom's forward (-Z), seen from the front, a little to
+// their left and above. Front row, left to right on screen: roll, backstep, heavy; back row:
+// attack1, attack2, attack3.
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (-2.4, 3.9, -6.6), look_at: (0.0, 0.5, 1.7),
+            camera: (fov_y: 45.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 150.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (30.0, 1.0, 30.0), color: (0.35, 0.35, 0.38)),
+        (name: "roll", position: (2.2, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("roll", "assets/anims/humanoid/roll.ron")], play: "roll")),
+        (name: "backstep", position: (0.0, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("backstep", "assets/anims/humanoid/backstep.ron")], play: "backstep")),
+        (name: "heavy", position: (-2.2, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("heavy", "assets/anims/humanoid/heavy.ron")], play: "heavy")),
+        (name: "attack1", position: (3.2, 0.0, 3.2), model: "assets/models/humanoid.glb",
+            animation: (clips: [("attack1", "assets/anims/humanoid/attack1.ron")], play: "attack1")),
+        (name: "attack2", position: (1.0, 0.0, 3.2), model: "assets/models/humanoid.glb",
+            animation: (clips: [("attack2", "assets/anims/humanoid/attack2.ron")], play: "attack2")),
+        (name: "attack3", position: (-1.2, 0.0, 3.2), model: "assets/models/humanoid.glb",
+            animation: (clips: [("attack3", "assets/anims/humanoid/attack3.ron")], play: "attack3")),
+    ],
+)

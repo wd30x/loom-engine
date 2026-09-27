@@ -14,6 +14,9 @@ use super::roles::Enemy;
 pub(super) const FLASH_TICKS: u64 = 8;
 /// The color a hurtbox's meshes flash in.
 pub(super) const FLASH_COLOR: Vec3 = Vec3::ONE;
+/// The color the character's model flashes in: its own colors are white
+/// already, so reddish.
+pub(super) const FLASH_TINT: Vec3 = Vec3::new(1.0, 0.45, 0.45);
 /// A dead hurtbox's meshes are their scene colors times this.
 pub(super) const DEAD_DIM: f32 = 0.4;
 /// How far a staggered hurtbox tips over, away from its attacker, in degrees.
@@ -80,10 +83,16 @@ impl Game {
             .last_hit
             .as_ref()
             .is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
-        for &(id, color) in &self.player_meshes {
+        for &(id, color, model) in &self.player_meshes {
+            let dead = state == Condition::Dead;
+            let color = if model && flashing && !dead {
+                FLASH_TINT
+            } else {
+                shown(color, dead, flashing)
+            };
             self.scene
-                .set_mesh_color(id, shown(color, state == Condition::Dead, flashing))
-                .expect("meshes were picked for having a mesh, and every color is valid");
+                .set_mesh_color(id, color)
+                .expect("meshes and models were picked for having one, and every color is valid");
         }
         if let Some(f) = self.flask {
             let drinking = self.state.player.action == Action::Drink;

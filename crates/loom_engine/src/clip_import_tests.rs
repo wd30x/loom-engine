@@ -144,7 +144,8 @@ fn converted_clip_poses_the_joints_as_the_gltf_animation_does() {
     let (mut worst_angle, mut worst_move) = (0.0_f32, 0.0_f32);
     for k in 0..=70 {
         let posed = pose(&skeleton, |bone| {
-            clip.sample(bone, k).unwrap_or((Quat::IDENTITY, Vec3::ZERO))
+            clip.sample(bone, k * loom_scene::CTICKS)
+                .unwrap_or((Quat::IDENTITY, Vec3::ZERO))
         });
         let want = wave_by_gltf(k as f32 / 60.0);
         for (got, want) in posed.iter().zip(want) {

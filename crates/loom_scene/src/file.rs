@@ -229,6 +229,21 @@ pub(crate) struct CharacterDesc {
     pub run_speed: f32,
     /// Degrees per second, greater than 0.
     pub turn_speed: f32,
+    /// The upright capsule the character collides and is hit with, when
+    /// the node draws something else (a model). The game says when it is
+    /// needed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capsule: Option<CapsuleDesc>,
+}
+
+/// An upright capsule standing on the node's origin.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CapsuleDesc {
+    /// Meters, greater than 0.
+    pub radius: f32,
+    /// Meters from the bottom to the top, greater than 0.
+    pub height: f32,
 }
 
 /// A camera that orbits the character, as in Dark Souls.

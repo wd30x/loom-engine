@@ -5,6 +5,7 @@
 
 mod bonfire;
 mod camera;
+mod clips;
 mod collision;
 mod debug;
 mod enemy_ai;
@@ -123,10 +124,15 @@ pub struct Game {
     enemies: Vec<Enemy>,
     /// The character's own health, poise and death (without an hp bar).
     health: Health,
-    /// Every node with a mesh in the character's subtree (the character
-    /// included), in pre-order, with its color in the scene file: what
-    /// flashes and darkens.
-    player_meshes: Vec<(NodeId, Vec3)>,
+    /// Every node with a mesh or a model in the character's subtree (the
+    /// character included), in pre-order, with its color in the scene file
+    /// and whether it is a model: what flashes and darkens.
+    player_meshes: Vec<(NodeId, Vec3, bool)>,
+    /// What picks the character's clips; `None` for a capsule mesh.
+    clips: Option<clips::Clips>,
+    /// The latest tick's movement input `v` and direction `dir` (steps 2
+    /// and 3), for the clips.
+    move_input: (Vec2, Vec3),
     /// The character's direct child named `flask`, shown only while
     /// drinking.
     flask: Option<NodeId>,
@@ -184,7 +190,8 @@ impl Game {
     }
 
     /// Takes over `scene`, which needs a root node with a character and a
-    /// capsule mesh, and an active camera that is a root node with an orbit
+    /// capsule mesh, or a model with an animation of every clip in
+    /// [`clips::CLIPS`] and a `character.capsule`, and an active camera that is a root node with an orbit
     /// camera (its target is necessarily that character: a scene has at
     /// most one). The character must not be scaled, and colliders must not
     /// move with either. Nodes with a `lock_height` prop are lock-on
@@ -208,9 +215,10 @@ impl Game {
             .node(player)
             .character
             .expect("Scene::character only returns nodes with a character");
-        let Some(MeshKind::Capsule { radius, height }) = scene.node(player).mesh.map(|m| m.kind)
-        else {
-            return Err(GameError::NotACapsule(scene.path(player)));
+        let (radius, height) = capsule(&scene, player)?;
+        let clips = match scene.node(player).model {
+            Some(_) => Some(clips::Clips::new(&scene, player)?),
+            None => None,
         };
         if scene.transform(player).scale != Vec3::ONE {
             return Err(GameError::ScaledCharacter(scene.path(player)));
@@ -252,7 +260,12 @@ impl Game {
         let player_meshes = scene
             .ids()
             .filter(|&n| is_in_subtree(&scene, n, player))
-            .filter_map(|n| scene.node(n).mesh.map(|m| (n, m.color)))
+            .filter_map(|n| {
+                let node = scene.node(n);
+                node.mesh
+                    .map(|m| (n, m.color, false))
+                    .or(node.model.as_ref().map(|m| (n, m.color, true)))
+            })
             .collect();
         let flask = scene
             .ids()
@@ -349,6 +362,8 @@ impl Game {
             enemies,
             health,
             player_meshes,
+            clips,
+            move_input: (Vec2::ZERO, Vec3::ZERO),
             flask,
             bonfires,
             bloodstain_marker,
@@ -510,6 +525,7 @@ impl Game {
         let forward = Vec3::new(-s, 0.0, -c);
         let right = Vec3::new(c, 0.0, -s);
         let dir = right * v.x + forward * v.y;
+        self.move_input = (v, dir);
 
         // 4. Actions and movement; each move ends by pushing the capsule
         // out of the colliders. `busy`: stamina used or an action running.
@@ -673,6 +689,7 @@ impl Game {
 
         // 6. Write the nodes.
         self.show_player();
+        self.show_clip();
         self.show_bloodstain();
         self.place_camera(false);
         // An enemy stands turned to its facing.
@@ -754,6 +771,30 @@ impl Game {
     }
 }
 
+/// The character's capsule `(radius, height)`: its capsule mesh, or with a
+/// model its `character.capsule` (`docs/architecture.md` section 11, "模型和
+/// 动画").
+fn capsule(scene: &Scene, player: NodeId) -> Result<(f32, f32), GameError> {
+    let node = scene.node(player);
+    let path = || scene.path(player);
+    let character = node
+        .character
+        .expect("Scene::character only returns nodes with a character");
+    match (character.capsule, &node.model) {
+        (Some(_), _) if node.mesh.is_some() => Err(GameError::CapsuleAndMesh(path())),
+        (Some(_), None) => Err(GameError::CapsuleWithoutModel(path())),
+        (None, Some(_)) => Err(GameError::ModelWithoutCapsule(path())),
+        (Some(_), Some(model)) if model.animation.is_none() => {
+            Err(GameError::ModelWithoutAnimation(path()))
+        }
+        (Some(c), Some(_)) => Ok(c),
+        (None, None) => match node.mesh.map(|m| m.kind) {
+            Some(MeshKind::Capsule { radius, height }) => Ok((radius, height)),
+            _ => Err(GameError::NotACapsule(path())),
+        },
+    }
+}
+
 /// The horizontal direction from `from` to `to`, as an angle like `facing`
 /// and `yaw`: 0 is -Z, positive is to the left (counterclockwise from
 /// above).
@@ -810,3 +851,6 @@ mod souls_tests;
 
 #[cfg(test)]
 mod hud_tests;
+
+#[cfg(test)]
+mod clips_tests;

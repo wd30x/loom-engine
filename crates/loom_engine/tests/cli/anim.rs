@@ -96,7 +96,24 @@ fn every_repository_clip_fits_the_clip_schema_and_broken_ones_do_not() {
                 .into_owned()
         })
         .collect();
-    assert_eq!(names, ["idle.ron", "walk.ron"]);
+    assert_eq!(
+        names,
+        [
+            "attack1.ron",
+            "attack2.ron",
+            "attack3.ron",
+            "backstep.ron",
+            "heavy.ron",
+            "idle.ron",
+            "roll.ron",
+            "run.ron",
+            "run_back.ron",
+            "run_left.ron",
+            "run_right.ron",
+            "sprint.ron",
+            "walk.ron",
+        ]
+    );
     let as_json = |text: &str| -> Value {
         let value: ron::Value = ron::from_str(text).expect("the clip is RON");
         serde_json::to_value(&value).expect("RON values are plain data")
@@ -157,7 +174,8 @@ fn state_dump_shows_what_animated_nodes_play_and_nothing_on_other_nodes() {
     let dump: Value = serde_json::from_str(&state).expect("the dump is JSON");
     assert_eq!(
         dump["nodes"]["knight"]["animation"],
-        serde_json::json!({"clip": "idle", "start": 0, "from": null, "blend": 0})
+        serde_json::json!({"clip": "idle", "start": 0, "offset": 0, "rate": 100,
+            "from": null, "blend_start": 0, "blend": 0})
     );
     let nodes = dump["nodes"].as_object().expect("nodes");
     let animated: Vec<&String> = nodes

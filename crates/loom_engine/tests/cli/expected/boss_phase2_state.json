@@ -295,7 +295,21 @@
         1.0,
         1.0,
         1.0
-      ]
+      ],
+      "animation": {
+        "clip": "idle",
+        "start": 343,
+        "offset": 0,
+        "rate": 100,
+        "from": {
+          "clip": "heavy",
+          "start": 328,
+          "offset": 2700,
+          "rate": 100
+        },
+        "blend_start": 343,
+        "blend": 6
+      }
     },
     "player/flask": {
       "position": [
@@ -313,24 +327,6 @@
         0.12,
         0.25,
         0.12
-      ]
-    },
-    "player/visor": {
-      "position": [
-        0.0,
-        1.5,
-        -0.3
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "scale": [
-        0.4,
-        0.15,
-        0.3
       ]
     },
     "sun": {

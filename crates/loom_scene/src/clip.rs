@@ -177,19 +177,17 @@ impl Clip {
         self.bones.keys().map(String::as_str)
     }
 
-    /// The offset of `bone` from its bind pose `t` ticks after the clip
-    /// started: a rotation and a move along the model's axes (identity
-    /// and zero for a channel the bone does not have). `None` for a bone
-    /// the clip does not list.
-    pub fn sample(&self, bone: &str, t: u64) -> Option<(Quat, Vec3)> {
+    /// The offset of `bone` from its bind pose at clip time `c`, in
+    /// hundredths of a tick (ctick, `docs/architecture.md` section 19,
+    /// "播放速度和片段起点"): a rotation and a move along the model's axes
+    /// (identity and zero for a channel the bone does not have). `None` for
+    /// a bone the clip does not list.
+    pub fn sample(&self, bone: &str, c: u64) -> Option<(Quat, Vec3)> {
         let channels = self.bones.get(bone)?;
-        let t = if self.looping {
-            t % self.length
-        } else {
-            t.min(self.length)
-        };
-        let rotation = sample(&channels.rotation, t, Quat::IDENTITY, Quat::slerp);
-        let translation = sample(&channels.translation, t, Vec3::ZERO, Vec3::lerp);
+        let end = self.length.saturating_mul(CTICKS);
+        let c = if self.looping { c % end } else { c.min(end) };
+        let rotation = sample(&channels.rotation, c, Quat::IDENTITY, Quat::slerp);
+        let translation = sample(&channels.translation, c, Vec3::ZERO, Vec3::lerp);
         Some((rotation, translation))
     }
 }
@@ -243,26 +241,30 @@ fn keys(
     Ok(out)
 }
 
-/// A channel's value at `t`: the first keyframe's before it, the last's
-/// after it, `mix(a, b, s)` between two keyframes; `none` without
-/// keyframes.
-fn sample<T: Copy>(keys: &[(u64, T)], t: u64, none: T, mix: impl Fn(T, T, f32) -> T) -> T {
+/// Hundredths of a tick a tick: clip time's unit.
+pub const CTICKS: u64 = 100;
+
+/// A channel's value at clip time `c` (ctick; keyframes are at whole
+/// ticks): the first keyframe's before it, the last's after it,
+/// `mix(a, b, s)` between two keyframes; `none` without keyframes.
+fn sample<T: Copy>(keys: &[(u64, T)], c: u64, none: T, mix: impl Fn(T, T, f32) -> T) -> T {
+    let at = |tick: u64| tick.saturating_mul(CTICKS);
     let Some(&(first_tick, first)) = keys.first() else {
         return none;
     };
-    if t <= first_tick {
+    if c <= at(first_tick) {
         return first;
     }
-    // The first keyframe after t; the one before it is at or before t.
-    match keys.iter().position(|&(tick, _)| tick > t) {
+    // The first keyframe after c; the one before it is at or before c.
+    match keys.iter().position(|&(tick, _)| at(tick) > c) {
         None => keys[keys.len() - 1].1,
         Some(i) => {
             let ((t0, a), (t1, b)) = (keys[i - 1], keys[i]);
-            if t == t0 {
+            if c == at(t0) {
                 // A keyframe's own value, exactly.
                 return a;
             }
-            let s = (t - t0) as f32 / (t1 - t0) as f32;
+            let s = (c - at(t0)) as f32 / (at(t1) - at(t0)) as f32;
             mix(a, b, s)
         }
     }

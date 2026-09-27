@@ -23,7 +23,7 @@ use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-pub use clip::{BoneDesc, Clip, ClipError, ClipFile, Keyframe, clip_schema};
+pub use clip::{BoneDesc, CTICKS, Clip, ClipError, ClipFile, Keyframe, clip_schema};
 pub use doc::{EditError, SceneDoc};
 pub use file::MeshKind;
 use file::{
@@ -133,6 +133,8 @@ pub enum Problem {
     CapsuleShape,
     #[error("character run_speed and turn_speed must be greater than 0")]
     CharacterSpeed,
+    #[error("character capsule radius and height must be greater than 0")]
+    CharacterCapsule,
     #[error("a second character; the scene already has one at {0:?}")]
     SecondCharacter(String),
     #[error("a second orbit_camera; the scene already has one at {0:?}")]
@@ -224,13 +226,78 @@ pub struct Animation {
     pub clips: Vec<(String, String)>,
     /// The clip playing: one of `clips`' names.
     pub playing: String,
-    /// The tick the playing clip started at.
+    /// The tick this stretch of it is counted from.
     pub start: u64,
-    /// The clip blended from, and the tick it had started at; `None` until
-    /// the first switch.
-    pub from: Option<(String, u64)>,
+    /// The clip time at `start`, in ctick (hundredths of a tick).
+    pub offset: u64,
+    /// Playing speed in percent: 100 is as written, 0 holds still.
+    pub rate: u32,
+    /// What played before the latest switch; `None` until the first.
+    pub from: Option<ClipTime>,
+    /// The tick the blend from `from` starts at.
+    pub blend_start: u64,
     /// Ticks the blend from `from` takes; 0 switches at once.
     pub blend: u64,
+}
+
+/// A clip and how its time runs: `offset` ctick at tick `start`, then
+/// `rate` ctick a tick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipTime {
+    pub clip: String,
+    pub start: u64,
+    pub offset: u64,
+    pub rate: u32,
+}
+
+impl ClipTime {
+    /// The clip time at tick `tau`, in ctick: `offset + (tau - start) *
+    /// rate`, the ticks before `start` counting as 0; not wrapped.
+    pub fn at(&self, tau: u64) -> u64 {
+        clip_time(self.start, self.offset, self.rate, tau)
+    }
+}
+
+fn clip_time(start: u64, offset: u64, rate: u32, tau: u64) -> u64 {
+    offset.saturating_add(tau.saturating_sub(start).saturating_mul(u64::from(rate)))
+}
+
+/// What [`Scene::play_clip`] switches to: `clip` from tick `start` at
+/// clip time `offset` (ctick), `rate` percent fast, blended from what
+/// played over `blend` ticks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Play {
+    pub clip: String,
+    pub start: u64,
+    pub blend: u64,
+    pub offset: u64,
+    pub rate: u32,
+}
+
+impl Play {
+    /// `clip` from its beginning at tick `start`, as fast as written,
+    /// without a blend.
+    pub fn new(clip: &str, start: u64) -> Self {
+        Self {
+            clip: clip.to_owned(),
+            start,
+            blend: 0,
+            offset: 0,
+            rate: 100,
+        }
+    }
+
+    pub fn blend(self, blend: u64) -> Self {
+        Self { blend, ..self }
+    }
+
+    pub fn offset(self, offset: u64) -> Self {
+        Self { offset, ..self }
+    }
+
+    pub fn rate(self, rate: u32) -> Self {
+        Self { rate, ..self }
+    }
 }
 
 impl Animation {
@@ -242,32 +309,47 @@ impl Animation {
             .map(|(_, path)| path.as_str())
     }
 
+    /// Plays on `rate` percent fast from tick `tau`, from the clip time
+    /// it has then ([`Scene::set_clip_rate`]).
+    pub fn set_rate(&mut self, tau: u64, rate: u32) {
+        self.offset = self.time_at(tau);
+        self.start = tau;
+        self.rate = rate;
+    }
+
+    /// The playing clip's time at tick `tau`, in ctick, not wrapped
+    /// ([`ClipTime::at`]).
+    pub fn time_at(&self, tau: u64) -> u64 {
+        clip_time(self.start, self.offset, self.rate, tau)
+    }
+
     /// The offset of `bone` from its bind pose at tick `tau`: the playing
     /// clip's, blended from the `from` clip's while the blend lasts
-    /// (`docs/architecture.md` section 19, "画某个 tick 的姿势"). `clip`
-    /// gives the clip of each of the node's clip names. A bone a clip does
-    /// not list has the identity rotation and no move in it.
+    /// (`docs/architecture.md` section 19, "画某个 tick 的姿势" and
+    /// "播放速度和片段起点"). `clip` gives the clip of each of the node's
+    /// clip names. A bone a clip does not list has the identity rotation
+    /// and no move in it.
     pub fn offsets<'c>(
         &self,
         clip: impl Fn(&str) -> &'c Clip,
         bone: &str,
         tau: u64,
     ) -> (Quat, Vec3) {
-        let sample = |name: &str, since: u64| {
+        let sample = |name: &str, c: u64| {
             clip(name)
-                .sample(bone, tau.saturating_sub(since))
+                .sample(bone, c)
                 .unwrap_or((Quat::IDENTITY, Vec3::ZERO))
         };
-        let new = sample(&self.playing, self.start);
-        let Some((from, from_start)) = &self.from else {
+        let new = sample(&self.playing, self.time_at(tau));
+        let Some(from) = &self.from else {
             return new;
         };
         // Ticks into the blend; `None` before it starts.
-        let into = tau.checked_sub(self.start);
+        let into = tau.checked_sub(self.blend_start);
         if self.blend == 0 || into.is_some_and(|t| t >= self.blend) {
             return new;
         }
-        let old = sample(from, *from_start);
+        let old = sample(&from.clip, from.at(tau));
         match into {
             None | Some(0) => old,
             Some(t) => {
@@ -390,6 +472,9 @@ pub struct Character {
     pub run_speed: f32,
     /// Degrees per second.
     pub turn_speed_degrees: f32,
+    /// The capsule's `(radius, height)` in meters, when the scene gives
+    /// one.
+    pub capsule: Option<(f32, f32)>,
 }
 
 /// A camera orbiting a character (`docs/architecture.md` section 11). Always
@@ -632,37 +717,48 @@ impl Scene {
     /// one the scene declares for the node, so the engine only ever meets
     /// clips checked at load time; on an error nothing changes. Switching
     /// to the clip already playing restarts it, blended from where it was.
-    pub fn play_clip(
-        &mut self,
-        id: NodeId,
-        clip: &str,
-        start: u64,
-        blend: u64,
-    ) -> Result<(), AnimationError> {
-        let path = || self.path(id);
-        let Some(animation) = self.nodes[id.0]
-            .model
-            .as_ref()
-            .and_then(|m| m.animation.as_ref())
-        else {
-            return Err(AnimationError::NoAnimation(path()));
-        };
-        if animation.clip_path(clip).is_none() {
+    pub fn play_clip(&mut self, id: NodeId, play: Play) -> Result<(), AnimationError> {
+        let path = self.path(id);
+        let animation = self.animation_mut(id)?;
+        if animation.clip_path(&play.clip).is_none() {
             return Err(AnimationError::Undeclared {
-                path: path(),
-                clip: clip.to_owned(),
+                path,
+                clip: play.clip,
             });
         }
-        let animation = self.nodes[id.0]
+        let playing = std::mem::replace(&mut animation.playing, play.clip);
+        animation.from = Some(ClipTime {
+            clip: playing,
+            start: animation.start,
+            offset: animation.offset,
+            rate: animation.rate,
+        });
+        animation.start = play.start;
+        animation.offset = play.offset;
+        animation.rate = play.rate;
+        animation.blend_start = play.start;
+        animation.blend = play.blend;
+        Ok(())
+    }
+
+    /// Changes how fast the animation of `id` plays from tick `tau` on,
+    /// `rate` percent, without a jump: the clip time at `tau` stays (not
+    /// wrapped), and a blend in progress goes on as it was
+    /// (`docs/architecture.md` section 19, "播放速度和片段起点"). On an
+    /// error nothing changes.
+    pub fn set_clip_rate(&mut self, id: NodeId, tau: u64, rate: u32) -> Result<(), AnimationError> {
+        self.animation_mut(id)?.set_rate(tau, rate);
+        Ok(())
+    }
+
+    /// The animation of `id`, to change.
+    fn animation_mut(&mut self, id: NodeId) -> Result<&mut Animation, AnimationError> {
+        let path = self.path(id);
+        self.nodes[id.0]
             .model
             .as_mut()
             .and_then(|m| m.animation.as_mut())
-            .expect("checked above");
-        let playing = std::mem::replace(&mut animation.playing, clip.to_owned());
-        animation.from = Some((playing, animation.start));
-        animation.start = start;
-        animation.blend = blend;
-        Ok(())
+            .ok_or(AnimationError::NoAnimation(path))
     }
 
     /// Sets the mesh color of `id` (a model's tint for a model node),
@@ -937,9 +1033,18 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
             if !(c.run_speed > 0.0 && c.turn_speed > 0.0) {
                 return Err(Problem::CharacterSpeed);
             }
+            if let Some(capsule) = c.capsule {
+                if !(capsule.radius.is_finite() && capsule.height.is_finite()) {
+                    return Err(Problem::NotFinite("character"));
+                }
+                if !(capsule.radius > 0.0 && capsule.height > 0.0) {
+                    return Err(Problem::CharacterCapsule);
+                }
+            }
             Some(Character {
                 run_speed: c.run_speed,
                 turn_speed_degrees: c.turn_speed,
+                capsule: c.capsule.map(|c| (c.radius, c.height)),
             })
         }
         None => None,
@@ -1072,7 +1177,10 @@ fn animation(a: &AnimationDesc) -> Result<Animation, Problem> {
         clips: a.clips.clone(),
         playing: a.play.clone(),
         start: 0,
+        offset: 0,
+        rate: 100,
         from: None,
+        blend_start: 0,
         blend: 0,
     })
 }
