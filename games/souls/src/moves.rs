@@ -21,6 +21,8 @@ pub enum Action {
     Attack,
     /// A heavy attack.
     Heavy,
+    /// Sitting at a bonfire.
+    Sit,
 }
 
 /// The part of an attack; serialized in lower case.
@@ -632,7 +634,7 @@ impl Params {
         match action {
             Action::Roll => self.roll,
             Action::Backstep => self.backstep,
-            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy => {
+            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy | Action::Sit => {
                 unreachable!("only rolls and backsteps are moves")
             }
         }
@@ -643,7 +645,7 @@ impl Params {
         match action {
             Action::Attack => self.attack,
             Action::Heavy => self.heavy,
-            Action::Idle | Action::Sprint | Action::Roll | Action::Backstep => {
+            Action::Idle | Action::Sprint | Action::Roll | Action::Backstep | Action::Sit => {
                 unreachable!("only light and heavy attacks are attacks")
             }
         }
@@ -4797,11 +4799,12 @@ mod tests {
         fn demo_scene_colliders_are_magenta_boxes_the_stake_block_among_them() {
             let run = Run::on(include_str!("demo.scene.ron"));
             let l = lines(&run, &["colliders"]);
-            // Three pillars, the wall, three dummy blocks and the stake's.
-            assert_eq!(l.len(), 8 * 12);
+            // Three pillars, the wall, three dummy blocks, the stake's and
+            // the bonfire's.
+            assert_eq!(l.len(), 9 * 12);
             assert!(l.iter().all(|l| l.color == MAGENTA));
             // The stake at (6, 0, 2), its block 0.3 x 1.6 x 0.3 at 0.8 up.
-            for end in l[7 * 12..].iter().flat_map(|l| [l.a, l.b]) {
+            for end in l[7 * 12..8 * 12].iter().flat_map(|l| [l.a, l.b]) {
                 let d = end - Vec3::new(6.0, 0.8, 2.0);
                 assert!(
                     near(d.x.abs(), 0.15) && near(d.y.abs(), 0.8) && near(d.z.abs(), 0.15),

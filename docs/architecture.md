@@ -1898,7 +1898,8 @@ if input.just_pressed("interact"):
   - 耐力照常恢复（不 busy）；
   - 相机照常能转；
   - 坐着时被打出硬直或打死，照常打断（`action_end` 的 `reason` 是 `interrupted`）。
-- `sit` 的 `action_start`、`action_end` 不发，用 `rest`、`stand` 事件表示。
+- `sit` 的 `action_start`、`action_end` 不发，用 `rest`、`stand` 事件表示。例外：坐着时被打出硬直或打死，照常发 `action_end`（`action` 是 `sit`，`reason` 是 `interrupted`）（G5.1 实现时定）。
+- 坐下的那个 tick 即使推着方向也不站起来，从下一个 tick 起才判断，免得边走边按 E 在同一个 tick 坐下又站起。坐下和站起的 tick，同时按的攻击、翻滚都按 `sitting` 丢掉（G5.1 实现时定）。
 
 **世界重置**（坐下时，和角色复活时，都做同样的事）：
 - 每个受击判定：`health` 回到加载时的状态；`fall` 回到 0。`hits`、`last_hit` 不清（它们是「加载以来」的计数）。
@@ -1943,6 +1944,7 @@ if input.just_pressed("interact"):
 - 坐下、站起没有动画，只是节点下沉 0.5 米。
 - 篝火没有「点燃」的概念，第一次靠近就能坐。
 - 世界重置不重置角色的 `hits`、受击判定的 `hits`、`last_hit`。
+- Boss 追着的时候基本坐不了篝火：要离开它的仇恨范围（15 米），Boss 走得不比角色慢多少，冲刺又有耐力限制。这和黑魂「附近有敌人不能休息」一致，Boss 场景的篝火主要用于开打前和死后（G5.1 审查时确认）。
 
 ### 碰撞（G1.3 起）
 

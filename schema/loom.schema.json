@@ -2660,6 +2660,15 @@
               },
               "unit": "degrees per second",
               "description": "Spin, a full turn on the spot, only in phase 2: how fast the enemy turns to the character during the startup."
+            },
+            {
+              "name": "bonfire_range",
+              "default": null,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Makes the node a bonfire: the character sits down at it within this horizontal distance."
             }
           ],
           "requires": [
@@ -2680,7 +2689,8 @@
             "an enemy: enemy_swing_low < enemy_swing_high",
             "an enemy needs hurt_radius, hurt_height, hp and lock_height, and is not a swinger",
             "an enemy: enemy_speed / 60, lunge_distance / lunge_active_ticks and, with phase2_at, enemy_speed / 60 / phase2_speed_scale are less than hurt_radius",
-            "an enemy has no collider in its subtree"
+            "an enemy has no collider in its subtree",
+            "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a lock target, hurtbox, swinger or enemy"
           ]
         }
       },
@@ -2759,6 +2769,11 @@
                 "description": "A heavy attack.",
                 "type": "string",
                 "const": "heavy"
+              },
+              {
+                "description": "Sitting at a bonfire.",
+                "type": "string",
+                "const": "sit"
               }
             ]
           },
@@ -2992,6 +3007,10 @@
               "player": {
                 "$ref": "#/$defs/PlayerState"
               },
+              "respawn": {
+                "description": "Where the character comes back after dying.",
+                "$ref": "#/$defs/RespawnState"
+              },
               "swingers": {
                 "description": "Every swinger, in pre-order.",
                 "type": "array",
@@ -3006,7 +3025,8 @@
               "lock",
               "hurtboxes",
               "swingers",
-              "enemies"
+              "enemies",
+              "respawn"
             ]
           },
           "HealthState": {
@@ -3276,6 +3296,39 @@
               "health"
             ]
           },
+          "RespawnState": {
+            "description": "The respawn point (`game.respawn`).",
+            "type": "object",
+            "properties": {
+              "bonfire": {
+                "description": "The path of the bonfire last sat at; `None` for the spawn point.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "facing": {
+                "description": "Heading in radians around +Y, like the character's `facing`.",
+                "type": "number",
+                "format": "float"
+              },
+              "position": {
+                "description": "Feet position in meters; serialized as `[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "facing",
+              "bonfire"
+            ]
+          },
           "SwingerState": {
             "description": "A swinger in the state dump (`game.swingers`).",
             "type": "object",
@@ -3402,6 +3455,11 @@
                 "description": "A heavy attack.",
                 "type": "string",
                 "const": "heavy"
+              },
+              {
+                "description": "Sitting at a bonfire.",
+                "type": "string",
+                "const": "sit"
               }
             ]
           },
@@ -3486,6 +3544,11 @@
                 ]
               },
               {
+                "description": "Sitting at a bonfire.",
+                "type": "string",
+                "const": "sitting"
+              },
+              {
                 "description": "Rolling or backstepping.",
                 "type": "string",
                 "const": "rolling"
@@ -3504,6 +3567,21 @@
                 "description": "The lock key found nothing to lock on to.",
                 "type": "string",
                 "const": "no_target"
+              },
+              {
+                "description": "The interact key, doing something other than standing or\nsprinting.",
+                "type": "string",
+                "const": "busy"
+              },
+              {
+                "description": "The interact key, with no bonfire within its range.",
+                "type": "string",
+                "const": "no_bonfire"
+              },
+              {
+                "description": "The interact key, with a living enemy within its aggro range.",
+                "type": "string",
+                "const": "enemy_near"
               }
             ]
           },
@@ -3903,7 +3981,7 @@
                 ]
               },
               {
-                "description": "The character came back to life at its spawn point (step 0b).",
+                "description": "The character came back to life at its respawn point (step 0b),\nthe world reset.",
                 "type": "object",
                 "properties": {
                   "position": {
@@ -3987,6 +4065,37 @@
                   "by",
                   "stage"
                 ]
+              },
+              {
+                "description": "The character sat down at a bonfire (step 4): full health and\nstamina, a new respawn point and the world reset.",
+                "type": "object",
+                "properties": {
+                  "bonfire": {
+                    "description": "The bonfire's node path.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "rest"
+                  }
+                },
+                "required": [
+                  "type",
+                  "bonfire"
+                ]
+              },
+              {
+                "description": "The character stood up from a bonfire (step 4).",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "stand"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
               }
             ]
           },
@@ -4021,6 +4130,10 @@
               "player": {
                 "$ref": "#/$defs/PlayerState"
               },
+              "respawn": {
+                "description": "Where the character comes back after dying.",
+                "$ref": "#/$defs/RespawnState"
+              },
               "swingers": {
                 "description": "Every swinger, in pre-order.",
                 "type": "array",
@@ -4035,7 +4148,8 @@
               "lock",
               "hurtboxes",
               "swingers",
-              "enemies"
+              "enemies",
+              "respawn"
             ]
           },
           "HealthState": {
@@ -4144,13 +4258,14 @@
             ]
           },
           "Input": {
-            "description": "A pressed input: the roll key's tap, or the lock key.",
+            "description": "A pressed input: the roll key's tap, the lock key or the interact key.",
             "type": "string",
             "enum": [
               "attack",
               "heavy",
               "roll",
-              "lock"
+              "lock",
+              "interact"
             ]
           },
           "LastHit": {
@@ -4204,6 +4319,11 @@
                 "description": "The character died.",
                 "type": "string",
                 "const": "died"
+              },
+              {
+                "description": "The character sat down at a bonfire.",
+                "type": "string",
+                "const": "rested"
               }
             ]
           },
@@ -4384,6 +4504,39 @@
               "hits",
               "last_hit",
               "health"
+            ]
+          },
+          "RespawnState": {
+            "description": "The respawn point (`game.respawn`).",
+            "type": "object",
+            "properties": {
+              "bonfire": {
+                "description": "The path of the bonfire last sat at; `None` for the spawn point.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "facing": {
+                "description": "Heading in radians around +Y, like the character's `facing`.",
+                "type": "number",
+                "format": "float"
+              },
+              "position": {
+                "description": "Feet position in meters; serialized as `[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "facing",
+              "bonfire"
             ]
           },
           "StateDump": {
@@ -4746,7 +4899,7 @@
             ]
           },
           {
-            "description": "The character came back to life at its spawn point (step 0b).",
+            "description": "The character came back to life at its respawn point (step 0b),\nthe world reset.",
             "type": "object",
             "properties": {
               "position": {
@@ -4830,6 +4983,37 @@
               "by",
               "stage"
             ]
+          },
+          {
+            "description": "The character sat down at a bonfire (step 4): full health and\nstamina, a new respawn point and the world reset.",
+            "type": "object",
+            "properties": {
+              "bonfire": {
+                "description": "The bonfire's node path.",
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "rest"
+              }
+            },
+            "required": [
+              "type",
+              "bonfire"
+            ]
+          },
+          {
+            "description": "The character stood up from a bonfire (step 4).",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "stand"
+              }
+            },
+            "required": [
+              "type"
+            ]
           }
         ],
         "$defs": {
@@ -4854,6 +5038,11 @@
                 "description": "A heavy attack.",
                 "type": "string",
                 "const": "heavy"
+              },
+              {
+                "description": "Sitting at a bonfire.",
+                "type": "string",
+                "const": "sit"
               }
             ]
           },
@@ -4886,6 +5075,11 @@
                 ]
               },
               {
+                "description": "Sitting at a bonfire.",
+                "type": "string",
+                "const": "sitting"
+              },
+              {
                 "description": "Rolling or backstepping.",
                 "type": "string",
                 "const": "rolling"
@@ -4904,6 +5098,21 @@
                 "description": "The lock key found nothing to lock on to.",
                 "type": "string",
                 "const": "no_target"
+              },
+              {
+                "description": "The interact key, doing something other than standing or\nsprinting.",
+                "type": "string",
+                "const": "busy"
+              },
+              {
+                "description": "The interact key, with no bonfire within its range.",
+                "type": "string",
+                "const": "no_bonfire"
+              },
+              {
+                "description": "The interact key, with a living enemy within its aggro range.",
+                "type": "string",
+                "const": "enemy_near"
               }
             ]
           },
@@ -4966,13 +5175,14 @@
             ]
           },
           "Input": {
-            "description": "A pressed input: the roll key's tap, or the lock key.",
+            "description": "A pressed input: the roll key's tap, the lock key or the interact key.",
             "type": "string",
             "enum": [
               "attack",
               "heavy",
               "roll",
-              "lock"
+              "lock",
+              "interact"
             ]
           },
           "LockReason": {
@@ -4999,6 +5209,11 @@
                 "description": "The character died.",
                 "type": "string",
                 "const": "died"
+              },
+              {
+                "description": "The character sat down at a bonfire.",
+                "type": "string",
+                "const": "rested"
               }
             ]
           },

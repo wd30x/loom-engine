@@ -184,6 +184,18 @@
                 (name: "hp_bar", position: (0.0, 3.4, 0.0), scale: (1.6, 0.1, 0.1), mesh: Cube,
                     color: (0.8, 0.1, 0.1)),
             ]),
+        // A bonfire: sitting down at it (E) within 1.5 m gives full health and stamina, makes
+        // the spot the respawn point and resets the world. The fire is only drawn; the block,
+        // not drawn, is what the character bumps into.
+        (name: "bonfire", position: (4.0, 0.0, 12.0),
+            props: [
+                ("bonfire_range", 1.5),          // meters: how close the character sits down
+            ],
+            children: [
+                (name: "fire", position: (0.0, 0.25, 0.0), scale: (0.5, 0.5, 0.5), mesh: Cube,
+                    color: (1.0, 0.45, 0.1)),
+                (name: "block", position: (0.0, 0.25, 0.0), scale: (0.5, 0.5, 0.5), collider: Box),
+            ]),
         (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
             light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
         (name: "main_cam", camera: (fov_y: 60.0, near: 0.1, far: 200.0),

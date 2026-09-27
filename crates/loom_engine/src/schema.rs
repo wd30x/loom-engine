@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(character["props"].as_array().unwrap().len(), 50);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
-            95
+            96
         );
         assert_eq!(
             prop("souls", "character", "stamina_max"),
@@ -221,6 +221,7 @@ mod tests {
         assert_eq!(node[83], "roar_reach");
         assert_eq!(node[84], "spin_damage");
         assert_eq!(node[94], "spin_track_speed");
+        assert_eq!(node[95], "bonfire_range");
         assert_eq!(
             prop("souls", "node", "phase2_at")["rule"],
             json!({"kind": "between", "min": 0.0, "max": 1.0})
@@ -272,7 +273,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (50 + 95 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (50 + 96 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),
@@ -359,6 +360,15 @@ mod tests {
                 by: "boss".to_owned(),
                 stage: 2,
             },
+            Event::Rest {
+                bonfire: "bonfire".to_owned(),
+            },
+            Event::Stand,
+            Event::InputDropped {
+                input: Input::Interact,
+                reason: DropReason::EnemyNear,
+                buffered: false,
+            },
             Event::Hit {
                 by: "boss".to_owned(),
                 target: "player".to_owned(),
@@ -381,7 +391,9 @@ mod tests {
                 | Event::Revive { .. }
                 | Event::Respawn { .. }
                 | Event::EnemyMove { .. }
-                | Event::Stage { .. } => {}
+                | Event::Stage { .. }
+                | Event::Rest { .. }
+                | Event::Stand => {}
             }
         }
         events
@@ -400,8 +412,8 @@ mod tests {
         }
         types.sort();
         types.dedup();
-        assert_eq!(types.len(), 11);
-        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 11);
+        assert_eq!(types.len(), 13);
+        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 13);
 
         let rogue = &schema["games"]["rogue"]["event"];
         let e = rogue::Event::Hit {

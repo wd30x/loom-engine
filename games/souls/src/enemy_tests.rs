@@ -1785,3 +1785,58 @@ fn debug_swings_draw_the_roar_as_a_whole_circle_orange_then_red_on_the_blast() {
     // Drawn in segments of about 11°: the ends come within one of ±π.
     assert!(lo < -2.9 && hi > 2.9, "{lo} {hi}");
 }
+
+#[test]
+fn spin_starts_straight_ahead_and_hits_the_character_in_front_on_its_first_active_tick() {
+    // Its sector is centered behind (facing + π): the first slice,
+    // [-π, -π + 30°] off that, is straight ahead.
+    let mut w = phase2(&SHORT_ROAR);
+    w.extend([
+        ("spin_weight", 1.0),
+        ("spin_damage", 1.0),
+        ("spin_impact", 0.0),
+        ("spin_active_ticks", 12.0),
+    ]);
+    let mut run = Run::new(r#"("hp", 1000)"#, &enemy(0.0, -1.2, 180.0, &w));
+    hit_once(&mut run);
+    let arm = |run: &Run| {
+        let scene = run.game.scene();
+        *scene.transform(scene.find("e/arm").unwrap())
+    };
+    let mut t = 0;
+    while run.game.state().enemies[0].phase != Some(AttackPhase::Startup)
+        || run.game.state().enemies[0].r#move != Some(MoveKind::Spin)
+    {
+        run.idle();
+        t += 1;
+        assert!(t < 100, "no spin");
+    }
+    // Startup: the arm at the sector's right end, -π off the center line
+    // behind: straight ahead, as in the scene file.
+    let a = arm(&run);
+    assert!(
+        a.position.abs_diff_eq(Vec3::new(0.0, 1.0, -1.0), 1e-5),
+        "{}",
+        a.position
+    );
+    while run.game.state().enemies[0].phase == Some(AttackPhase::Startup) {
+        run.idle();
+    }
+    let e = run.enemy();
+    let (lo, hi) = e.slice(MoveKind::Spin, 1, false);
+    assert!((lo + PI).abs() < 1e-6 && (hi - (-PI + PI / 6.0)).abs() < 1e-5);
+    let hits: Vec<_> = run
+        .game
+        .events()
+        .iter()
+        .filter(|ev| matches!(ev, Event::Hit { by, attack: HitAttack::Spin, .. } if by == "e"))
+        .collect();
+    assert_eq!(hits.len(), 1, "{:?}", run.game.events());
+    // The arm at the end of that slice: 30° left of straight ahead.
+    let q = Quat::from_rotation_y(PI / 6.0);
+    assert!(
+        arm(&run)
+            .position
+            .abs_diff_eq(q * Vec3::new(0.0, 1.0, -1.0), 1e-5)
+    );
+}

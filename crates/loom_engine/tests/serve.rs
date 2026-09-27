@@ -130,7 +130,10 @@ fn describe_lists_the_demo_bindings_sorted_without_a_scene_path() {
         json!({"tick_hz": 60, "tick": 0, "game": "souls", "scene": null, "edited": false, "actions": actions, "axes": axes})
     );
     assert_eq!(r["axes"], json!(["look_x", "look_y", "move_x", "move_y"]));
-    assert_eq!(r["actions"], json!(["attack", "heavy", "lock", "roll"]));
+    assert_eq!(
+        r["actions"],
+        json!(["attack", "heavy", "interact", "lock", "roll"])
+    );
 }
 
 #[test]
@@ -977,7 +980,7 @@ fn screenshot_with_a_bad_debug_draw_is_invalid_params_before_any_rendering() {
     }
     assert_eq!(
         message(&replies[0]),
-        r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders" and "lock""#
+        r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders", "lock" and "bonfires""#
     );
     assert_eq!(
         message(&replies[1]),

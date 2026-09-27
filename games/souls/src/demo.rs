@@ -31,7 +31,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        ATTACK, Condition, Game, HEAVY, HealthState, LOCK, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL,
+        ATTACK, Condition, Game, HEAVY, HealthState, INTERACT, LOCK, LOOK_X, LOOK_Y, MOVE_X,
+        MOVE_Y, ROLL,
     };
 
     #[test]
@@ -39,13 +40,14 @@ mod tests {
         let map = bindings();
         let mut actions: Vec<_> = map.actions().collect();
         actions.sort_unstable();
-        assert_eq!(actions, [ATTACK, HEAVY, LOCK, ROLL]);
+        assert_eq!(actions, [ATTACK, HEAVY, INTERACT, LOCK, ROLL]);
         for (key, action) in [
             (Key::Space, ROLL),
             (Key::MouseLeft, ATTACK),
             (Key::MouseRight, HEAVY),
             (Key::MouseMiddle, LOCK),
             (Key::KeyQ, LOCK),
+            (Key::KeyE, INTERACT),
         ] {
             let pressed = map.actions_for(&BTreeSet::from([key]));
             assert_eq!(pressed, BTreeSet::from([action.to_owned()]), "{key:?}");
@@ -77,7 +79,8 @@ mod tests {
                 "dummy_a/block",
                 "dummy_b/block",
                 "dummy_c/block",
-                "stake/block"
+                "stake/block",
+                "bonfire/block"
             ]
         );
     }

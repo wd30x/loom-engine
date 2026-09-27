@@ -70,7 +70,8 @@ pub enum Event {
         /// The hurtbox's node path.
         node: String,
     },
-    /// The character came back to life at its spawn point (step 0b).
+    /// The character came back to life at its respawn point (step 0b),
+    /// the world reset.
     Respawn {
         /// `[x, y, z]`.
         #[schemars(with = "[f32; 3]")]
@@ -96,6 +97,14 @@ pub enum Event {
         /// Always 2.
         stage: u8,
     },
+    /// The character sat down at a bonfire (step 4): full health and
+    /// stamina, a new respawn point and the world reset.
+    Rest {
+        /// The bonfire's node path.
+        bonfire: String,
+    },
+    /// The character stood up from a bonfire (step 4).
+    Stand,
 }
 
 /// What hit: the character's light or heavy attack, a swinger, or an
@@ -138,7 +147,7 @@ pub enum Outcome {
     Death,
 }
 
-/// A pressed input: the roll key's tap, or the lock key.
+/// A pressed input: the roll key's tap, the lock key or the interact key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Input {
@@ -146,6 +155,7 @@ pub enum Input {
     Heavy,
     Roll,
     Lock,
+    Interact,
 }
 
 impl From<Buffered> for Input {
@@ -162,6 +172,8 @@ impl From<Buffered> for Input {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DropReason {
+    /// Sitting at a bonfire.
+    Sitting,
     Dead,
     Staggered,
     /// Rolling or backstepping.
@@ -173,6 +185,13 @@ pub enum DropReason {
     NoStamina,
     /// The lock key found nothing to lock on to.
     NoTarget,
+    /// The interact key, doing something other than standing or
+    /// sprinting.
+    Busy,
+    /// The interact key, with no bonfire within its range.
+    NoBonfire,
+    /// The interact key, with a living enemy within its aggro range.
+    EnemyNear,
 }
 
 /// Why an action ended.
@@ -197,4 +216,6 @@ pub enum LockReason {
     TargetDied,
     /// The character died.
     Died,
+    /// The character sat down at a bonfire.
+    Rested,
 }

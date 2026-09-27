@@ -38,6 +38,8 @@ pub const ATTACK: &str = "attack";
 pub const HEAVY: &str = "heavy";
 /// Locks on to a target, or lets go of it, on the tick it is pressed.
 pub const LOCK: &str = "lock";
+/// Sits down at a bonfire, and stands up; fires on the tick it is pressed.
+pub const INTERACT: &str = "interact";
 
 /// The eleven props of the move whose names start with `$m`, with its
 /// defaults in the order damage, impact, startup, active, recovery,
@@ -139,8 +141,9 @@ macro_rules! move_props {
 /// - `enemy_speed` makes it an enemy; all the others go with it: the rest
 ///   of [`ENEMY_PROPS`], eleven for each move, then [`ENEMY_TAIL`],
 ///   [`APPROACH_PROPS`] and [`PHASE2_PROPS`] (all but `phase2_at` going
-///   with it too), then the spin's eleven.
-pub(crate) const NODE_PROPS: [PropSpec; 95] = join(&[
+///   with it too), then the spin's eleven;
+/// - `bonfire_range` makes it a bonfire.
+pub(crate) const NODE_PROPS: [PropSpec; 96] = join(&[
     &BASE_PROPS,
     &ENEMY_PROPS,
     &move_props!(
@@ -173,6 +176,14 @@ pub(crate) const NODE_PROPS: [PropSpec; 95] = join(&[
         "Spin, a full turn on the spot, only in phase 2",
         [40.0, 40.0, 50.0, 12.0, 40.0, 3.5, 360.0, 0.0, 3.5, 2.0, 0.0]
     ),
+    &[PropSpec {
+        name: "bonfire_range",
+        default: None,
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Makes the node a bonfire: the character sits down at it within this \
+                      horizontal distance.",
+    }],
 ]);
 
 /// `parts` one after the other, which must be `N` in all.
@@ -529,12 +540,19 @@ const DEAD_TILT_DEGREES: f32 = 90.0;
 /// The color of a swinger's arm during its startup: the warning that a
 /// swing is coming. A stand-in, like the flash.
 const WARN_COLOR: Vec3 = Vec3::new(1.0, 0.55, 0.1);
+/// How far below its `position` the character node is drawn while sitting.
+const SIT_DROP: f32 = 0.5;
+/// The debug draw's bonfire circles and respawn cross: warm orange.
+const DEBUG_BONFIRE: Vec3 = Vec3::new(1.0, 0.6, 0.2);
+/// The size of the cross above the respawn point's bonfire.
+const DEBUG_BONFIRE_CROSS: f32 = 0.5;
+
 /// What an enemy's scene colors are multiplied by in phase 2: dark red.
 const PHASE2_TINT: Vec3 = Vec3::new(1.0, 0.3, 0.3);
 
 /// The debug draw categories, in this order (`docs/architecture.md`
 /// section 11, "调试绘制").
-pub const DEBUG_CATEGORIES: [&str; 4] = ["hurtboxes", "swings", "colliders", "lock"];
+pub const DEBUG_CATEGORIES: [&str; 5] = ["hurtboxes", "swings", "colliders", "lock", "bonfires"];
 
 /// Debug draw colors, linear RGB.
 const DEBUG_DEAD: Vec3 = Vec3::new(0.4, 0.4, 0.4);
@@ -640,6 +658,10 @@ pub enum GameError {
     NeedsEnemySpeed { node: String, prop: &'static str },
     #[error("the node {node:?}: prop {prop:?} needs phase2_at")]
     NeedsPhase2 { node: String, prop: &'static str },
+    #[error("the bonfire {0:?} must be a root node, and not the camera")]
+    BonfireNotRoot(String),
+    #[error("the bonfire {0:?} cannot also be a lock target, hurtbox, swinger or enemy")]
+    BonfireRole(String),
     #[error("the node {0:?}: needs roar_blast_tick <= roar_ticks")]
     EnemyRoarBlast(String),
     #[error("the node {node:?}: needs {m}_min_range <= {m}_max_range")]
@@ -677,6 +699,20 @@ pub struct GameState {
     pub swingers: Vec<SwingerState>,
     /// Every enemy, in pre-order.
     pub enemies: Vec<EnemyState>,
+    /// Where the character comes back after dying.
+    pub respawn: RespawnState,
+}
+
+/// The respawn point (`game.respawn`).
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct RespawnState {
+    /// Feet position in meters; serialized as `[x, y, z]`.
+    #[schemars(with = "[f32; 3]")]
+    pub position: Vec3,
+    /// Heading in radians around +Y, like the character's `facing`.
+    pub facing: f32,
+    /// The path of the bonfire last sat at; `None` for the spawn point.
+    pub bonfire: Option<String>,
 }
 
 /// The character (`game.player`).
@@ -904,6 +940,36 @@ struct Enemy {
     struck: u32,
 }
 
+/// A node with `bonfire_range`: the character sits down at it.
+#[derive(Debug, Clone)]
+struct Bonfire {
+    id: NodeId,
+    path: String,
+    range: f32,
+}
+
+/// Where the character comes back after dying: its spawn point at load,
+/// then where it last sat down at a bonfire.
+#[derive(Debug, Clone, Copy)]
+struct Respawn {
+    position: Vec3,
+    facing: f32,
+    /// The bonfire sat at, as an index into `Game::bonfires`.
+    bonfire: Option<usize>,
+}
+
+/// What a world reset gives back: the load-time state of the character's
+/// health, the hurtboxes, swingers and enemies, and the enemies' node
+/// positions and rotations.
+#[derive(Debug, Clone)]
+struct Initial {
+    health: Health,
+    hurtboxes: Vec<Hurtbox>,
+    swingers: Vec<Swinger>,
+    enemies: Vec<Enemy>,
+    enemy_nodes: Vec<(Vec3, Quat)>,
+}
+
 /// An enemy's phase 2, from its props, worked out at load.
 #[derive(Debug, Clone, Copy)]
 struct Phase2 {
@@ -945,6 +1011,16 @@ impl Enemy {
             std::cmp::Ordering::Greater => AttackPhase::Recovery,
         };
         Some((p, phase))
+    }
+
+    /// Where the move `kind`'s sector is centered, off the facing: behind
+    /// for the spin, so that its first slice (at `-half`, `-π`) is in
+    /// front; ahead for the others.
+    fn center(kind: MoveKind) -> f32 {
+        match kind {
+            MoveKind::Spin => PI,
+            MoveKind::Sweep | MoveKind::Cleave | MoveKind::Lunge | MoveKind::Combo => 0.0,
+        }
     }
 
     /// `(lo, hi)` of the move `kind`'s active tick `k`, left to right when
@@ -1061,9 +1137,12 @@ pub struct Game {
     /// included), in pre-order, with its color in the scene file: what
     /// flashes and darkens.
     player_meshes: Vec<(NodeId, Vec3)>,
-    /// Where the character comes back after dying: its position and
-    /// facing at load.
-    spawn: (Vec3, f32),
+    /// Every bonfire, in pre-order.
+    bonfires: Vec<Bonfire>,
+    /// Where the character comes back after dying.
+    respawn: Respawn,
+    /// What a world reset gives back.
+    initial: Initial,
     /// The camera's yaw and pitch at load, given back on a respawn.
     start_view: (f32, f32),
     /// The character node's path, for events.
@@ -1156,6 +1235,7 @@ impl Game {
             hurtboxes,
             swingers,
             enemies,
+            bonfires,
         } = roles(&scene, player, camera)?;
         let health = Health::new(
             params.hp,
@@ -1203,7 +1283,24 @@ impl Game {
                 distance: orbit.distance,
             },
         };
-        let spawn = (state.player.position, state.player.facing);
+        let respawn = Respawn {
+            position: state.player.position,
+            facing: state.player.facing,
+            bonfire: None,
+        };
+        let initial = Initial {
+            health,
+            hurtboxes: hurtboxes.clone(),
+            swingers: swingers.clone(),
+            enemies: enemies.clone(),
+            enemy_nodes: enemies
+                .iter()
+                .map(|e| {
+                    let t = scene.transform(e.id);
+                    (t.position, t.rotation)
+                })
+                .collect(),
+        };
         let start_view = (state.camera.yaw, state.camera.pitch);
         let player_path = scene.path(player);
         let mut game = Self {
@@ -1238,7 +1335,9 @@ impl Game {
             enemies,
             health,
             player_meshes,
-            spawn,
+            bonfires,
+            respawn,
+            initial,
             start_view,
             player_path,
             events: Vec::new(),
@@ -1281,15 +1380,17 @@ impl Game {
             }
         }
         // The character's too; coming back from the dead is the respawn: at
-        // the spawn point with full stamina, the camera turned as at load.
+        // the respawn point with full stamina, the camera turned as at
+        // load, the world reset.
         let was_dead = self.health.is_dead();
         self.health.count_down();
         if was_dead && !self.health.is_dead() {
             self.events.push(Event::Respawn {
-                position: self.spawn.0,
+                position: self.respawn.position,
             });
+            self.reset_world();
             let player = &mut self.state.player;
-            (player.position, player.facing) = self.spawn;
+            (player.position, player.facing) = (self.respawn.position, self.respawn.facing);
             player.stamina = params.stamina_max;
             player.stamina_wait = 0;
             (self.state.camera.yaw, self.state.camera.pitch) = self.start_view;
@@ -1303,10 +1404,13 @@ impl Game {
         // 1a. The lock key (not while dead), and letting go of a target too
         // far away.
         let lock = params.lock;
-        if input.just_pressed(LOCK) && self.health.is_dead() {
+        let sitting = player.action == Action::Sit;
+        if input.just_pressed(LOCK) && sitting {
+            self.drop_inputs(&[Input::Lock], DropReason::Sitting);
+        } else if input.just_pressed(LOCK) && self.health.is_dead() {
             self.drop_inputs(&[Input::Lock], DropReason::Dead);
         }
-        if input.just_pressed(LOCK) && !self.health.is_dead() {
+        if input.just_pressed(LOCK) && !self.health.is_dead() && !sitting {
             match self.lock {
                 None => match self.acquire(player.position, camera.yaw) {
                     Some(t) => {
@@ -1385,6 +1489,9 @@ impl Game {
         // out of the colliders. `busy`: stamina used or an action running.
         let intent = Intent { input, tap, v, dir };
         let presses = intent.presses();
+        // 4a. The interact key first: sitting down at a bonfire, or
+        // standing up; either keeps the character still this tick.
+        let still = input.just_pressed(INTERACT) && self.interact(&mut player);
         let mut busy = true;
         if self.health.now.state != Condition::Ok {
             // Staggered or dead: no moving, turning or actions, and presses
@@ -1396,6 +1503,15 @@ impl Game {
                 DropReason::Staggered
             };
             self.drop_presses(&presses, reason);
+        } else if still || player.action == Action::Sit {
+            // Sitting (or sitting down or standing up this tick): no moving
+            // or turning, and presses are dropped; stamina comes back. A
+            // push stands it up, not moving yet.
+            busy = false;
+            self.drop_presses(&presses, DropReason::Sitting);
+            if !still && v.length_squared() > 0.0 {
+                self.stand(&mut player);
+            }
         } else if matches!(player.action, Action::Roll | Action::Backstep) {
             self.drop_presses(&presses, DropReason::Rolling);
             let m = params.movement(player.action);
@@ -1505,7 +1621,7 @@ impl Game {
                 let m = params.movement(player.action);
                 (m.invuln_from..=m.invuln_to).contains(&player.action_tick)
             }
-            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy => false,
+            Action::Idle | Action::Sprint | Action::Attack | Action::Heavy | Action::Sit => false,
         };
 
         // 5c. The enemies, then the swingers, act, and may hit the character.
@@ -1780,7 +1896,7 @@ impl Game {
                 let cut = moment.hit.max(1);
                 let sweep = Sweep {
                     p: at,
-                    facing: e.facing,
+                    facing: e.facing + Enemy::center(kind),
                     reach: m.reach,
                     lo,
                     hi,
@@ -1886,6 +2002,102 @@ impl Game {
             .collect()
     }
 
+    /// Step 4a, the interact key: stands up while sitting; otherwise sits
+    /// down at the first bonfire (pre-order) in reach, unless dead,
+    /// staggered, busy, out of reach of every bonfire or near a living
+    /// enemy, which drops the press. Whether it sat down or stood up.
+    fn interact(&mut self, player: &mut PlayerState) -> bool {
+        if player.action == Action::Sit {
+            self.stand(player);
+            return true;
+        }
+        let bonfire = self
+            .bonfires
+            .iter()
+            .position(|b| hdist(self.scene.transform(b.id).position, player.position) <= b.range);
+        let enemy_near = self.enemies.iter().any(|e| {
+            !self.hurtboxes[e.hurtbox]
+                .health
+                .is_some_and(|health| health.is_dead())
+                && hdist(self.scene.transform(e.id).position, player.position)
+                    <= e.params().aggro_range
+        });
+        let reason = if self.health.is_dead() {
+            DropReason::Dead
+        } else if self.health.now.state == Condition::Stagger {
+            DropReason::Staggered
+        } else if !matches!(player.action, Action::Idle | Action::Sprint) {
+            DropReason::Busy
+        } else if let Some(b) = bonfire
+            && !enemy_near
+        {
+            self.sit(player, b);
+            return true;
+        } else if bonfire.is_none() {
+            DropReason::NoBonfire
+        } else {
+            DropReason::EnemyNear
+        };
+        self.drop_inputs(&[Input::Interact], reason);
+        false
+    }
+
+    /// Sits down at bonfire `b`: the sprint stops, full health and stamina,
+    /// the respawn point where the character stands, the lock let go, the
+    /// world reset, then the `rest` event.
+    fn sit(&mut self, player: &mut PlayerState, b: usize) {
+        if player.action == Action::Sprint {
+            self.events.push(Event::ActionEnd {
+                action: Action::Sprint,
+                reason: EndReason::Finished,
+            });
+        }
+        player.action = Action::Sit;
+        player.action_tick = 0;
+        self.health = self.initial.health;
+        player.stamina = self.params.stamina_max;
+        player.stamina_wait = 0;
+        self.respawn = Respawn {
+            position: player.position,
+            facing: player.facing,
+            bonfire: Some(b),
+        };
+        if self.lock.is_some() {
+            self.lock = None;
+            self.lock_event(None, LockReason::Rested);
+        }
+        self.reset_world();
+        self.events.push(Event::Rest {
+            bonfire: self.bonfires[b].path.clone(),
+        });
+    }
+
+    /// Stands up from a bonfire.
+    fn stand(&mut self, player: &mut PlayerState) {
+        player.action = Action::Idle;
+        player.action_tick = 0;
+        self.events.push(Event::Stand);
+    }
+
+    /// The world reset of sitting down and of the respawn: every hurtbox,
+    /// swinger and enemy back as at load, but the hurtboxes' `hits` and
+    /// `last_hit`, and the enemies' nodes where they stood at load.
+    fn reset_world(&mut self) {
+        for (h, init) in self.hurtboxes.iter_mut().zip(&self.initial.hurtboxes) {
+            let (hits, last_hit) = (h.hits, h.last_hit);
+            *h = init.clone();
+            h.hits = hits;
+            h.last_hit = last_hit;
+        }
+        self.swingers.clone_from(&self.initial.swingers);
+        self.enemies.clone_from(&self.initial.enemies);
+        for (e, &(position, rotation)) in self.enemies.iter().zip(&self.initial.enemy_nodes) {
+            let t = self.scene.transform_mut(e.id);
+            t.position = position;
+            t.rotation = rotation;
+        }
+    }
+
     /// `player_hit` of step 5c: the swinger `by`, standing at `from`, hits
     /// the character for `damage` and `impact`. A stagger or death breaks
     /// off whatever it was doing (no combo carries over); a death lets go
@@ -1949,7 +2161,11 @@ impl Game {
         let player = &self.state.player;
         let state = self.health.now.state;
         let transform = self.scene.transform_mut(self.player);
-        transform.position = player.position;
+        transform.position = if player.action == Action::Sit {
+            player.position - Vec3::new(0.0, SIT_DROP, 0.0)
+        } else {
+            player.position
+        };
         transform.rotation = pose(
             state,
             self.health.fall,
@@ -2022,7 +2238,7 @@ impl Game {
             let phase = moment.map(|(_, m)| m.phase);
             let angle = moment.and_then(|(kind, m)| {
                 let half = e.params().of(kind).arc * 0.5;
-                match m.phase {
+                let angle = match m.phase {
                     AttackPhase::Startup => Some(if m.reversed { half } else { -half }),
                     AttackPhase::Active => {
                         let k = m.active.expect("an active tick has its number");
@@ -2030,7 +2246,8 @@ impl Game {
                         Some(if m.reversed { lo } else { hi })
                     }
                     AttackPhase::Recovery => None,
-                }
+                };
+                angle.map(|a| a + Enemy::center(kind))
             });
             let t = self.scene.transform_mut(arm.id);
             match angle {
@@ -2429,6 +2646,20 @@ impl Game {
         if on("lock") {
             self.debug_lock(draw);
         }
+        if on("bonfires") {
+            // Bonfires are root nodes: the local position is the world one.
+            for (i, b) in self.bonfires.iter().enumerate() {
+                let at = self.scene.transform(b.id).position;
+                draw.circle(at, b.range, DEBUG_BONFIRE);
+                if self.respawn.bonfire == Some(i) {
+                    draw.cross(
+                        at + Vec3::new(0.0, 1.0, 0.0),
+                        DEBUG_BONFIRE_CROSS,
+                        DEBUG_BONFIRE,
+                    );
+                }
+            }
+        }
     }
 
     /// Every hurtbox's cylinder (pre-order), then the character's.
@@ -2480,7 +2711,8 @@ impl Game {
             };
             let slice = m.active.map(|k| e.slice(kind, k, m.reversed));
             let mv = e.params().of(kind);
-            debug_sweep(draw, (at, e.facing, mv.reach, mv.arc), band, m.phase, slice);
+            let facing = e.facing + Enemy::center(kind);
+            debug_sweep(draw, (at, facing, mv.reach, mv.arc), band, m.phase, slice);
         }
         for s in &self.swingers {
             let Some(phase) = s.phase() else {
@@ -2645,6 +2877,11 @@ impl Game {
                     }
                 })
                 .collect(),
+            respawn: RespawnState {
+                position: self.respawn.position,
+                facing: self.respawn.facing,
+                bonfire: self.respawn.bonfire.map(|b| self.bonfires[b].path.clone()),
+            },
         }
     }
 
@@ -2717,6 +2954,7 @@ struct Roles {
     hurtboxes: Vec<Hurtbox>,
     swingers: Vec<Swinger>,
     enemies: Vec<Enemy>,
+    bonfires: Vec<Bonfire>,
 }
 
 /// Which node props only go with another one, as [`roles`] checks them
@@ -2734,7 +2972,7 @@ pub(crate) const NODE_REQUIRES: [&str; 6] = [
 ];
 
 /// The other rules [`roles`] checks on a node's props.
-pub(crate) const NODE_CONSTRAINTS: [&str; 10] = [
+pub(crate) const NODE_CONSTRAINTS: [&str; 11] = [
     "a swinger: swing_low < swing_high",
     "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
     "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
@@ -2747,6 +2985,8 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 10] = [
     "an enemy: enemy_speed / 60, lunge_distance / lunge_active_ticks and, with phase2_at, \
      enemy_speed / 60 / phase2_speed_scale are less than hurt_radius",
     "an enemy has no collider in its subtree",
+    "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a \
+     lock target, hurtbox, swinger or enemy",
 ];
 
 /// Every lock-on target, hurtbox, swinger and enemy of `scene`, in
@@ -2760,12 +3000,14 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 10] = [
 /// for an enemy, each move's ranges, the roar's blast within it, its swing
 /// band, the props it needs, not a swinger, its steps (with phase 2's
 /// walk last) shorter than `hurt_radius` and no collider in its subtree
-/// (a lock-on target, it is a root node already).
+/// (a lock-on target, it is a root node already); last, for a bonfire, a
+/// root node other than the camera, then none of the other roles.
 fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameError> {
     let mut targets = Vec::new();
     let mut hurtboxes = Vec::new();
     let mut swingers = Vec::new();
     let mut enemies = Vec::new();
+    let mut bonfires = Vec::new();
     for id in scene.ids().filter(|&id| id != player) {
         let node = scene.node(id);
         let path = || scene.path(id);
@@ -2999,6 +3241,23 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 Some((params, phase2, radius, height))
             }
         };
+        if let Some(range) = node.prop("bonfire_range") {
+            if node.parent.is_some() || id == camera {
+                return Err(GameError::BonfireNotRoot(path()));
+            }
+            if lock_height.is_some()
+                || hurt.is_some()
+                || swing_damage.is_some()
+                || enemy_speed.is_some()
+            {
+                return Err(GameError::BonfireRole(path()));
+            }
+            bonfires.push(Bonfire {
+                id,
+                path: path(),
+                range: range as f32,
+            });
+        }
         let mut hurtbox = hurt.map(|(radius, height)| {
             let health = hp.map(|hp| {
                 Health::new(
@@ -3129,6 +3388,7 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
         hurtboxes,
         swingers,
         enemies,
+        bonfires,
     })
 }
 
@@ -4389,3 +4649,7 @@ mod tests {
         assert_player(&game, [0.03972316, 0.0, -0.7395032], 0.0);
     }
 }
+
+#[cfg(test)]
+#[path = "bonfire_tests.rs"]
+mod bonfire_tests;

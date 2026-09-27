@@ -62,6 +62,9 @@ fn demo_scene_parses_into_the_character_scene_tree() {
             "stake/block",
             "stake/arm",
             "stake/hp_bar",
+            "bonfire",
+            "bonfire/fire",
+            "bonfire/block",
             "sun",
             "main_cam"
         ]
@@ -77,7 +80,8 @@ fn demo_scene_parses_into_the_character_scene_tree() {
             "dummy_a/block",
             "dummy_b/block",
             "dummy_c/block",
-            "stake/block"
+            "stake/block",
+            "bonfire/block"
         ]
     );
     assert_eq!(scene.camera(), scene.find("main_cam").unwrap());
