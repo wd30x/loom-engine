@@ -101,7 +101,7 @@ loom_platform    loom_render   loom_scene     (彼此不知道对方)      游�
 
 | 项目 | 约定 |
 |---|---|
-| 坐标系 | 右手系，**+Y 向上**，**-Z 向前**，+X 向右（与 glTF 一致） |
+| 坐标系 | 右手系，**+Y 向上**，**-Z 向前**，+X 向右。轴和 glTF 一致，但 glTF 规定模型正面朝 +Z，loom 的模型要朝 -Z（第 19 节「朝向」） |
 | 单位 | 长度用米，角度用弧度，时间用秒。**例外**：场景文件里给人和 AI 手写的角度（欧拉角、视场角）用度 |
 | 欧拉角 | 场景文件的 `rotation: (x, y, z)`（度）按 **YXZ** 顺序组合，即 `Quat::from_euler(EulerRot::YXZ, y, x, z)`，和 Godot 默认一致：先偏航，再俯仰，再翻滚 |
 | 投影 | `glam::camera::rh::proj::directx::perspective` + `glam::camera::rh::view::look_at_mat4`（右手系、深度 0..1，与 wgpu 一致；即已弃用的 `Mat4::perspective_rh` / `look_at_rh`） |
@@ -435,7 +435,8 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | `look_at` | `(x, y, z)` | 无 | 让节点的 -Z 指向父节点空间里的这个点，+Y 朝上。**不能和 `rotation` 同时写** |
 | `scale` | `(x, y, z)` | `(1, 1, 1)` | 每个分量必须 > 0 |
 | `mesh` | `Cube` / `Plane` / `Sphere` / `Capsule(radius, height)` | 无 | 前三种都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调。`Capsule` 带参数（非均匀缩放会把半球压扁）：`height` 是含两端半球的总高，**原点在底部**（占 y ∈ [0, height]），方便角色站在地面上 |
-| `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)` | 只有带 `mesh` 时才有意义；分量在 0 到 1 之间 |
+| `model` | 字符串 | 无 | glTF 模型 `.glb` 的路径（E7.1 起，第 19 节）。不能和 `mesh`、`sprite`、`tilemap` 同时写 |
+| `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)`；有 `model` 时是 `(1, 1, 1)` | 只有带 `mesh` 或 `model` 时才有意义；分量在 0 到 1 之间。对模型是染色（乘在顶点颜色上） |
 | `camera` | `(fov_y, near, far)` 或 `(ortho: (height), near, far)` | 无 | 相机看向自己的 -Z。`fov_y` 是透视相机的垂直视场角（度）。`ortho` 是正交相机（E4.2 起），`height` 是画面竖直方向覆盖的世界长度，宽度按画面比例算。`fov_y` 和 `ortho` 必须**恰好写一个** |
 | `sprite` | `(sheet, tag)` 或 `(sheet, tag, alternates)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名。`alternates`（E4.4 起，可省略）是游戏运行中可以换成的其他 tag，例如 `["corpse"]` |
 | `tilemap` | `(sheet, legend, rows)` | 无 | 瓦片地图（E4.2 起，第 14 节）：`legend` 是 `[(字符, tag)]` 列表，`rows` 是字符串列表，一个字符一个格子 |
@@ -501,7 +502,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 运行中编辑（第 13 节）改的是**场景文件的内容**，`save_scene` 把它写回成文本。写出来的文本叫规范格式，规则固定，由 `loom_scene` 负责：
 - `loom_scene` 保留解析出来的文件结构（场景文件的节点描述，不是运行时的节点树），编辑作用在它上面；规范格式就是把它序列化回 RON。
 - 用 ron 的 `PrettyConfig`：缩进 4 个空格，开 `IMPLICIT_SOME`（可选字段写成裸值），不写结构体名。
-- 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`position`、`rotation`、`look_at`、`scale`、`mesh`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
+- 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`display_name`、`position`、`rotation`、`look_at`、`scale`、`mesh`、`model`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
 - 没写的可选字段不写；`props`、`children` 为空时不写；`sprite.alternates` 为空时不写。写了的字段原样保留，即使等于默认值（比如 `scale: (1.0, 1.0, 1.0)`）。
 - 旋转保留文件里写的欧拉角（度），不换成四元数；`look_at` 也原样保留。
 - 数字用 ron 的输出（最短的能精确还原的十进制）；`props` 的值是 f64，其余是 f32。`props` 里写成整数的值写出来带小数点，比如 `("hp", 100)` 变成 `("hp", 100.0)`，解析结果相同。
@@ -2913,3 +2914,79 @@ E6.2 审查时定：
   - 其余规则和本体一样：同一张字形图，alpha < 0.5 的丢掉，颜色相乘，alpha 是 `shadow.a`。
   - 字形宽 5、字距 6，所以一个字的阴影刚好碰到下一个字的格子边，不会压进它的字形。
 - `text_width` 不变，不算阴影：右对齐时对齐的是本体。
+
+## 19. 模型和骨骼动画（E7 起）
+
+用户决定（2026-09-28）：
+- **骨骼和动画播放是引擎的通用组件**，像 Godot 的 `Skeleton3D` 加 `AnimationPlayer`：引擎负责按 tick 采样、蒙皮、渲染；游戏只决定「播哪个片段、从哪个 tick 开始」。不做 Godot 那种动画混合树和状态机。
+- **动画片段存成文本关键帧**（RON），AI 能直接写和改；Blender 导出的片段用 loom 的命令转成 RON。模型的网格和蒙皮用 glTF 的 `.glb`，按 PNG 的办法走 LFS。
+- **攻击判定先不改**：动画只管好看，判定仍是第 11 节的扇形扫掠，状态导出和已有的期望值不变。动画要对齐已有的前摇、出招、后摇 tick。
+- **读 glTF 用 `gltf` crate**（MIT/Apache，只解析，不带渲染）。
+- **第一个模型由 AI 写 Blender 脚本生成**：低多边形人形加骨骼，脚本进仓库，谁跑都得到同一个模型。
+- **片段切换用简单的线性过渡**：旧姿势和新片段在几个 tick 内线性混合。
+- **先角色，再 Boss**。
+
+切片：
+- **E7.1**：Blender 脚本生成的人形模型；glTF 静态网格的导入和渲染（按绑定姿势画，不蒙皮）；`loom model` 命令导出模型结构。
+- **E7.2**：骨骼和动画片段：RON 片段格式、从 glTF 转片段的命令、按 tick 采样、GPU 蒙皮、线性过渡；游戏的播放接口；状态导出、事件、调试绘制 `skeleton` 类别、胶片图。
+- **E7.3**：souls 的角色换成模型，接上各个动作。
+- **E7.4**：Boss 换成模型，接上它的招式和二阶段。
+
+**朝向**：glTF 规定模型的正面朝 +Z，loom 的「前」是 -Z（第 5 节）。loom 导入时**不转**，模型文件自己要让正面朝 -Z，这样节点不写旋转时，模型就朝着 loom 的「前」。Blender 里就是让角色面朝 +Y（Blender 的 glTF 导出把 +Y 变成 -Z）。
+
+### 模型文件和生成脚本（E7.1 起）
+
+- **目录**：
+  - `tools/blender/<名字>.py`：生成模型的 Blender 脚本，是模型的源头；
+  - `assets/models/<名字>.glb`：导出结果，走 LFS（`.gitattributes` 的 `assets/**/*.glb` 已覆盖）；
+  - `assets/models/README.md`：每个模型的文字说明：骨骼列表、各部分的颜色、尺寸、怎么重新生成。
+- **重新生成**：`blender -b --factory-startup --python tools/blender/<名字>.py -- assets/models/<名字>.glb`。
+  - 不进 `verify.ps1`，也不进 smoke：loom 的测试只用提交进仓库的 `.glb`（第 12 节第 4 条）。
+  - 同一个 Blender 版本跑两次，`.glb` 要逐字节相同；做不到时在 README 里写明哪里不同。README 记下生成时用的 Blender 版本。
+- **只用 glTF 2.0 的这些东西**：三角形网格、`POSITION`、`NORMAL`、材质的 `baseColorFactor`；蒙皮（`JOINTS_0`、`WEIGHTS_0`、skin）从 E7.1 起就写进文件，E7.2 才用。没有贴图，颜色都来自材质。
+
+### 场景里的模型
+
+节点新字段：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `model` | 字符串 | 无 | `.glb` 文件的路径，相对工作目录（和 sprite sheet 一样）。不能和 `mesh`、`sprite`、`tilemap` 挂在同一个节点上。规范格式里写在 `mesh` 后面 |
+
+- `color` 可以和 `model` 一起写，这时它是**染色**：模型每个顶点的颜色乘以它。不写就是 `(1, 1, 1)`，也就是原色。`Scene::set_mesh_color` 对模型节点同样有效（受击闪白、死亡变暗这类效果照旧能用）。
+- `loom_scene` 只检查字段本身：路径不是空串，不和上面几个字段同时出现。文件存在与否、内容对不对，由 `loom_engine` 在加载场景时检查，和 sprite sheet 一样：
+  - 同一个路径只读一次，不论之后会不会渲染；
+  - 报错写出节点路径、文件路径和原因，例如 `node "boss": model assets/models/humanoid.glb: primitive 2 is not triangles`。
+- **导入规则**（`loom_engine`）：
+  - 用 glTF 的默认场景（没有就用第 0 个场景），把其中所有带网格的节点按各自的世界变换（glTF 节点树算出来的）合成**一个网格**；
+  - 每个三角形顶点的颜色是它所在图元材质的 `baseColorFactor` 的 RGB（线性，glTF 本来就是线性）；没有材质就是白色；`baseColorFactor` 的 alpha 不用；
+  - 顶点数据：位置、法线、颜色。法线用节点世界矩阵的逆转置变换，再归一化；
+  - 下标一律存成 `u32`；
+  - 报错（整个模型不加载）的情况：不是 glTF 2.0；图元不是三角形；缺 `POSITION` 或 `NORMAL`；材质用了贴图；有稀疏访问器（sparse）；默认场景里没有网格。
+  - 骨骼和动画在 E7.1 不读，模型按绑定姿势画。
+- **渲染**：
+  - `loom_render` 加 `Renderer::create_mesh(&[Vertex], &[u32]) -> MeshId`，和 `create_texture` 一样返回句柄；`DrawItem` 的网格可以是内置的，也可以是 `MeshId`；
+  - 所有网格（包括内置的）顶点都带颜色，内置网格的顶点颜色是白色。片元颜色是 `顶点颜色 × 节点颜色 × 光照`；乘 1.0 是精确的，所以**已有的截图逐字节不变**；
+  - 上传发生在第一次画它的时候，和贴图一样。
+
+### `loom model`（E7.1 起）
+
+`loom model <path.glb>`：读一个 `.glb`，按上面的导入规则检查，stdout 输出一个 JSON，描述它的结构。给 AI 看模型用，不用开 Blender。
+
+```json
+{
+  "path": "assets/models/humanoid.glb",
+  "vertices": 1234,
+  "triangles": 2000,
+  "bounds": { "min": [x, y, z], "max": [x, y, z] },
+  "materials": [ { "name": "skin", "color": [r, g, b] } ],
+  "skins": [ { "name": "…", "joints": [ { "name": "hips", "parent": null }, … ] } ],
+  "animations": [ { "name": "…", "seconds": 1.0, "channels": 12 } ]
+}
+```
+
+- `bounds` 是合成后的网格在模型空间里的包围盒；`materials` 按 glTF 里的顺序；`skins` 的 `joints` 按 skin 里的顺序，`parent` 是父关节的名字（父节点不是关节时为 `null`）。
+- 检查不过时，和别的命令一样按「输入无效」报错，退出码 1。
+- 键的顺序固定，就是上面的顺序。
+
+**`loom view` 能画模型**：场景里有 `model` 的节点照常画，用来预览，不用跑游戏。仓库里加一个预览场景 `assets/scenes/model_preview.ron`。
