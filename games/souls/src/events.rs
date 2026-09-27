@@ -113,6 +113,32 @@ pub enum Event {
         /// The health after it.
         hp: f32,
     },
+    /// The character killed a hurtbox with `souls` (step 4), right after
+    /// that hit.
+    Souls {
+        /// The path of the node killed.
+        from: String,
+        amount: u32,
+        /// The character's souls after it.
+        total: u32,
+    },
+    /// The character died (step 5c): its souls dropped into a new
+    /// bloodstain where it stood, and the old one's were lost.
+    SoulsDropped {
+        /// `[x, y, z]`.
+        #[schemars(with = "[f32; 3]")]
+        position: Vec3,
+        /// The souls in the new bloodstain; 0 when none was left.
+        amount: u32,
+        /// The souls of the old bloodstain; 0 when there was none.
+        lost: u32,
+    },
+    /// The interact key picked the bloodstain's souls back up (step 4a).
+    SoulsRecovered {
+        amount: u32,
+        /// The character's souls after it.
+        total: u32,
+    },
 }
 
 /// What hit: the character's light or heavy attack, a swinger, or an

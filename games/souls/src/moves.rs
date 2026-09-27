@@ -52,7 +52,7 @@ pub enum Buffered {
 /// Every prop the character understands, with its default and rule, in
 /// the order they are checked. Reading, checking, rejecting unknown names
 /// and `loom schema` all go through this one table.
-pub(crate) const PARAMS: [PropSpec; 55] = [
+pub(crate) const PARAMS: [PropSpec; 56] = [
     PropSpec {
         name: "stamina_max",
         default: Some(100.0),
@@ -443,6 +443,14 @@ pub(crate) const PARAMS: [PropSpec; 55] = [
         unit: "meters per second",
         description: "Walking speed while drinking; per tick, less than the capsule radius.",
     },
+    PropSpec {
+        name: "bloodstain_range",
+        default: Some(1.5),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "The interact key picks the bloodstain's souls back up within this \
+                      horizontal distance.",
+    },
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -517,6 +525,8 @@ pub(crate) struct Params {
     pub flask_ticks: u32,
     pub flask_heal_tick: u32,
     pub flask_step: f32,
+    /// How near, horizontally, the bloodstain must be to pick it up.
+    pub bloodstain_range: f32,
 }
 
 /// Lock-on, in per-tick units and radians.
@@ -654,6 +664,7 @@ impl Params {
             flask_ticks: ticks("flask_ticks"),
             flask_heal_tick: ticks("flask_heal_tick"),
             flask_step: get("flask_walk_speed") as f32 / 60.0,
+            bloodstain_range: get("bloodstain_range") as f32,
         };
         for (action, m) in [("roll", params.roll), ("backstep", params.backstep)] {
             if !(m.invuln_from <= m.invuln_to && m.invuln_to <= m.ticks) {

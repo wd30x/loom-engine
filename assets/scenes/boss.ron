@@ -69,6 +69,7 @@
                 ("flask_ticks", 60),             // how long a drink takes
                 ("flask_heal_tick", 30),         // the tick of a drink that heals
                 ("flask_walk_speed", 1),         // m/s while drinking
+                ("bloodstain_range", 1.5),       // meters: how close the character picks its souls back up
             ],
             children: [
                 // Marks the facing: the capsule looks the same from every side.
@@ -95,6 +96,7 @@
                 ("hurt_radius", 0.7),            // meters: the hurtbox, also what it collides with
                 ("hurt_height", 3.0),            // meters, from the feet up
                 ("hp", 600),                     // full health
+                ("souls", 2000),                 // what killing it gives the character
                 ("poise", 50),                   // impacts added up past this stagger it: two heavies
                 ("stagger_ticks", 40),           // how long a stagger lasts
                 ("poise_reset_ticks", 60),       // ticks without a hit before impacts are forgotten
@@ -204,6 +206,10 @@
                     color: (1.0, 0.45, 0.1)),
                 (name: "block", position: (0.0, 0.25, 0.0), scale: (0.5, 0.5, 0.5), collider: Box),
             ]),
+        // Marks the bloodstain, where the character's souls dropped when it died; hidden
+        // without one. Its position is the lift above the spot.
+        (name: "bloodstain", position: (0.0, 0.05, 0.0), scale: (0.4, 0.1, 0.4), mesh: Cube,
+            color: (0.3, 0.9, 0.5)),
         (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
             light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
         (name: "main_cam", camera: (fov_y: 60.0, near: 0.1, far: 200.0),

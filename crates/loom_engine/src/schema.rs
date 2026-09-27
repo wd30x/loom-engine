@@ -162,10 +162,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("no {name}"))
         };
         let character = group("souls", "character");
-        assert_eq!(character["props"].as_array().unwrap().len(), 55);
+        assert_eq!(character["props"].as_array().unwrap().len(), 56);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
-            96
+            97
         );
         assert_eq!(
             prop("souls", "character", "stamina_max"),
@@ -222,6 +222,7 @@ mod tests {
         assert_eq!(node[84], "spin_damage");
         assert_eq!(node[94], "spin_track_speed");
         assert_eq!(node[95], "bonfire_range");
+        assert_eq!(node[96], "souls");
         assert_eq!(
             prop("souls", "node", "phase2_at")["rule"],
             json!({"kind": "between", "min": 0.0, "max": 1.0})
@@ -236,6 +237,7 @@ mod tests {
         assert_eq!(character_names[..2], ["stamina_max", "stamina_regen"]);
         assert_eq!(character_names[49], "respawn_ticks");
         assert_eq!(character_names[54], "flask_walk_speed");
+        assert_eq!(character_names[55], "bloodstain_range");
         assert_eq!(names("rogue", "zombie"), ["hp", "attack", "speed"]);
         assert_eq!(
             character["constraints"][2],
@@ -243,7 +245,7 @@ mod tests {
         );
         assert_eq!(
             group("souls", "node")["requires"][2],
-            "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp"
+            "poise, stagger_ticks, poise_reset_ticks, revive_ticks, souls: need hp"
         );
         assert_eq!(
             group("souls", "node")["constraints"][9],
@@ -274,7 +276,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (55 + 96 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (56 + 97 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),
@@ -392,6 +394,20 @@ mod tests {
                 action: Action::Drink,
                 reason: EndReason::Finished,
             },
+            Event::Souls {
+                from: "dummy_a".to_owned(),
+                amount: 50,
+                total: 150,
+            },
+            Event::SoulsDropped {
+                position: Vec3::new(1.0, 0.0, -2.0),
+                amount: 150,
+                lost: 0,
+            },
+            Event::SoulsRecovered {
+                amount: 150,
+                total: 150,
+            },
         ];
         for e in &events {
             match e {
@@ -408,7 +424,10 @@ mod tests {
                 | Event::Stage { .. }
                 | Event::Rest { .. }
                 | Event::Stand
-                | Event::Heal { .. } => {}
+                | Event::Heal { .. }
+                | Event::Souls { .. }
+                | Event::SoulsDropped { .. }
+                | Event::SoulsRecovered { .. } => {}
             }
         }
         events
@@ -427,8 +446,8 @@ mod tests {
         }
         types.sort();
         types.dedup();
-        assert_eq!(types.len(), 14);
-        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 14);
+        assert_eq!(types.len(), 17);
+        assert_eq!(souls["oneOf"].as_array().unwrap().len(), 17);
 
         let rogue = &schema["games"]["rogue"]["event"];
         let e = rogue::Event::Hit {

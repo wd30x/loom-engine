@@ -144,8 +144,9 @@ macro_rules! move_props {
 ///   of [`ENEMY_PROPS`], eleven for each move, then [`ENEMY_TAIL`],
 ///   [`APPROACH_PROPS`] and [`PHASE2_PROPS`] (all but `phase2_at` going
 ///   with it too), then the spin's eleven;
-/// - `bonfire_range` makes it a bonfire.
-pub(crate) const NODE_PROPS: [PropSpec; 96] = join(&[
+/// - `bonfire_range` makes it a bonfire;
+/// - `souls` goes with `hp`: what killing it gives.
+pub(crate) const NODE_PROPS: [PropSpec; 97] = join(&[
     &BASE_PROPS,
     &ENEMY_PROPS,
     &move_props!(
@@ -185,6 +186,13 @@ pub(crate) const NODE_PROPS: [PropSpec; 96] = join(&[
         unit: "meters",
         description: "Makes the node a bonfire: the character sits down at it within this \
                       horizontal distance.",
+    }],
+    &[PropSpec {
+        name: "souls",
+        default: Some(0.0),
+        rule: PropRule::Whole { min: 0, max: None },
+        unit: "souls",
+        description: "What the character gets each time it kills the node.",
     }],
 ]);
 
@@ -522,6 +530,8 @@ const HP_PROPS: std::ops::Range<usize> = 4..8;
 const SWING_PROPS: std::ops::Range<usize> = 9..17;
 const ENEMY_OTHER_PROPS: std::ops::Range<usize> = 18..95;
 const PHASE2_OTHER_PROPS: std::ops::Range<usize> = 77..84;
+/// Where `souls`, which also goes with `hp`, is in [`NODE_PROPS`].
+const SOULS_PROP: usize = 96;
 
 /// The name of the child of a hurtbox with `hp` that shows its health.
 const HP_BAR: &str = "hp_bar";
@@ -548,13 +558,24 @@ const SIT_DROP: f32 = 0.5;
 const DEBUG_BONFIRE: Vec3 = Vec3::new(1.0, 0.6, 0.2);
 /// The size of the cross above the respawn point's bonfire.
 const DEBUG_BONFIRE_CROSS: f32 = 0.5;
+/// The debug draw's bloodstain circle: the marker's green.
+const DEBUG_BLOODSTAIN: Vec3 = Vec3::new(0.3, 0.9, 0.5);
+/// The name of the root node that marks the bloodstain.
+const BLOODSTAIN: &str = "bloodstain";
 
 /// What an enemy's scene colors are multiplied by in phase 2: dark red.
 const PHASE2_TINT: Vec3 = Vec3::new(1.0, 0.3, 0.3);
 
 /// The debug draw categories, in this order (`docs/architecture.md`
 /// section 11, "调试绘制").
-pub const DEBUG_CATEGORIES: [&str; 5] = ["hurtboxes", "swings", "colliders", "lock", "bonfires"];
+pub const DEBUG_CATEGORIES: [&str; 6] = [
+    "hurtboxes",
+    "swings",
+    "colliders",
+    "lock",
+    "bonfires",
+    "bloodstain",
+];
 
 /// Debug draw colors, linear RGB.
 const DEBUG_DEAD: Vec3 = Vec3::new(0.4, 0.4, 0.4);
@@ -690,6 +711,8 @@ pub enum GameError {
     },
     #[error("the enemy {0:?} must not have a collider in its subtree: colliders are static")]
     EnemyCollider(String),
+    #[error("the bloodstain marker {0:?} needs a mesh, and no props or children")]
+    BloodstainMarker(String),
 }
 
 /// The game state in the state dump (`game`).
@@ -707,6 +730,18 @@ pub struct GameState {
     pub enemies: Vec<EnemyState>,
     /// Where the character comes back after dying.
     pub respawn: RespawnState,
+    /// The souls the character dropped on its last death; `None` when it
+    /// left none or picked them back up.
+    pub bloodstain: Option<BloodstainState>,
+}
+
+/// The bloodstain (`game.bloodstain`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+pub struct BloodstainState {
+    /// Where the character died; serialized as `[x, y, z]`.
+    #[schemars(with = "[f32; 3]")]
+    pub position: Vec3,
+    pub souls: u32,
 }
 
 /// The respawn point (`game.respawn`).
@@ -753,6 +788,8 @@ pub struct PlayerState {
     pub health: HealthState,
     /// Drinks left in the flask; `flask_charges` at load.
     pub flask: u32,
+    /// Souls carried; 0 at load.
+    pub souls: u32,
 }
 
 /// One hit on the character.
@@ -853,6 +890,8 @@ struct Hurtbox {
     last_hit: Option<LastHit>,
     /// With an `hp` prop: health, poise and death.
     health: Option<Health>,
+    /// What killing it gives the character.
+    souls: u32,
 }
 
 /// A hurtbox in the state dump (`game.hurtboxes`).
@@ -1150,6 +1189,11 @@ pub struct Game {
     flask: Option<NodeId>,
     /// Every bonfire, in pre-order.
     bonfires: Vec<Bonfire>,
+    /// The root node named `bloodstain`, with its position in the scene
+    /// file: where it is drawn above the bloodstain.
+    bloodstain_marker: Option<(NodeId, Vec3)>,
+    /// Untouched by the world reset.
+    bloodstain: Option<BloodstainState>,
     /// Where the character comes back after dying.
     respawn: Respawn,
     /// What a world reset gives back.
@@ -1250,6 +1294,7 @@ impl Game {
             swingers,
             enemies,
             bonfires,
+            bloodstain_marker,
         } = roles(&scene, player, camera)?;
         let health = Health::new(
             params.hp,
@@ -1298,6 +1343,7 @@ impl Game {
                 last_hit: None,
                 health: health.now,
                 flask: params.flask_charges,
+                souls: 0,
             },
             camera: CameraState {
                 yaw: wrap(orbit.yaw_degrees.to_radians()),
@@ -1360,6 +1406,8 @@ impl Game {
             player_meshes,
             flask,
             bonfires,
+            bloodstain_marker,
+            bloodstain: None,
             respawn,
             initial,
             start_view,
@@ -1370,6 +1418,10 @@ impl Game {
         if let Some(f) = flask {
             // Hidden until the first drink.
             game.scene.set_visible(f, false);
+        }
+        if let Some((m, _)) = bloodstain_marker {
+            // Hidden until the first bloodstain.
+            game.scene.set_visible(m, false);
         }
         Ok(game)
     }
@@ -1664,6 +1716,7 @@ impl Game {
 
         // 6. Write the nodes.
         self.show_player();
+        self.show_bloodstain();
         self.place_camera(false);
         // An enemy stands turned to its facing.
         for e in &self.enemies {
@@ -2062,6 +2115,17 @@ impl Game {
             DropReason::Drinking
         } else if !matches!(player.action, Action::Idle | Action::Sprint) {
             DropReason::Busy
+        } else if let Some(stain) = self.bloodstain
+            && hdist(stain.position, player.position) <= self.params.bloodstain_range
+        {
+            // At once, whatever the character is doing.
+            self.bloodstain = None;
+            player.souls = player.souls.saturating_add(stain.souls);
+            self.events.push(Event::SoulsRecovered {
+                amount: stain.souls,
+                total: player.souls,
+            });
+            return false;
         } else if let Some(b) = bonfire
             && !enemy_near
         {
@@ -2136,7 +2200,7 @@ impl Game {
     /// `player_hit` of step 5c: the swinger `by`, standing at `from`, hits
     /// the character for `damage` and `impact`. A stagger or death breaks
     /// off whatever it was doing (no combo carries over); a death lets go
-    /// of the lock.
+    /// of the lock, then drops the souls.
     fn player_hit(
         &mut self,
         player: &mut PlayerState,
@@ -2186,6 +2250,41 @@ impl Game {
             self.lock = None;
             self.lock_event(None, LockReason::Died);
         }
+        if outcome == Outcome::Death {
+            self.drop_souls(player);
+        }
+    }
+
+    /// On the character's death: the old bloodstain goes, and the souls it
+    /// carries drop into a new one where it stands.
+    fn drop_souls(&mut self, player: &mut PlayerState) {
+        let lost = self.bloodstain.take().map_or(0, |stain| stain.souls);
+        let amount = std::mem::take(&mut player.souls);
+        if amount > 0 {
+            self.bloodstain = Some(BloodstainState {
+                position: player.position,
+                souls: amount,
+            });
+        }
+        if amount > 0 || lost > 0 {
+            self.events.push(Event::SoulsDropped {
+                position: player.position,
+                amount,
+                lost,
+            });
+        }
+    }
+
+    /// Step 6 for the bloodstain marker: above the bloodstain by its scene
+    /// file position, hidden without one.
+    fn show_bloodstain(&mut self) {
+        let Some((id, offset)) = self.bloodstain_marker else {
+            return;
+        };
+        if let Some(stain) = self.bloodstain {
+            self.scene.transform_mut(id).position = stain.position + offset;
+        }
+        self.scene.set_visible(id, self.bloodstain.is_some());
     }
 
     /// Step 6 for the character node: its position, its pose (turned to
@@ -2503,9 +2602,10 @@ impl Game {
     /// `a`, after the slide: the tick sweeps its slice of the sector, right
     /// to left, and hits every hurtbox it touches that is not dead, not a
     /// roaring enemy and this attack has not hit yet. A hurtbox with health
-    /// takes the damage; one killed while locked on is let go of; an enemy
+    /// takes the damage, and killed gives its souls; one killed while locked
+    /// on is let go of; an enemy
     /// left with at most `phase2_at` of its health enters phase 2.
-    fn hit(&mut self, player: &PlayerState, a: Attack) {
+    fn hit(&mut self, player: &mut PlayerState, a: Attack) {
         let (lo, hi) = slice_of(a.arc, a.slice, player.action_tick - a.startup);
         let sweep = Sweep {
             p: player.position,
@@ -2566,6 +2666,14 @@ impl Game {
                     hp,
                     result,
                 });
+                if result == Outcome::Death && h.souls > 0 {
+                    player.souls = player.souls.saturating_add(h.souls);
+                    self.events.push(Event::Souls {
+                        from: h.path.clone(),
+                        amount: h.souls,
+                        total: player.souls,
+                    });
+                }
                 if let Some(health) = &mut h.health
                     && let Some(e) = self.enemies.iter_mut().find(|e| e.hurtbox == i)
                 {
@@ -2756,6 +2864,15 @@ impl Game {
                     );
                 }
             }
+        }
+        if on("bloodstain")
+            && let Some(stain) = self.bloodstain
+        {
+            draw.circle(
+                stain.position,
+                self.params.bloodstain_range,
+                DEBUG_BLOODSTAIN,
+            );
         }
     }
 
@@ -2983,6 +3100,7 @@ impl Game {
                 facing: self.respawn.facing,
                 bonfire: self.respawn.bonfire.map(|b| self.bonfires[b].path.clone()),
             },
+            bloodstain: self.bloodstain,
         }
     }
 
@@ -3056,6 +3174,8 @@ struct Roles {
     swingers: Vec<Swinger>,
     enemies: Vec<Enemy>,
     bonfires: Vec<Bonfire>,
+    /// The root node named `bloodstain`, with its scene file position.
+    bloodstain_marker: Option<(NodeId, Vec3)>,
 }
 
 /// Which node props only go with another one, as [`roles`] checks them
@@ -3063,7 +3183,7 @@ struct Roles {
 pub(crate) const NODE_REQUIRES: [&str; 6] = [
     "hurt_radius and hurt_height: both or neither",
     "hp: needs hurt_radius and hurt_height",
-    "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
+    "poise, stagger_ticks, poise_reset_ticks, revive_ticks, souls: need hp",
     "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, \
      swing_arc, swing_low, swing_high: need swing_damage",
     "every enemy_*, sweep_*, cleave_*, lunge_*, combo_*, approach_*, phase2_*, roar_* and \
@@ -3073,7 +3193,7 @@ pub(crate) const NODE_REQUIRES: [&str; 6] = [
 ];
 
 /// The other rules [`roles`] checks on a node's props.
-pub(crate) const NODE_CONSTRAINTS: [&str; 11] = [
+pub(crate) const NODE_CONSTRAINTS: [&str; 12] = [
     "a swinger: swing_low < swing_high",
     "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
     "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
@@ -3088,6 +3208,7 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 11] = [
     "an enemy has no collider in its subtree",
     "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a \
      lock target, hurtbox, swinger or enemy",
+    "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children",
 ];
 
 /// Every lock-on target, hurtbox, swinger and enemy of `scene`, in
@@ -3102,13 +3223,16 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 11] = [
 /// band, the props it needs, not a swinger, its steps (with phase 2's
 /// walk last) shorter than `hurt_radius` and no collider in its subtree
 /// (a lock-on target, it is a root node already); last, for a bonfire, a
-/// root node other than the camera, then none of the other roles.
+/// root node other than the camera, then none of the other roles; last,
+/// the bloodstain marker's mesh, props and children. `souls` goes with
+/// `hp` after the four props before it.
 fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameError> {
     let mut targets = Vec::new();
     let mut hurtboxes = Vec::new();
     let mut swingers = Vec::new();
     let mut enemies = Vec::new();
     let mut bonfires = Vec::new();
+    let mut bloodstain_marker = None;
     for id in scene.ids().filter(|&id| id != player) {
         let node = scene.node(id);
         let path = || scene.path(id);
@@ -3158,6 +3282,7 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
         if hp.is_none()
             && let Some(spec) = NODE_PROPS[HP_PROPS]
                 .iter()
+                .chain([&NODE_PROPS[SOULS_PROP]])
                 .find(|spec| node.prop(spec.name).is_some())
         {
             return Err(GameError::NeedsHp {
@@ -3359,6 +3484,12 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 range: range as f32,
             });
         }
+        if node.name == BLOODSTAIN && node.parent.is_none() {
+            if node.mesh.is_none() || node.props().next().is_some() || !node.children.is_empty() {
+                return Err(GameError::BloodstainMarker(path()));
+            }
+            bloodstain_marker = Some((id, scene.transform(id).position));
+        }
         let mut hurtbox = hurt.map(|(radius, height)| {
             let health = hp.map(|hp| {
                 Health::new(
@@ -3389,6 +3520,8 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 hits: 0,
                 last_hit: None,
                 health,
+                // Checked above: a whole number of at least 0.
+                souls: value("souls") as u32,
             }
         });
         let hurtbox_index = hurtbox.as_ref().map(|_| hurtboxes.len());
@@ -3490,6 +3623,7 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
         swingers,
         enemies,
         bonfires,
+        bloodstain_marker,
     })
 }
 
@@ -4758,3 +4892,7 @@ mod bonfire_tests;
 #[cfg(test)]
 #[path = "flask_tests.rs"]
 mod flask_tests;
+
+#[cfg(test)]
+#[path = "souls_tests.rs"]
+mod souls_tests;

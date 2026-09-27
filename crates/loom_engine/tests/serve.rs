@@ -980,7 +980,7 @@ fn screenshot_with_a_bad_debug_draw_is_invalid_params_before_any_rendering() {
     }
     assert_eq!(
         message(&replies[0]),
-        r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders", "lock" and "bonfires""#
+        r#"unknown debug draw category "hitboxes": souls has "hurtboxes", "swings", "colliders", "lock", "bonfires" and "bloodstain""#
     );
     assert_eq!(
         message(&replies[1]),

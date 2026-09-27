@@ -1781,6 +1781,15 @@
               },
               "unit": "meters per second",
               "description": "Walking speed while drinking; per tick, less than the capsule radius."
+            },
+            {
+              "name": "bloodstain_range",
+              "default": 1.5,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "The interact key picks the bloodstain's souls back up within this horizontal distance."
             }
           ],
           "requires": [],
@@ -2719,12 +2728,22 @@
               },
               "unit": "meters",
               "description": "Makes the node a bonfire: the character sits down at it within this horizontal distance."
+            },
+            {
+              "name": "souls",
+              "default": 0.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "souls",
+              "description": "What the character gets each time it kills the node."
             }
           ],
           "requires": [
             "hurt_radius and hurt_height: both or neither",
             "hp: needs hurt_radius and hurt_height",
-            "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
+            "poise, stagger_ticks, poise_reset_ticks, revive_ticks, souls: need hp",
             "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, swing_high: need swing_damage",
             "every enemy_*, sweep_*, cleave_*, lunge_*, combo_*, approach_*, phase2_*, roar_* and spin_* prop but enemy_speed: needs enemy_speed",
             "phase2_speed_scale, phase2_combo_hits, roar_ticks, roar_blast_tick, roar_damage, roar_impact, roar_reach: need phase2_at"
@@ -2740,7 +2759,8 @@
             "an enemy needs hurt_radius, hurt_height, hp and lock_height, and is not a swinger",
             "an enemy: enemy_speed / 60, lunge_distance / lunge_active_ticks and, with phase2_at, enemy_speed / 60 / phase2_speed_scale are less than hurt_radius",
             "an enemy has no collider in its subtree",
-            "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a lock target, hurtbox, swinger or enemy"
+            "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a lock target, hurtbox, swinger or enemy",
+            "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children"
           ]
         }
       },
@@ -2839,6 +2859,31 @@
               "startup",
               "active",
               "recovery"
+            ]
+          },
+          "BloodstainState": {
+            "description": "The bloodstain (`game.bloodstain`).",
+            "type": "object",
+            "properties": {
+              "position": {
+                "description": "Where the character died; serialized as `[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "souls": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "position",
+              "souls"
             ]
           },
           "Buffered": {
@@ -3040,6 +3085,17 @@
             "description": "The game state in the state dump (`game`).",
             "type": "object",
             "properties": {
+              "bloodstain": {
+                "description": "The souls the character dropped on its last death; `None` when it\nleft none or picked them back up.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BloodstainState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "camera": {
                 "$ref": "#/$defs/CameraState"
               },
@@ -3086,7 +3142,8 @@
               "hurtboxes",
               "swingers",
               "enemies",
-              "respawn"
+              "respawn",
+              "bloodstain"
             ]
           },
           "HealthState": {
@@ -3334,6 +3391,12 @@
                 "maxItems": 3,
                 "minItems": 3
               },
+              "souls": {
+                "description": "Souls carried; 0 at load.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "stamina": {
                 "description": "From 0 to `stamina_max`.",
                 "type": "number",
@@ -3360,7 +3423,8 @@
               "hits",
               "last_hit",
               "health",
-              "flask"
+              "flask",
+              "souls"
             ]
           },
           "RespawnState": {
@@ -3542,6 +3606,31 @@
               "startup",
               "active",
               "recovery"
+            ]
+          },
+          "BloodstainState": {
+            "description": "The bloodstain (`game.bloodstain`).",
+            "type": "object",
+            "properties": {
+              "position": {
+                "description": "Where the character died; serialized as `[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "souls": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "position",
+              "souls"
             ]
           },
           "Buffered": {
@@ -4208,6 +4297,101 @@
                   "amount",
                   "hp"
                 ]
+              },
+              {
+                "description": "The character killed a hurtbox with `souls` (step 4), right after\nthat hit.",
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "from": {
+                    "description": "The path of the node killed.",
+                    "type": "string"
+                  },
+                  "total": {
+                    "description": "The character's souls after it.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "souls"
+                  }
+                },
+                "required": [
+                  "type",
+                  "from",
+                  "amount",
+                  "total"
+                ]
+              },
+              {
+                "description": "The character died (step 5c): its souls dropped into a new\nbloodstain where it stood, and the old one's were lost.",
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "description": "The souls in the new bloodstain; 0 when none was left.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "lost": {
+                    "description": "The souls of the old bloodstain; 0 when there was none.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "position": {
+                    "description": "`[x, y, z]`.",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "maxItems": 3,
+                    "minItems": 3
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "souls_dropped"
+                  }
+                },
+                "required": [
+                  "type",
+                  "position",
+                  "amount",
+                  "lost"
+                ]
+              },
+              {
+                "description": "The interact key picked the bloodstain's souls back up (step 4a).",
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "total": {
+                    "description": "The character's souls after it.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "souls_recovered"
+                  }
+                },
+                "required": [
+                  "type",
+                  "amount",
+                  "total"
+                ]
               }
             ]
           },
@@ -4215,6 +4399,17 @@
             "description": "The game state in the state dump (`game`).",
             "type": "object",
             "properties": {
+              "bloodstain": {
+                "description": "The souls the character dropped on its last death; `None` when it\nleft none or picked them back up.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BloodstainState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "camera": {
                 "$ref": "#/$defs/CameraState"
               },
@@ -4261,7 +4456,8 @@
               "hurtboxes",
               "swingers",
               "enemies",
-              "respawn"
+              "respawn",
+              "bloodstain"
             ]
           },
           "HealthState": {
@@ -4597,6 +4793,12 @@
                 "maxItems": 3,
                 "minItems": 3
               },
+              "souls": {
+                "description": "Souls carried; 0 at load.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
               "stamina": {
                 "description": "From 0 to `stamina_max`.",
                 "type": "number",
@@ -4623,7 +4825,8 @@
               "hits",
               "last_hit",
               "health",
-              "flask"
+              "flask",
+              "souls"
             ]
           },
           "RespawnState": {
@@ -5158,6 +5361,101 @@
               "type",
               "amount",
               "hp"
+            ]
+          },
+          {
+            "description": "The character killed a hurtbox with `souls` (step 4), right after\nthat hit.",
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "from": {
+                "description": "The path of the node killed.",
+                "type": "string"
+              },
+              "total": {
+                "description": "The character's souls after it.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "souls"
+              }
+            },
+            "required": [
+              "type",
+              "from",
+              "amount",
+              "total"
+            ]
+          },
+          {
+            "description": "The character died (step 5c): its souls dropped into a new\nbloodstain where it stood, and the old one's were lost.",
+            "type": "object",
+            "properties": {
+              "amount": {
+                "description": "The souls in the new bloodstain; 0 when none was left.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "lost": {
+                "description": "The souls of the old bloodstain; 0 when there was none.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "position": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "type": {
+                "type": "string",
+                "const": "souls_dropped"
+              }
+            },
+            "required": [
+              "type",
+              "position",
+              "amount",
+              "lost"
+            ]
+          },
+          {
+            "description": "The interact key picked the bloodstain's souls back up (step 4a).",
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "total": {
+                "description": "The character's souls after it.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "souls_recovered"
+              }
+            },
+            "required": [
+              "type",
+              "amount",
+              "total"
             ]
           }
         ],

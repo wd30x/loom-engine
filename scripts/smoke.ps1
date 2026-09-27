@@ -555,7 +555,7 @@ Test-Check 'H10' 'debug draw screenshots are byte-identical, differ from plain o
     foreach ($n in 'a', 'b') {
         $r = Invoke-Loom @('run', '--headless', '--frames', '60', '--debug-draw', '--screenshot', "$out/h10_$n.png")
         Assert-ExitOk $r
-        Assert-True (($r.Json.debug_draw -join ',') -eq 'hurtboxes,swings,colliders,lock,bonfires') "debug_draw is $($r.Json.debug_draw -join ',')"
+        Assert-True (($r.Json.debug_draw -join ',') -eq 'hurtboxes,swings,colliders,lock,bonfires,bloodstain') "debug_draw is $($r.Json.debug_draw -join ',')"
     }
     Assert-SameBytes "$out/h10_a.png" "$out/h10_b.png"
     Assert-True ((Get-FileHash "$out/h10_a.png").Hash -ne (Get-FileHash "$out/h1_a.png").Hash) 'the debug draw changed nothing'

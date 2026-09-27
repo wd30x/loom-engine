@@ -66,6 +66,7 @@ fn demo_scene_parses_into_the_character_scene_tree() {
             "bonfire",
             "bonfire/fire",
             "bonfire/block",
+            "bloodstain",
             "sun",
             "main_cam"
         ]
