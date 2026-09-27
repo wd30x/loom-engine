@@ -354,7 +354,7 @@ RON 文件，里面是两个列表（**不用 map**：实测 ron 遇到重复的
 ### 模型
 
 - 场景是一棵**有名字的节点树**。每个节点有局部变换（位置、旋转、缩放），可以有子节点。
-- 节点身上可以挂几种**可选组件**，现在是：`mesh`（加 `color`）、`camera`、`light`。以后的 hitbox、耐力等也按这个方式加字段。
+- 节点身上可以挂几种**可选组件**，现在是：`mesh`（加 `color`）、`camera`、`light` 等（见下表）。游戏自己的数值（耐力、锁定、受击判定……）不加组件，写在 `props` 里，由游戏解释（E4.4 起）。
 - 用**路径**指代节点：从根开始的名字用 `/` 连接，比如 `arena/pillar_3`。路径是状态导出和以后远程控制的地址。
 - 游戏逻辑（Rust）按路径找到节点，每个 tick 读写它的局部变换。**节点树是模拟状态的一部分**，受第 4 节确定性规则约束。
 - 运行时的节点树用「数组加下标」存储（`NodeId` 是下标），不用对象之间互相引用。
@@ -449,6 +449,10 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - `loom_render` 不知道场景的存在。`loom_engine` 每帧把场景转换成一份「帧描述」交给渲染器：相机（视图矩阵、投影参数）、环境光、可选的一个方向光、以及一串绘制项（网格种类、世界矩阵、颜色）。
 - 光照：`color * (ambient + max(0, dot(n, -light_dir)) * light_color * intensity)`，法线用世界矩阵的逆转置变换（支持非均匀缩放）。
 - 相机的视图矩阵就是相机节点世界矩阵的逆。
+- **运行中改颜色**（G3.2 起）：游戏用 `Scene::set_mesh_color(id, color)` 改节点网格的颜色，下一帧就按新颜色画。
+  - 节点没有 `mesh` 时返回错误：`the node "<路径>" has no mesh`；
+  - 颜色的分量必须有限、在 0 到 1 之间（和场景文件的 `color` 同一条规则），否则返回错误：`the node "<路径>": mesh color components must be between 0 and 1, got [r, g, b]`（glam `Vec3` 的 Display 格式）；
+  - 出错时不改任何东西。颜色是模拟状态的一部分（游戏在 tick 里改），但不进状态导出的 `nodes`。
 
 ### 热重载
 
@@ -540,6 +544,7 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 - `camera.distance`（G1.7 起）：`cam_distance`，相机当前离 `pivot` 的距离
 - `player` 的 `stamina`、`stamina_wait`、`action`、`action_tick`、`invulnerable`（G2.1 起）见下文「耐力、翻滚、冲刺」
 - `game.lock`（G3.1 起，在 `camera` 后面）见下文「锁定」
+- `game.hurtboxes`（G3.2 起，在 `lock` 后面）见下文「命中判定」
 
 ### 耐力、翻滚、冲刺（G2.1 起）
 
@@ -651,12 +656,12 @@ invulnerable = (action == roll || action == backstep) && invuln_from_of(action) 
 "player": { "position": [x, y, z], "facing": f, "stamina": 100.0, "stamina_wait": 0, "action": "idle", "action_tick": 0, "invulnerable": false }
 ```
 
-- 无敌帧现在只是状态，还没有东西会打到角色。攻击判定是 G3 的事。
+- 无敌帧现在只是状态，还没有东西会打到角色。G3.2 的命中判定只有角色打别人，角色自己没有受击判定（G4 有了会出招的敌人再加）。
 
 ### 攻击（G2.3 起）
 
 用户决定（2026-09-27）：
-- **只做攻击动作**：前摇、出招、后摇三段，加上耐力消耗；打不到任何东西，命中判定留到 G3。
+- **只做攻击动作**：前摇、出招、后摇三段，加上耐力消耗；打不到任何东西，命中判定留到 G3（G3.2 起见下文「命中判定」）。
 - **鼠标左键轻攻击、右键重攻击**。
 - **后摇里可以预输入**：接下一刀，或者接翻滚。轻攻击最多连 3 刀。
 - **出招时向前滑一小段**：前摇里还能小幅转向。
@@ -763,7 +768,7 @@ attack_tick(a):                                           // S、A、R 是 a 的
 **锁定目标**：带 prop `lock_height` 的节点（第 10 节的 `props`）。锁定点在节点位置上方 `lock_height` 米处，相机对准的是这个点。
 - 目标必须是**根节点**，并且不能是相机节点。每个 tick 从场景读它的位置（G3.1 的目标不会动，G4 的敌人会动）。
 - 目标的先后顺序是场景的先序。「相等时取先出现的」都按这个顺序。
-- 角色节点之外的节点，props 只认 `lock_height`，写了别的名字就报错（防拼写错误）。
+- 角色节点之外的节点，props 只认 `lock_height`（G3.2 起还有 `hurt_radius`、`hurt_height`，见下文「命中判定」），写了别的名字就报错（防拼写错误）。
 - 演示场景里放了三个假人 `dummy_a`、`dummy_b`、`dummy_c`：
   - 根节点带 `lock_height`；
   - 子节点 `body` 是胶囊体网格，子节点 `block` 是挡路的 `collider: Box`（角色不能穿过假人）。
@@ -786,7 +791,7 @@ attack_tick(a):                                           // S、A、R 是 a 的
 - 新的报错：
   - `the character "<名字>": prop "lock_pitch_down" must be at least 0 and less than 90, got v`
   - `the character "<名字>": needs lock_range <= lock_break_range`
-  - `the node "<路径>": unknown prop "<p>" (known: lock_height)`
+  - `the node "<路径>": unknown prop "<p>" (known: lock_height)`（G3.2 起括号里是 `known: lock_height, hurt_radius, hurt_height`）
   - `the node "<路径>": prop "lock_height" must be greater than 0, got v`
   - `the lock target "<路径>" must be a root node, and not the camera`
 - 检查顺序：
@@ -902,6 +907,115 @@ if lock != null {
 - 目标之间方向完全相同（`δ == 0`，一个挡在另一个正后方）时，后面那个换不过去。
 - 画面上没有锁定标记（要有 HUD 或者额外的标记节点），目前在状态导出的 `lock` 里看。
 - 目标不会死，所以不会因为目标死亡而解锁。这是 G3.3 的事。
+
+### 命中判定（G3.2 起）
+
+用户决定（2026-09-27）：
+- **攻击判定是挥砍扫过的扇形**：出招的几个 tick 里，判定从右往左依次扫过扇形的一段，轻、重攻击各有自己的半径和角度。
+- **受击判定写在节点的 props 里**：`hurt_radius`、`hurt_height`，和 `lock_height` 一样，不改引擎的场景格式。
+- **命中后记进状态导出，被打中的东西闪白几帧**，截图看得见。血量、硬直、死亡是 G3.3 的事。
+- **一刀对每个受击判定最多命中一次**，一刀可以同时打中几个；**不管墙**，隔着柱子也打得到。
+
+**受击判定**（hurtbox）：带 prop `hurt_radius`、`hurt_height` 的节点。
+- 形状是竖直的圆柱：XZ 平面上以节点位置为圆心、半径 `hurt_radius` 的圆，高度范围 `[y, y + hurt_height]`，`y` 是节点位置的 y。和角色碰撞一样，只看「XZ 上的圆加一个高度范围」，不区分胶囊体和圆柱。
+- 两个 prop 必须一起写，都 > 0。
+- 节点必须是**根节点**，并且不能是相机节点；每个 tick 从场景读它的位置（和锁定目标相同）。角色节点的 props 是另一张表，写这两个名字按「不认识的 prop」报错。
+- 受击判定和锁定目标互不依赖，演示场景的假人两样都有。
+- 先后顺序是场景的先序。
+
+**参数**：角色节点的 props，可以省略，规则和「耐力、翻滚、冲刺」相同。
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `attack_reach` | 2 | 米，> 0。轻攻击扇形的半径，从角色位置（胶囊体底部的中心）量起 |
+| `attack_arc` | 120 | 度，0 < v ≤ 360。轻攻击扇形的总角度，以 `facing` 为中线左右对称 |
+| `heavy_reach` | 2.4 | 米，> 0 |
+| `heavy_arc` | 90 | 度，0 < v ≤ 360 |
+| `swing_low`、`swing_high` | 0.3、1.6 | 米，`0 ≤ swing_low < swing_high`。挥砍的高度范围，相对角色的脚；轻重攻击共用 |
+
+- 换算：角度转成弧度；`slice = arc / active_ticks`（`active_ticks` 是这一招的出招 tick 数），加载时各算一次。和前面一样，props 是 f64，先 `as f32` 再算。
+- 新的报错：
+  - `the character "<名字>": prop "<p>" must be greater than 0 and at most 360, got v`（`attack_arc`、`heavy_arc`）
+  - `the character "<名字>": prop "<p>" must be at least 0, got v`（`swing_low`）
+  - `the character "<名字>": needs swing_low < swing_high`
+  - `the node "<路径>": prop "<p>" must be greater than 0, got v`（`hurt_radius`、`hurt_height`；和 `lock_height` 的报错同一种）
+  - `the node "<路径>": needs both hurt_radius and hurt_height, or neither`
+  - `the hurtbox "<路径>" must be a root node, and not the camera`
+- 检查顺序：
+  - 6 个新参数的取值检查接在锁定参数的后面（同一张表）；
+  - `swing_low < swing_high` 接在 `lock_range <= lock_break_range` 的后面、每 tick 距离的前面；
+  - 节点的检查仍然按先序逐个节点，每个节点依次查：不认识的名字、`lock_height` 的取值、`hurt_radius` 的取值、`hurt_height` 的取值、两个 hurt prop 是否成对、根节点。根节点的检查：带 `lock_height` 的用锁定目标的报错，只带 hurt prop 的用上面 hurtbox 的报错。
+
+**状态**：
+- `game.hurtboxes`：每个受击判定一项，按先序。放在 `lock` 后面：
+
+```json
+"game": { "player": { … }, "camera": { … }, "lock": null, "hurtboxes": [
+  { "node": "dummy_a", "hits": 0, "last_hit": null },
+  { "node": "dummy_b", "hits": 2, "last_hit": { "tick": 57, "attack": "attack", "combo": 2 } }
+] }
+```
+
+- `hits`：加载以来被打中的次数。
+- `last_hit`：最近一次命中，没被打中过是 `null`。`tick` 是命中那个 tick 的编号（和状态导出顶层的 `tick` 相同）；`attack` 是 `"attack"` 或 `"heavy"`；`combo` 是那一刀的 `combo`（重攻击是 0）。
+- 不进状态导出的内部状态：`struck`，这一刀已经打中过的受击判定。每次开始攻击（包括连段的下一刀）时清空。
+
+**攻击的出招**（`attack_tick` 的 active 分支）在滑动之后加上命中检查：
+
+```text
+} else if action_tick <= S + A {
+    attack_phase = active
+    position = resolve(...)                                   // 不变
+    k    = action_tick - S                                    // 出招的第几个 tick，1..A
+    half = arc * 0.5
+    lo   = -half + (k - 1) as f32 * slice                     // 本 tick 扫过的一段，相对 facing，正数在左
+    hi   = -half + k as f32 * slice
+    for h in 受击判定（先序），h 不在 struck 里:
+        if swept(position, facing, reach, lo, hi, h) {
+            h.hits += 1; h.last_hit = { tick, attack: a, combo }
+            struck 加上 h
+        }
+}
+
+swept(p, facing, reach, lo, hi, h):
+    // 高度：两个闭区间有重叠
+    if h.y > p.y + swing_high || p.y + swing_low > h.y + hurt_height { return false }
+    // XZ：圆心到扇形 [lo, hi]（半径 reach）的距离不超过 hurt_radius
+    d   = Vec2(h.x - p.x, h.z - p.z)
+    rel = wrap(bearing(p, h) - facing)
+    if lo <= rel && rel <= hi {
+        dist = max(d.length() - reach, 0.0)                   // 在角度范围里：只看半径
+    } else {
+        dist = min(ray(lo), ray(hi))                          // 在外面：到两条边的最近距离
+    }
+    return dist <= hurt_radius
+
+ray(θ):                                                        // 从 p 出发、长 reach 的一条边
+    u = Vec2(-sinf(facing + θ), -cosf(facing + θ))            // 和 forward 同一种写法
+    t = clamp(d.dot(u), 0.0, reach)
+    return (d - u * t).length()
+```
+
+- `arc`、`slice`、`reach` 按这一招（`attack` 或 `heavy`）取。`slice` 让 A 个 tick 首尾相接地扫满整个扇形，最后一段的 `hi` 就是 `half`（浮点上可能差最后一位，不影响规则）。
+- 命中检查用滑动**之后**的 `position`。出招期间 `facing` 不变（转向只在前摇里）。
+- `d` 为零（圆心正好在角色位置）时 `bearing` 给 0，两种分支算出的 `dist` 都是 0，算命中。
+- 同一个 tick 里按先序逐个检查，命中的都记下。
+- 命中不改变角色、相机、锁定的任何状态：**不攻击时和攻击时，`player`、`camera`、`lock` 都和 G3.1 逐位相同**。
+- 只用加减乘除、`sqrt`、`abs`、`min`、`max`、`clamp` 和 libm 的 `sinf`、`cosf`、`atan2f`，符合第 4 节。
+
+**闪白**：第 6 步写完节点之后，对每个受击判定：
+- 如果 `last_hit` 不是 `null`，并且 `tick - last_hit.tick < 8`，把它子树（包括自己）里每个带 `mesh` 的节点的颜色设成 `(1, 1, 1)`；
+- 否则设回加载时场景里的颜色。
+- 闪白的时长（8 tick）和颜色是 `souls` 里的常量，不是 prop：G3.3 有了硬直之后很可能换掉，不值得调。
+- 命中那个 tick 画出来就已经是白的，一共白 8 个 tick。
+- 颜色用 `Scene::set_mesh_color`（第 10 节「渲染」）。节点颜色不在状态导出的 `nodes` 里，要看状态就看 `last_hit.tick`。
+
+**已知限制**（G3.2）：
+- **不检查遮挡**（用户决定）：隔着柱子、墙也打得到。
+- 每一刀都从右往左扫，连段不左右交替。
+- 受击判定是平顶的圆柱，角色的挥砍高度范围是一个水平的带子。
+- 只有角色打别人：角色没有受击判定，假人不会还手（G4）。
+- 命中只计数和闪白：没有血量、硬直、击退、顿帧（G3.3）。
 
 ### 碰撞（G1.3 起）
 
