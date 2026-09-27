@@ -69,7 +69,9 @@ mod tests {
 
     #[test]
     fn dump_is_pretty_json_with_trailing_newline() {
-        let mut game = AnyGame::builtin().unwrap();
+        // The G2.3 demo scene: the lock-on dummies of today's sort first.
+        let scene = include_str!("../../../games/souls/src/g2_3_demo.scene.ron");
+        let mut game = AnyGame::new(loom_scene::Scene::parse(scene).unwrap()).unwrap();
         let input = ActionState::new();
         for _ in 0..60 {
             game.tick(&input);

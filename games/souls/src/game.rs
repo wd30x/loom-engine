@@ -28,6 +28,12 @@ pub const ROLL: &str = "roll";
 pub const ATTACK: &str = "attack";
 /// A heavy attack, on the tick it is pressed.
 pub const HEAVY: &str = "heavy";
+/// Locks on to a target, or lets go of it, on the tick it is pressed.
+pub const LOCK: &str = "lock";
+
+/// The one prop a node other than the character may have: it makes the
+/// node a lock-on target, locked on this many meters above its position.
+const LOCK_HEIGHT: &str = "lock_height";
 
 #[derive(Debug, thiserror::Error)]
 pub enum GameError {
@@ -71,6 +77,15 @@ pub enum GameError {
         value: f64,
     },
     #[error(
+        "the character {character:?}: prop {prop:?} must be at least 0 and less than 90, \
+         got {value}"
+    )]
+    NotBelow90 {
+        character: String,
+        prop: &'static str,
+        value: f64,
+    },
+    #[error(
         "the character {character:?}: needs 1 <= {action}_invuln_from <= {action}_invuln_to \
          <= {action}_ticks"
     )]
@@ -78,6 +93,8 @@ pub enum GameError {
         character: String,
         action: &'static str,
     },
+    #[error("the character {character:?}: needs lock_range <= lock_break_range")]
+    LockRanges { character: String },
     #[error(
         "the character {character:?}: {action} moves {step} m per tick, which must be less than \
          the capsule radius {radius}"
@@ -88,13 +105,21 @@ pub enum GameError {
         step: f32,
         radius: f32,
     },
+    #[error("the node {node:?}: unknown prop {prop:?} (known: lock_height)")]
+    UnknownNodeProp { node: String, prop: String },
+    #[error("the node {node:?}: prop \"lock_height\" must be greater than 0, got {value}")]
+    LockHeightNotPositive { node: String, value: f64 },
+    #[error("the lock target {0:?} must be a root node, and not the camera")]
+    LockTargetNotRoot(String),
 }
 
 /// The game state in the state dump (`game`).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GameState {
     pub player: PlayerState,
     pub camera: CameraState,
+    /// The path of the locked-on target; `None` when not locked on.
+    pub lock: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -166,13 +191,31 @@ impl BoxCollider {
     }
 }
 
+/// [`GameState`] but the lock, which [`Game::state`] adds as a path: kept
+/// out of [`Game`] so it stays small (the engine keeps a game by value).
+#[derive(Debug, Clone, Copy)]
+struct Motion {
+    player: PlayerState,
+    camera: CameraState,
+}
+
+/// A node with a `lock_height`: something to lock on to.
+#[derive(Debug, Clone)]
+struct Target {
+    id: NodeId,
+    /// The path, for the state dump.
+    path: String,
+    /// The lock point is this far above the node's position.
+    height: f32,
+}
+
 #[derive(Debug)]
 pub struct Game {
     clock: SimClock,
     scene: Scene,
     player: NodeId,
     camera: NodeId,
-    state: GameState,
+    state: Motion,
     /// Every collider, in pre-order.
     boxes: Vec<BoxCollider>,
     /// The character's capsule.
@@ -201,6 +244,14 @@ pub struct Game {
     action_dir: Vec3,
     /// The action that ended last, and its `combo`; not in the state dump.
     finished: (Action, u32),
+    /// Every lock-on target, in pre-order.
+    targets: Vec<Target>,
+    /// The index in `targets` of the locked-on target.
+    lock: Option<usize>,
+    /// While locked on: `look_x` summed up over consecutive ticks.
+    flick: f32,
+    /// Ticks left before the target can be switched again.
+    switch_wait: u32,
 }
 
 /// This tick's input as step 4 uses it.
@@ -224,9 +275,10 @@ impl Game {
     /// capsule mesh, and an active camera that is a root node with an orbit
     /// camera (its target is necessarily that character: a scene has at
     /// most one). The character must not be scaled, and colliders must not
-    /// move with either. Places the camera for tick 0, already pulled in
-    /// front of anything in the way; the character is not pushed out of
-    /// colliders until the first tick.
+    /// move with either. Nodes with a `lock_height` prop are lock-on
+    /// targets: root nodes other than the camera. Places the camera for
+    /// tick 0, already pulled in front of anything in the way; the
+    /// character is not pushed out of colliders until the first tick.
     pub fn new(scene: Scene) -> Result<Self, GameError> {
         let player = scene.character().ok_or(GameError::NoCharacter)?;
         let camera = scene.camera();
@@ -265,6 +317,7 @@ impl Game {
             }
         }
         let params = Params::new(&scene, player, radius)?;
+        let targets = targets(&scene, player, camera)?;
         let boxes = scene
             .colliders()
             .iter()
@@ -273,7 +326,7 @@ impl Game {
 
         let transform = scene.transform(player);
         let f = transform.rotation * Vec3::NEG_Z;
-        let state = GameState {
+        let state = Motion {
             player: PlayerState {
                 position: transform.position,
                 facing: positive_zero(wrap(libm::atan2f(-f.x, -f.z))),
@@ -315,6 +368,10 @@ impl Game {
             spent: false,
             action_dir: Vec3::ZERO,
             finished: (Action::Idle, 0),
+            targets,
+            lock: None,
+            flick: 0.0,
+            switch_wait: 0,
         };
         game.place_camera(true);
         Ok(game)
@@ -340,14 +397,62 @@ impl Game {
             tap
         };
 
-        let GameState {
-            mut player,
-            mut camera,
-        } = self.state;
+        let mut player = self.state.player;
+        let mut camera = self.state.camera;
 
-        // 1. Camera angles.
-        camera.yaw = wrap(camera.yaw - input.axis(LOOK_X));
-        camera.pitch = (camera.pitch + input.axis(LOOK_Y)).clamp(self.pitch_min, self.pitch_max);
+        // 1a. The lock key, and letting go of a target too far away.
+        let lock = params.lock;
+        if input.just_pressed(LOCK) {
+            self.lock = match self.lock {
+                None => self.acquire(player.position, camera.yaw),
+                Some(_) => None,
+            };
+            self.flick = 0.0;
+            self.switch_wait = 0;
+        } else if let Some(t) = self.lock
+            && hdist(player.position, self.target_position(t)) > lock.break_range
+        {
+            self.lock = None;
+        }
+
+        if let Some(mut t) = self.lock {
+            // 1b. Flicking sideways switches targets; look_y does nothing.
+            let look_x = input.axis(LOOK_X);
+            if self.switch_wait > 0 {
+                self.switch_wait -= 1;
+                self.flick = 0.0;
+            } else if look_x == 0.0 {
+                self.flick = 0.0;
+            } else {
+                self.flick += look_x;
+                if self.flick.abs() >= lock.switch_threshold {
+                    if let Some(next) = self.switch_target(player.position, t, self.flick > 0.0) {
+                        t = next;
+                        self.lock = Some(t);
+                    }
+                    self.flick = 0.0;
+                    self.switch_wait = lock.switch_cooldown_ticks;
+                }
+            }
+            // 1c. The camera turns to look at the lock point.
+            let pivot = player.position + Vec3::new(0.0, self.pivot_height, 0.0);
+            let p = self.target_position(t) + Vec3::new(0.0, self.targets[t].height, 0.0);
+            let dh = hdist(pivot, p);
+            if dh > 0.0 {
+                let yaw_t = bearing(pivot, p);
+                let pitch_t = (libm::atan2f(p.y - pivot.y, dh) - lock.pitch_down)
+                    .clamp(self.pitch_min, self.pitch_max);
+                camera.yaw = wrap(
+                    camera.yaw + wrap(yaw_t - camera.yaw).clamp(-lock.cam_step, lock.cam_step),
+                );
+                camera.pitch += (pitch_t - camera.pitch).clamp(-lock.cam_step, lock.cam_step);
+            }
+        } else {
+            // 1. Camera angles.
+            camera.yaw = wrap(camera.yaw - input.axis(LOOK_X));
+            camera.pitch =
+                (camera.pitch + input.axis(LOOK_Y)).clamp(self.pitch_min, self.pitch_max);
+        }
 
         // 2. Movement input, at most 1 long.
         let mut v = Vec2::new(input.axis(MOVE_X), input.axis(MOVE_Y));
@@ -423,11 +528,18 @@ impl Game {
                 busy = false;
             }
 
-            // 5. Turn towards `dir`, at most `max_turn` per tick.
-            if v.length_squared() > 0.0 {
-                let target = libm::atan2f(-dir.x, -dir.z);
-                let diff = wrap(target - player.facing);
-                player.facing = wrap(player.facing + diff.clamp(-self.max_turn, self.max_turn));
+            // 5. Turn, at most `max_turn` per tick: towards the target while
+            // locked on and not sprinting, otherwise towards `dir`.
+            if let Some(t) = self.lock
+                && player.action != Action::Sprint
+            {
+                let to = self.target_position(t);
+                if hdist(player.position, to) > 0.0 {
+                    player.facing =
+                        turn(player.facing, bearing(player.position, to), self.max_turn);
+                }
+            } else if v.length_squared() > 0.0 {
+                player.facing = turn(player.facing, libm::atan2f(-dir.x, -dir.z), self.max_turn);
             }
         }
 
@@ -446,7 +558,7 @@ impl Game {
             }
             Action::Idle | Action::Sprint | Action::Attack | Action::Heavy => false,
         };
-        self.state = GameState { player, camera };
+        self.state = Motion { player, camera };
 
         // 6. Write the nodes.
         let transform = self.scene.transform_mut(self.player);
@@ -520,11 +632,16 @@ impl Game {
     fn attack_tick(&mut self, player: &mut PlayerState, intent: &Intent) {
         let a = self.params.attack_of(player.action);
         let phase = if player.action_tick <= a.startup {
-            if intent.v.length_squared() > 0.0 {
-                let turn = self.params.attack_turn_step;
+            // Towards the target while locked on, otherwise towards `dir`.
+            let step = self.params.attack_turn_step;
+            if let Some(t) = self.lock {
+                let to = self.target_position(t);
+                if hdist(player.position, to) > 0.0 {
+                    player.facing = turn(player.facing, bearing(player.position, to), step);
+                }
+            } else if intent.v.length_squared() > 0.0 {
                 let target = libm::atan2f(-intent.dir.x, -intent.dir.z);
-                let diff = wrap(target - player.facing);
-                player.facing = wrap(player.facing + diff.clamp(-turn, turn));
+                player.facing = turn(player.facing, target, step);
             }
             AttackPhase::Startup
         } else if player.action_tick <= a.startup + a.active {
@@ -565,7 +682,8 @@ impl Game {
     /// `return_step` per tick once it is gone. When `loading`, the camera
     /// takes the unobstructed distance directly.
     fn place_camera(&mut self, loading: bool) {
-        let GameState { player, camera } = self.state;
+        let player = self.state.player;
+        let camera = self.state.camera;
         let rot = Quat::from_rotation_y(camera.yaw) * Quat::from_rotation_x(camera.pitch);
         let pivot = player.position + Vec3::new(0.0, self.pivot_height, 0.0);
         let target = self.obstruct(pivot, rot * Vec3::Z);
@@ -630,8 +748,126 @@ impl Game {
 
     /// Game state for `--dump-state`.
     pub fn state(&self) -> GameState {
-        self.state
+        GameState {
+            player: self.state.player,
+            camera: self.state.camera,
+            lock: self.lock.map(|t| self.targets[t].path.clone()),
+        }
     }
+
+    /// The paths of the lock-on targets, in their order.
+    #[cfg(test)]
+    pub(crate) fn target_paths(&self) -> Vec<&str> {
+        self.targets.iter().map(|t| t.path.as_str()).collect()
+    }
+
+    /// Where target `t` is now: read from the scene every tick.
+    fn target_position(&self, t: usize) -> Vec3 {
+        // Targets are root nodes, so this is their world position.
+        self.scene.transform(self.targets[t].id).position
+    }
+
+    /// `acquire()` of step 1a: the target within `lock_range` and
+    /// `lock_angle` closest to where the camera looks (`yaw`), the first
+    /// in pre-order on a tie.
+    fn acquire(&self, position: Vec3, yaw: f32) -> Option<usize> {
+        let lock = self.params.lock;
+        let mut best: Option<(usize, f32)> = None;
+        for t in 0..self.targets.len() {
+            let to = self.target_position(t);
+            let d = hdist(position, to);
+            if d == 0.0 || d > lock.range {
+                continue;
+            }
+            let a = wrap(bearing(position, to) - yaw).abs();
+            if a > lock.angle {
+                continue;
+            }
+            if best.is_none_or(|(_, best_a)| a < best_a) {
+                best = Some((t, a));
+            }
+        }
+        best.map(|(t, _)| t)
+    }
+
+    /// `switch_target(side)` of step 1b: of the targets within
+    /// `lock_range` on the right (or left) of `current` as seen from
+    /// `position`, the one closest in direction; the first in pre-order on
+    /// a tie.
+    fn switch_target(&self, position: Vec3, current: usize, right: bool) -> Option<usize> {
+        let cur = bearing(position, self.target_position(current));
+        let mut best: Option<(usize, f32)> = None;
+        for t in (0..self.targets.len()).filter(|&t| t != current) {
+            let to = self.target_position(t);
+            let d = hdist(position, to);
+            if d == 0.0 || d > self.params.lock.range {
+                continue;
+            }
+            // Positive is to the left, negative to the right.
+            let delta = wrap(bearing(position, to) - cur);
+            let better = if right {
+                delta < 0.0 && best.is_none_or(|(_, b)| delta > b)
+            } else {
+                delta > 0.0 && best.is_none_or(|(_, b)| delta < b)
+            };
+            if better {
+                best = Some((t, delta));
+            }
+        }
+        best.map(|(t, _)| t)
+    }
+}
+
+/// Every lock-on target of `scene`, in pre-order, checked node by node:
+/// no props other than `lock_height` (outside the character), a positive
+/// `lock_height`, and only on root nodes other than the camera.
+fn targets(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Vec<Target>, GameError> {
+    let mut targets = Vec::new();
+    for id in scene.ids().filter(|&id| id != player) {
+        let node = scene.node(id);
+        if let Some((prop, _)) = node.props().find(|&(p, _)| p != LOCK_HEIGHT) {
+            return Err(GameError::UnknownNodeProp {
+                node: scene.path(id),
+                prop: prop.to_owned(),
+            });
+        }
+        let Some(height) = node.prop(LOCK_HEIGHT) else {
+            continue;
+        };
+        if height <= 0.0 {
+            return Err(GameError::LockHeightNotPositive {
+                node: scene.path(id),
+                value: height,
+            });
+        }
+        if node.parent.is_some() || id == camera {
+            return Err(GameError::LockTargetNotRoot(scene.path(id)));
+        }
+        targets.push(Target {
+            id,
+            path: scene.path(id),
+            height: height as f32,
+        });
+    }
+    Ok(targets)
+}
+
+/// The horizontal direction from `from` to `to`, as an angle like `facing`
+/// and `yaw`: 0 is -Z, positive is to the left (counterclockwise from
+/// above).
+fn bearing(from: Vec3, to: Vec3) -> f32 {
+    libm::atan2f(-(to.x - from.x), -(to.z - from.z))
+}
+
+/// The horizontal distance from `from` to `to`.
+fn hdist(from: Vec3, to: Vec3) -> f32 {
+    Vec2::new(to.x - from.x, to.z - from.z).length()
+}
+
+/// Step 5's turn: `facing` turned towards `target`, by at most `max`.
+fn turn(facing: f32, target: f32, max: f32) -> f32 {
+    let diff = wrap(target - facing);
+    wrap(facing + diff.clamp(-max, max))
 }
 
 /// Pushes a capsule of `radius` and `height` with its feet at `p` out of
@@ -1082,6 +1318,102 @@ mod tests {
         assert_eq!(hash, 309_999_793_288_603_552);
     }
 
+    /// The input of [`without_the_lock_key_every_tick_matches_g2_3`] at
+    /// `tick`: the actions held, and the axes.
+    fn g2_3_reference_input(tick: u32) -> (Vec<&'static str>, Axes) {
+        let mut actions = Vec::new();
+        if matches!(tick, 100..=150 | 175 | 210 | 230 | 262 | 300..=330) {
+            actions.push(ROLL);
+        }
+        if matches!(tick, 5 | 20 | 50 | 340 | 345) {
+            actions.push(ATTACK);
+        }
+        if matches!(tick, 200 | 360) {
+            actions.push(HEAVY);
+        }
+        let axes = match tick {
+            1..=60 => vec![(MOVE_Y, 1.0), (LOOK_X, 0.01)],
+            61..=160 => vec![(MOVE_X, -0.6), (MOVE_Y, 0.8), (LOOK_Y, -0.02)],
+            161..=199 => vec![(LOOK_X, -0.03)],
+            200..=260 => vec![(MOVE_X, 1.0), (MOVE_Y, -1.0)],
+            _ => vec![(MOVE_Y, 1.0), (LOOK_X, 0.02)],
+        };
+        (actions, axes)
+    }
+
+    /// FNV-1a over the bits of every field the state dump had in G2.3.
+    fn g2_3_fingerprint(hash: &mut u64, s: &GameState) {
+        let p = s.player;
+        let words = [
+            p.position.x.to_bits(),
+            p.position.y.to_bits(),
+            p.position.z.to_bits(),
+            p.facing.to_bits(),
+            p.stamina.to_bits(),
+            p.stamina_wait,
+            p.action as u32,
+            p.action_tick,
+            u32::from(p.invulnerable),
+            p.attack_phase.map_or(0, |a| a as u32 + 1),
+            p.combo,
+            p.buffered.map_or(0, |b| b as u32 + 1),
+            s.camera.yaw.to_bits(),
+            s.camera.pitch.to_bits(),
+            s.camera.distance.to_bits(),
+        ];
+        for byte in words.iter().flat_map(|w| w.to_le_bytes()) {
+            *hash = (*hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    #[test]
+    fn without_the_lock_key_every_tick_matches_g2_3() {
+        // The expected hash was computed by this same test on the G2.3 code
+        // (commit b450286), before lock-on existed, on the G2.3 demo scene:
+        // it covers every tick of a run with a light combo, heavy attacks,
+        // buffered and dropped presses, rolls, a backstep and sprints, with
+        // pillars and the slanted wall in the way.
+        let mut game = Game::from_source(G2_3_DEMO).unwrap();
+        let mut input = ActionState::new();
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut seen = Vec::new();
+        let mut max_combo = 0;
+        let mut buffered = 0;
+        for t in 1..=400 {
+            let (actions, axes) = g2_3_reference_input(t);
+            input.advance(TickInput {
+                actions: actions.into_iter().map(str::to_owned).collect(),
+                axes: axes.into_iter().map(|(a, v)| (a.to_owned(), v)).collect(),
+            });
+            game.tick(&input);
+            let s = game.state();
+            g2_3_fingerprint(&mut hash, &s);
+            if !seen.contains(&s.player.action) {
+                seen.push(s.player.action);
+            }
+            max_combo = max_combo.max(s.player.combo);
+            buffered += u32::from(s.player.buffered.is_some());
+        }
+        assert_eq!(
+            seen,
+            [
+                Action::Idle,
+                Action::Attack,
+                Action::Sprint,
+                Action::Backstep,
+                Action::Heavy,
+                Action::Roll
+            ]
+        );
+        assert_eq!(max_combo, 3);
+        assert!(buffered > 0);
+        assert_eq!(hash, 12_318_382_315_914_199_701);
+    }
+
+    /// The demo scene as it was in G2.3, before the lock-on dummies:
+    /// tests whose results the dummies would change run on it.
+    const G2_3_DEMO: &str = include_str!("g2_3_demo.scene.ron");
+
     /// The demo scene with `player`'s line replaced.
     fn demo_with(old: &str, new: &str) -> String {
         let src = include_str!("demo.scene.ron");
@@ -1173,7 +1505,9 @@ mod tests {
 
     #[test]
     fn running_into_a_pillar_stops_in_front_of_it() {
-        let game = run(150, |_| vec![(MOVE_Y, 1.0)]);
+        // On the G2.3 scene: dummy_b now stands in front of pillar c.
+        let mut game = Game::from_source(G2_3_DEMO).unwrap();
+        advance(&mut game, 150, |_| vec![(MOVE_Y, 1.0)]);
         // Pillar c's face is at z = -8.5; plus the radius 0.35.
         assert_player(&game, [0.0, 0.0, -8.15], 0.0);
     }

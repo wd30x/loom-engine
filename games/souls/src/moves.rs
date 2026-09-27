@@ -1,6 +1,6 @@
-//! Stamina, roll, sprint, backstep and attacks: the parameters, read from
-//! the character node's props with defaults, and the action state
-//! (`docs/architecture.md` section 11, "耐力、翻滚、冲刺" and "攻击").
+//! Stamina, roll, sprint, backstep, attacks and lock-on: the parameters,
+//! read from the character node's props with defaults, and the action state
+//! (`docs/architecture.md` section 11, "耐力、翻滚、冲刺", "攻击" and "锁定").
 
 use loom_scene::{NodeId, Scene};
 use serde::Serialize;
@@ -48,12 +48,14 @@ enum Rule {
     Positive,
     /// A whole number of at least this.
     AtLeast(u32),
+    /// An angle in degrees, at least 0 and less than 90.
+    Below90,
 }
 
 /// Every prop the character understands, with its default and rule, in
 /// the order they are checked. Reading, checking and rejecting unknown
 /// names all go through this one table.
-const PARAMS: [(&str, f64, Rule); 28] = [
+const PARAMS: [(&str, f64, Rule); 35] = [
     ("stamina_max", 100.0, Rule::Positive),
     ("stamina_regen", 45.0, Rule::Positive),
     ("stamina_delay_ticks", 30.0, Rule::AtLeast(0)),
@@ -82,6 +84,13 @@ const PARAMS: [(&str, f64, Rule); 28] = [
     ("heavy_distance", 0.6, Rule::Positive),
     ("attack_turn_speed", 180.0, Rule::Positive),
     ("combo_max", 3.0, Rule::AtLeast(1)),
+    ("lock_range", 15.0, Rule::Positive),
+    ("lock_break_range", 20.0, Rule::Positive),
+    ("lock_angle", 60.0, Rule::Positive),
+    ("lock_camera_speed", 360.0, Rule::Positive),
+    ("lock_pitch_down", 15.0, Rule::Below90),
+    ("switch_threshold", 0.1, Rule::Positive),
+    ("switch_cooldown_ticks", 20.0, Rule::AtLeast(0)),
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -126,13 +135,34 @@ pub(crate) struct Params {
     /// Radians per tick during startup: `attack_turn_speed.to_radians() / 60`.
     pub attack_turn_step: f32,
     pub combo_max: u32,
+    pub lock: Lock,
+}
+
+/// Lock-on, in per-tick units and radians.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Lock {
+    /// Meters: only targets at most this far (horizontally) are picked.
+    pub range: f32,
+    /// Meters: a locked target farther than this is let go.
+    pub break_range: f32,
+    /// Radians: how far from the camera's heading a target may be picked.
+    pub angle: f32,
+    /// Radians per tick the camera turns to follow the target:
+    /// `lock_camera_speed.to_radians() / 60`.
+    pub cam_step: f32,
+    /// Radians the camera looks down past the lock point.
+    pub pitch_down: f32,
+    /// `look_x` summed up to this switches targets.
+    pub switch_threshold: f32,
+    pub switch_cooldown_ticks: u32,
 }
 
 impl Params {
     /// Reads and checks the props of the character `id`, whose capsule has
     /// `radius`: unknown names (in file order), then each value (in table
-    /// order), then the invulnerability windows (roll, backstep), then the
-    /// per-tick distances (sprint, roll, backstep, attack, heavy).
+    /// order), then the invulnerability windows (roll, backstep), then
+    /// `lock_range <= lock_break_range`, then the per-tick distances
+    /// (sprint, roll, backstep, attack, heavy).
     pub fn new(scene: &Scene, id: NodeId, radius: f32) -> Result<Self, GameError> {
         let node = scene.node(id);
         let character = scene.path(id);
@@ -161,6 +191,13 @@ impl Params {
                         character,
                         prop,
                         min,
+                        value: v,
+                    });
+                }
+                Rule::Below90 if !(0.0..90.0).contains(&v) => {
+                    return Err(GameError::NotBelow90 {
+                        character,
+                        prop,
                         value: v,
                     });
                 }
@@ -209,11 +246,23 @@ impl Params {
             heavy: attack("heavy"),
             attack_turn_step: (get("attack_turn_speed") as f32).to_radians() / 60.0,
             combo_max: ticks("combo_max"),
+            lock: Lock {
+                range: get("lock_range") as f32,
+                break_range: get("lock_break_range") as f32,
+                angle: (get("lock_angle") as f32).to_radians(),
+                cam_step: (get("lock_camera_speed") as f32).to_radians() / 60.0,
+                pitch_down: (get("lock_pitch_down") as f32).to_radians(),
+                switch_threshold: get("switch_threshold") as f32,
+                switch_cooldown_ticks: ticks("switch_cooldown_ticks"),
+            },
         };
         for (action, m) in [("roll", params.roll), ("backstep", params.backstep)] {
             if !(m.invuln_from <= m.invuln_to && m.invuln_to <= m.ticks) {
                 return Err(GameError::InvulnWindow { character, action });
             }
+        }
+        if params.lock.range > params.lock.break_range {
+            return Err(GameError::LockRanges { character });
         }
         for (action, step) in [
             ("sprint", params.sprint_step),
@@ -263,7 +312,8 @@ mod tests {
     use loom_core::input::{ActionState, TickInput};
 
     use super::*;
-    use crate::{ATTACK, Game, GameState, HEAVY, LOOK_X, MOVE_X, MOVE_Y, ROLL};
+    use crate::{ATTACK, Game, GameState, HEAVY, LOCK, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL};
+    use std::f32::consts::FRAC_PI_2;
 
     /// Props of the test scene: every per-tick amount is a power-of-two
     /// fraction, so positions and stamina are exact. Per tick: run 0.0625,
@@ -278,6 +328,12 @@ mod tests {
     /// A character at the origin facing -Z, the camera behind it with yaw
     /// and pitch 0, no colliders; `props` on the character.
     fn scene(props: &str) -> String {
+        scene_with(props, "")
+    }
+
+    /// [`scene`] with `nodes` (RON node tuples, each followed by a comma)
+    /// added after the camera.
+    fn scene_with(props: &str, nodes: &str) -> String {
         format!(
             r#"(
     version: 1,
@@ -291,6 +347,7 @@ mod tests {
             orbit_camera: (target: "player", pivot_height: 1.5, distance: 4.0,
                 yaw: 0.0, pitch: 0.0, pitch_min: -60.0, pitch_max: 60.0,
                 collision_radius: 0.2, return_speed: 4.0)),
+        {nodes}
     ],
 )"#
         )
@@ -304,8 +361,13 @@ mod tests {
 
     impl Run {
         fn new(props: &str) -> Self {
+            Self::on(&scene(props))
+        }
+
+        /// A run of the scene source `src`.
+        fn on(src: &str) -> Self {
             Self {
-                game: Game::from_source(&scene(props)).unwrap(),
+                game: Game::from_source(src).unwrap(),
                 input: ActionState::new(),
             }
         }
@@ -843,6 +905,325 @@ mod tests {
         assert_eq!(s.player.stamina, 55.0);
     }
 
+    // ----------------------------------------------------------------- lock-on
+
+    /// A root lock-on target `name` on the ground at `(x, z)`, locked on
+    /// 1.5 m up: level with the camera pivot.
+    fn target(name: &str, x: f32, z: f32) -> String {
+        format!(
+            r#"(name: "{name}", position: ({x:?}, 0.0, {z:?}), props: [("lock_height", 1.5)]),"#
+        )
+    }
+
+    /// 10 m ahead: 5 m to the left, straight ahead, 5 m to the right.
+    fn three_targets() -> String {
+        [
+            target("left", -5.0, -10.0),
+            target("mid", 0.0, -10.0),
+            target("right", 5.0, -10.0),
+        ]
+        .concat()
+    }
+
+    fn lock_of(s: &GameState) -> Option<&str> {
+        s.lock.as_deref()
+    }
+
+    #[test]
+    fn lock_picks_the_target_closest_to_the_view_direction_not_the_nearest() {
+        // 10 m straight ahead, and about 2.8 m away 45° to the left, in
+        // both orders.
+        let (ahead, near) = (target("ahead", 0.0, -10.0), target("near", -2.0, -2.0));
+        for nodes in [format!("{ahead}{near}"), format!("{near}{ahead}")] {
+            let mut run = Run::on(&scene_with("", &nodes));
+            let s = run.hold(&[LOCK], &NONE);
+            assert_eq!(lock_of(&s), Some("ahead"), "{nodes}");
+        }
+    }
+
+    #[test]
+    fn lock_skips_targets_beyond_lock_range_or_lock_angle() {
+        // 15.5 m ahead (lock_range 15), and 90° to the left (lock_angle 60).
+        let nodes = [target("far", 0.0, -15.5), target("aside", -3.0, 0.0)].concat();
+        let mut run = Run::on(&scene_with("", &nodes));
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), None);
+        // Exactly lock_range away is in range.
+        let mut run = Run::on(&scene_with("", &target("edge", 0.0, -15.0)));
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some("edge"));
+    }
+
+    #[test]
+    fn equal_angles_lock_the_first_target_in_pre_order() {
+        // Mirror images 31° to the right and to the left: the same angle,
+        // bit for bit.
+        let (right, left) = (target("right", 3.0, -5.0), target("left", -3.0, -5.0));
+        for (nodes, first) in [
+            (format!("{right}{left}"), "right"),
+            (format!("{left}{right}"), "left"),
+        ] {
+            let mut run = Run::on(&scene_with("", &nodes));
+            assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some(first));
+        }
+    }
+
+    #[test]
+    fn lock_key_with_no_target_in_range_turns_the_camera_as_usual() {
+        let mut run = Run::on(&scene_with("", &target("far", 0.0, -30.0)));
+        let s = run.hold(&[LOCK], &[(LOOK_X, 0.04), (LOOK_Y, 0.02)]);
+        assert_eq!(lock_of(&s), None);
+        assert_eq!((s.camera.yaw, s.camera.pitch), (-0.04, 0.02));
+    }
+
+    #[test]
+    fn pressing_lock_again_lets_go_and_the_camera_turns_on_that_tick() {
+        let mut run = Run::on(&scene_with("", &target("ahead", 0.0, -10.0)));
+        assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some("ahead"));
+        let before = run.hold(&[], &NONE); // tick 2: released, still locked
+        assert_eq!(lock_of(&before), Some("ahead"));
+        let s = run.hold(&[LOCK], &[(LOOK_X, 0.04), (LOOK_Y, 0.02)]);
+        assert_eq!(lock_of(&s), None);
+        assert_eq!(before.camera.yaw, 0.0);
+        assert_eq!(s.camera.yaw, -0.04);
+        assert_eq!(s.camera.pitch, before.camera.pitch + 0.02);
+    }
+
+    #[test]
+    fn target_past_lock_break_range_is_let_go_on_the_tick_it_is() {
+        // lock_range 5 and lock_break_range 6; backing away 0.0625 a tick
+        // from a target 5 m ahead.
+        let props = format!(r#"{PROPS}, ("lock_range", 5), ("lock_break_range", 6)"#);
+        let mut run = Run::on(&scene_with(&props, &target("ahead", 0.0, -5.0)));
+        run.hold(&[LOCK], &NONE);
+        let back = [(MOVE_Y, -1.0)];
+        let s = run.ticks(16, false, &back); // ticks 2..=17
+        assert_eq!(s.player.position, Vec3::new(0.0, 0.0, 1.0));
+        // Tick 18 starts exactly 6 m away: still locked.
+        let s = run.tick(false, &back);
+        assert_eq!(lock_of(&s), Some("ahead"));
+        assert_eq!(s.player.position.z, 1.0625);
+        // Tick 19 starts 6.0625 m away: let go, and look_x turns the camera.
+        let s = run.hold(&[], &[(MOVE_Y, -1.0), (LOOK_X, 0.04)]);
+        assert_eq!(lock_of(&s), None);
+        assert_eq!(s.camera.yaw, -0.04);
+    }
+
+    #[test]
+    fn camera_turns_to_a_target_on_the_left_by_cam_step_a_tick() {
+        // Straight to the left and level with the pivot: yaw_t = bearing =
+        // π/2. The expected yaw is the pseudocode of docs/architecture.md
+        // section 11 (step 1c) run tick by tick in this test, not an
+        // analytic solution: cam_step (6°) a tick, the last step landing on
+        // yaw_t. (`wrap` leaves these in-range values unchanged.)
+        let mut run = Run::on(&scene_with(
+            r#"("lock_angle", 100)"#,
+            &target("left", -10.0, 0.0),
+        ));
+        let cam_step = 360.0_f32.to_radians() / 60.0;
+        let yaw_t = libm::atan2f(10.0, -0.0);
+        let mut yaw = 0.0_f32;
+        let mut arrived = None;
+        for t in 1..=20 {
+            let actions: &[&str] = if t == 1 { &[LOCK] } else { &[] };
+            let s = run.hold(actions, &NONE);
+            yaw += (yaw_t - yaw).clamp(-cam_step, cam_step);
+            assert_eq!(s.camera.yaw.to_bits(), yaw.to_bits(), "tick {t}");
+            if yaw == yaw_t && arrived.is_none() {
+                arrived = Some(t);
+            }
+        }
+        // 90° at 6° a tick.
+        assert_eq!(arrived, Some(15));
+        assert_eq!(yaw_t, FRAC_PI_2);
+    }
+
+    #[test]
+    fn camera_pitch_settles_lock_pitch_down_below_a_level_target_and_ignores_look_y() {
+        // The lock point is level with the pivot: pitch_t = -15°. Checked
+        // against that analytic value with a tolerance (the last step's
+        // `pitch + (pitch_t - pitch)` may round).
+        let mut run = Run::on(&scene_with("", &target("ahead", 0.0, -10.0)));
+        let cam_step = 360.0_f32.to_radians() / 60.0;
+        let s = run.hold(&[LOCK], &[(LOOK_Y, 0.04)]);
+        assert_eq!(s.camera.pitch, -cam_step);
+        // Looking up the whole time does nothing while locked on.
+        let s = run.ticks(10, false, &[(LOOK_Y, 0.04)]);
+        assert!(
+            (s.camera.pitch + 15.0_f32.to_radians()).abs() <= 1e-6,
+            "{}",
+            s.camera.pitch
+        );
+        assert_eq!(s.camera.yaw, 0.0);
+    }
+
+    #[test]
+    fn flicking_right_or_left_switches_to_the_target_on_that_side() {
+        for (look_x, next) in [(0.12, "right"), (-0.12, "left")] {
+            let mut run = Run::on(&scene_with("", &three_targets()));
+            assert_eq!(lock_of(&run.hold(&[LOCK], &NONE)), Some("mid"));
+            let s = run.hold(&[], &[(LOOK_X, look_x)]);
+            assert_eq!(lock_of(&s), Some(next), "{look_x}");
+        }
+    }
+
+    #[test]
+    fn flick_with_nothing_on_that_side_still_starts_the_cooldown() {
+        let mut run = Run::on(&scene_with("", &three_targets()));
+        run.hold(&[LOCK], &NONE);
+        // Tick 2: to the right one; 20 ticks of cooldown (ticks 3..=22).
+        assert_eq!(lock_of(&run.hold(&[], &[(LOOK_X, 0.12)])), Some("right"));
+        run.ticks(20, false, &NONE);
+        // Tick 23: nothing farther right, no switch, but a new cooldown.
+        assert_eq!(lock_of(&run.hold(&[], &[(LOOK_X, 0.12)])), Some("right"));
+        for t in 24..=43 {
+            let s = run.hold(&[], &[(LOOK_X, -0.12)]);
+            assert_eq!(lock_of(&s), Some("right"), "tick {t}");
+        }
+        // Tick 44: the cooldown is over.
+        assert_eq!(lock_of(&run.hold(&[], &[(LOOK_X, -0.12)])), Some("mid"));
+    }
+
+    #[test]
+    fn holding_l_switches_on_the_third_tick() {
+        let mut run = Run::on(&scene_with("", &three_targets()));
+        run.hold(&[LOCK], &NONE);
+        let l = [(LOOK_X, 0.04)];
+        assert_eq!(lock_of(&run.hold(&[], &l)), Some("mid")); // 0.04
+        assert_eq!(lock_of(&run.hold(&[], &l)), Some("mid")); // 0.08
+        assert_eq!(lock_of(&run.hold(&[], &l)), Some("right")); // 0.12
+    }
+
+    #[test]
+    fn tick_without_look_x_clears_the_flick() {
+        let mut run = Run::on(&scene_with("", &three_targets()));
+        run.hold(&[LOCK], &NONE);
+        let l = [(LOOK_X, 0.04)];
+        for axes in [&l[..], &l, &NONE, &l, &l] {
+            assert_eq!(lock_of(&run.hold(&[], axes)), Some("mid"));
+        }
+        assert_eq!(lock_of(&run.hold(&[], &l)), Some("right"));
+    }
+
+    #[test]
+    fn locked_strafe_moves_along_the_camera_right_and_faces_the_target() {
+        let mut run = Run::on(&scene_with(PROPS, &target("ahead", 0.0, -10.0)));
+        run.hold(&[LOCK], &NONE);
+        let s = run.hold(&[], &[(MOVE_X, 1.0)]);
+        // The camera still looks straight ahead: right is +X.
+        assert_eq!(s.camera.yaw, 0.0);
+        assert_eq!(s.player.position, Vec3::new(0.0625, 0.0, 0.0));
+        // Facing the target from where it now is, not -π/2 (its way).
+        assert_eq!(s.player.facing, libm::atan2f(0.0625, 10.0));
+    }
+
+    #[test]
+    fn locked_turn_to_face_the_target_is_at_most_max_turn_a_tick() {
+        // Standing still, the target straight to the right (-π/2).
+        let mut run = Run::on(&scene_with(
+            r#"("lock_angle", 100)"#,
+            &target("right", 10.0, 0.0),
+        ));
+        let max_turn = 720.0_f32.to_radians() / 60.0;
+        let mut facing = 0.0_f32;
+        for t in 1..=7 {
+            let actions: &[&str] = if t == 1 { &[LOCK] } else { &[] };
+            let s = run.hold(actions, &NONE);
+            facing -= max_turn;
+            assert_eq!(s.player.facing.to_bits(), facing.to_bits(), "tick {t}");
+        }
+        // 90° at 12° a tick: there on tick 8.
+        let s = run.tick(false, &NONE);
+        assert!(
+            (s.player.facing + FRAC_PI_2).abs() <= 1e-6,
+            "{}",
+            s.player.facing
+        );
+    }
+
+    #[test]
+    fn locked_sprint_faces_where_it_runs_then_turns_back_to_the_target() {
+        let mut run = Run::on(&scene_with(PROPS, &target("ahead", 0.0, -10.0)));
+        let bearing = |p: Vec3| libm::atan2f(-(0.0 - p.x), -(-10.0 - p.z));
+        run.hold(&[LOCK], &NONE);
+        let right = [(MOVE_X, 1.0)];
+        // Ticks 2..=16: held within the tap window: running, facing the
+        // target.
+        let s = run.ticks(15, true, &right);
+        assert_eq!(s.player.action, Action::Idle);
+        assert!((s.player.facing - bearing(s.player.position)).abs() <= 1e-6);
+        // Ticks 17..=24: sprinting, turned to where it runs (the camera's
+        // right) at 12° a tick.
+        let s = run.ticks(8, true, &right);
+        assert_eq!(s.player.action, Action::Sprint);
+        let (sn, cs) = (libm::sinf(s.camera.yaw), libm::cosf(s.camera.yaw));
+        let way = libm::atan2f(-cs, sn);
+        assert!(
+            (s.player.facing - way).abs() <= 1e-6,
+            "{} {way}",
+            s.player.facing
+        );
+        // Released: running again, back to facing the target.
+        let s = run.ticks(10, false, &right);
+        assert_eq!(s.player.action, Action::Idle);
+        assert!((s.player.facing - bearing(s.player.position)).abs() <= 1e-6);
+    }
+
+    #[test]
+    fn locked_roll_goes_and_faces_the_input_way_like_an_unlocked_one() {
+        let nodes = target("ahead", 0.0, -10.0);
+        let mut locked = Run::on(&scene_with(PROPS, &nodes));
+        let mut free = Run::on(&scene_with(PROPS, &nodes));
+        locked.hold(&[LOCK], &NONE);
+        free.hold(&[], &NONE);
+        locked.tick(true, &NONE);
+        free.tick(true, &NONE);
+        // Tick 3: released pushing right, a roll; ticks 4..=26 the rest of
+        // its 24 ticks, steering left, which does nothing.
+        for t in 3..=26 {
+            let axes = [(MOVE_X, if t == 3 { 1.0 } else { -1.0 })];
+            let (a, b) = (locked.tick(false, &axes), free.tick(false, &axes));
+            assert_eq!(lock_of(&a), Some("ahead"));
+            assert_eq!(a.player, b.player, "tick {t}");
+            assert_eq!(a.player.facing.to_bits(), b.player.facing.to_bits());
+            assert_eq!(
+                a.player.position.to_array().map(f32::to_bits),
+                b.player.position.to_array().map(f32::to_bits)
+            );
+            if t == 3 {
+                assert_eq!(a.player.action, Action::Roll);
+                assert_eq!(a.player.facing, -FRAC_PI_2);
+            }
+        }
+        // Tick 27: running again (no input); the locked one turns back
+        // towards the target, the other one stays.
+        let (a, b) = (locked.tick(false, &NONE), free.tick(false, &NONE));
+        let max_turn = 720.0_f32.to_radians() / 60.0;
+        assert_eq!(b.player.facing, -FRAC_PI_2);
+        assert_eq!(a.player.facing, -FRAC_PI_2 + max_turn);
+    }
+
+    #[test]
+    fn locked_attack_turns_to_the_target_during_startup_then_slides_that_way() {
+        // The target straight to the right; lock and attack on one tick,
+        // pushing no direction.
+        let props = format!(r#"{}, ("lock_angle", 100)"#, attack_props());
+        let mut run = Run::on(&scene_with(&props, &target("right", 10.0, 0.0)));
+        let turn = 180.0_f32.to_radians() / 60.0;
+        let mut facing = 0.0_f32;
+        let mut position = Vec3::ZERO;
+        for t in 1..=8 {
+            let actions: &[&str] = if t == 1 { &[LOCK, ATTACK] } else { &[] };
+            let s = run.hold(actions, &NONE);
+            if t <= 4 {
+                facing -= turn;
+            } else {
+                position += Vec3::new(-libm::sinf(facing), 0.0, -libm::cosf(facing)) * 0.125;
+            }
+            assert_eq!(s.player.facing.to_bits(), facing.to_bits(), "tick {t}");
+            assert_eq!(s.player.position, position, "tick {t}");
+        }
+        assert!(facing < -0.2);
+    }
+
     // ------------------------------------------------------------ scene errors
 
     #[test]
@@ -978,5 +1359,148 @@ mod tests {
         assert!(
             error_of(r#"("heavy_distance", 5), ("attack_distance", 2)"#).contains("attack moves")
         );
+    }
+
+    /// The error of [`scene_with`] `props` and `nodes`.
+    fn error_with(props: &str, nodes: &str) -> String {
+        match Game::from_source(&scene_with(props, nodes)) {
+            Ok(_) => panic!("scene should be rejected: {props} {nodes}"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn lock_props_are_checked_like_the_others() {
+        for (props, problem) in [
+            (
+                r#"("lock_range", 0)"#,
+                "prop \"lock_range\" must be greater than 0, got 0",
+            ),
+            (
+                r#"("lock_break_range", -1)"#,
+                "prop \"lock_break_range\" must be greater than 0, got -1",
+            ),
+            (
+                r#"("lock_angle", 0)"#,
+                "prop \"lock_angle\" must be greater than 0, got 0",
+            ),
+            (
+                r#"("lock_camera_speed", -360)"#,
+                "prop \"lock_camera_speed\" must be greater than 0, got -360",
+            ),
+            (
+                r#"("lock_pitch_down", 90)"#,
+                "prop \"lock_pitch_down\" must be at least 0 and less than 90, got 90",
+            ),
+            (
+                r#"("lock_pitch_down", -0.5)"#,
+                "prop \"lock_pitch_down\" must be at least 0 and less than 90, got -0.5",
+            ),
+            (
+                r#"("switch_threshold", 0)"#,
+                "prop \"switch_threshold\" must be greater than 0, got 0",
+            ),
+            (
+                r#"("switch_cooldown_ticks", 1.5)"#,
+                "prop \"switch_cooldown_ticks\" must be a whole number of at least 0, got 1.5",
+            ),
+        ] {
+            assert_eq!(
+                error_of(props),
+                format!("the character \"player\": {problem}")
+            );
+        }
+        for props in [
+            r#"("lock_pitch_down", 0)"#,
+            r#"("lock_pitch_down", 89.9)"#,
+            r#"("switch_cooldown_ticks", 0)"#,
+        ] {
+            assert!(Game::from_source(&scene(props)).is_ok(), "{props}");
+        }
+    }
+
+    #[test]
+    fn lock_range_beyond_lock_break_range_is_rejected() {
+        assert_eq!(
+            error_of(r#"("lock_range", 25)"#),
+            "the character \"player\": needs lock_range <= lock_break_range"
+        );
+        assert_eq!(
+            error_of(r#"("lock_range", 10), ("lock_break_range", 9.5)"#),
+            "the character \"player\": needs lock_range <= lock_break_range"
+        );
+        assert!(Game::from_source(&scene(r#"("lock_range", 20)"#)).is_ok());
+    }
+
+    #[test]
+    fn lock_target_nodes_are_checked() {
+        assert_eq!(
+            error_with("", r#"(name: "t", props: [("lock_heigth", 1.0)]),"#),
+            "the node \"t\": unknown prop \"lock_heigth\" (known: lock_height)"
+        );
+        // Any node but the character, target or not.
+        assert_eq!(
+            error_with(
+                "",
+                r#"(name: "g", children: [(name: "t", props: [("hp", 3)])]),"#
+            ),
+            "the node \"g/t\": unknown prop \"hp\" (known: lock_height)"
+        );
+        assert_eq!(
+            error_with("", r#"(name: "t", props: [("lock_height", 0)]),"#),
+            "the node \"t\": prop \"lock_height\" must be greater than 0, got 0"
+        );
+        assert_eq!(
+            error_with(
+                "",
+                r#"(name: "g", children: [(name: "t", props: [("lock_height", 1.0)])]),"#
+            ),
+            "the lock target \"g/t\" must be a root node, and not the camera"
+        );
+        let src = scene("").replace(
+            r#"(name: "cam","#,
+            r#"(name: "cam", props: [("lock_height", 1.0)],"#,
+        );
+        match Game::from_source(&src) {
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "the lock target \"cam\" must be a root node, and not the camera"
+            ),
+            Ok(_) => panic!("the camera cannot be a target"),
+        }
+        // The character's props are the character's: lock_height is unknown.
+        assert_eq!(
+            error_of(r#"("lock_height", 1.0)"#),
+            "the character \"player\": unknown prop \"lock_height\""
+        );
+    }
+
+    #[test]
+    fn lock_checks_run_in_the_documented_order() {
+        // The new values come after the G2.3 ones, in table order.
+        assert!(error_of(r#"("lock_angle", 0), ("combo_max", 0)"#).contains("combo_max"));
+        assert!(
+            error_of(r#"("switch_threshold", 0), ("lock_range", 0)"#).contains("\"lock_range\"")
+        );
+        // Values, then the windows, then the ranges, then the distances.
+        assert!(
+            error_of(r#"("roll_invuln_to", 40), ("lock_pitch_down", 90)"#)
+                .contains("lock_pitch_down")
+        );
+        assert!(error_of(r#"("lock_range", 25), ("roll_invuln_to", 40)"#).contains("roll_invuln"));
+        assert!(
+            error_of(r#"("sprint_speed", 30), ("lock_range", 25)"#).contains("lock_break_range")
+        );
+        // Targets last: after the character's distances.
+        let bad_target = r#"(name: "t", props: [("lock_height", 0)]),"#;
+        assert!(error_with(r#"("sprint_speed", 30)"#, bad_target).contains("sprint moves"));
+        // Node by node in pre-order; in each, unknown names, then the
+        // lock_height value, then the root rule.
+        let nodes = r#"(name: "a", props: [("lock_height", 0)]), (name: "b", props: [("x", 1)]),"#;
+        assert!(error_with("", nodes).starts_with("the node \"a\""));
+        let nodes = r#"(name: "t", props: [("lock_height", 0), ("x", 1)]),"#;
+        assert!(error_with("", nodes).contains("unknown prop \"x\""));
+        let nodes = r#"(name: "g", children: [(name: "t", props: [("lock_height", 0)])]),"#;
+        assert!(error_with("", nodes).contains("must be greater than 0"));
     }
 }

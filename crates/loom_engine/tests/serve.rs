@@ -130,7 +130,7 @@ fn describe_lists_the_demo_bindings_sorted_without_a_scene_path() {
         json!({"tick_hz": 60, "tick": 0, "game": "souls", "scene": null, "actions": actions, "axes": axes})
     );
     assert_eq!(r["axes"], json!(["look_x", "look_y", "move_x", "move_y"]));
-    assert_eq!(r["actions"], json!(["attack", "heavy", "roll"]));
+    assert_eq!(r["actions"], json!(["attack", "heavy", "lock", "roll"]));
 }
 
 #[test]
@@ -684,6 +684,56 @@ fn souls_attack_pressed_through_held_input_reaches_its_active_phase_and_replays(
 
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
         .args(["run", "--headless", "--frames", "12", "--input"])
+        .arg(&record)
+        .arg("--dump-state")
+        .arg(&dump)
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("loom run can be started");
+    assert!(out.status.success(), "{out:?}");
+    let line = &session.lines[4];
+    let raw = line
+        .strip_prefix(r#"{"jsonrpc":"2.0","id":5,"result":"#)
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or_else(|| panic!("unexpected state reply: {line}"));
+    let dumped: String = fs::read_to_string(&dump)
+        .expect("the state dump was written")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert_eq!(raw, dumped);
+}
+
+#[test]
+fn souls_lock_pressed_through_held_input_locks_on_to_dummy_b_and_replays() {
+    let dir = test_dir("souls_lock_pressed_through_held_input_locks_on_to_dummy_b_and_replays");
+    let record = dir.join("rec.ron");
+    let dump = dir.join("dump.json");
+    let requests = [
+        req(1, "input", json!({"actions": {"lock": true}})),
+        req(2, "step", json!({})),
+        req(3, "input", json!({"actions": {"lock": false}})),
+        req(4, "step", json!({"ticks": 9})),
+        req(5, "state", json!({})),
+        req(6, "record", json!({"path": path_str(&record)})),
+    ];
+    let session = serve_raw(&requests);
+    assert_eq!(session.code, 0);
+    assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
+    let replies: Vec<Value> = session
+        .lines
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("JSON"))
+        .collect();
+    // dummy_b is straight ahead of the character at the start.
+    assert_eq!(result(&replies[4])["game"]["lock"], "dummy_b");
+    assert_eq!(
+        *result(&replies[5]),
+        json!({"path": path_str(&record), "ticks": 10})
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .args(["run", "--headless", "--frames", "10", "--input"])
         .arg(&record)
         .arg("--dump-state")
         .arg(&dump)

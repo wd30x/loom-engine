@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use loom_core::input::Key;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{
     DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, StartCause, WindowEvent,
 };
@@ -229,11 +229,17 @@ impl<A: WindowApp> ApplicationHandler for Handler<'_, A> {
 }
 
 /// Hides the pointer and keeps it in the window (`captured`), or gives it
-/// back. Tries [`CursorGrabMode::Locked`] first and falls back to
+/// back. Capturing first moves the pointer to the middle of the window: on
+/// Windows, `Locked` clips the pointer to where it is, which may be outside
+/// the window. Tries [`CursorGrabMode::Locked`] first and falls back to
 /// [`CursorGrabMode::Confined`]. Failures are logged, not returned: the game
 /// still works with a free pointer.
 pub fn set_cursor_captured(window: &Window, captured: bool) {
     if captured {
+        let center = client_center(window.inner_size());
+        if let Err(e) = window.set_cursor_position(center) {
+            log::warn!("cannot move the pointer to the middle of the window: {e}");
+        }
         if let Err(locked) = window.set_cursor_grab(CursorGrabMode::Locked) {
             if let Err(confined) = window.set_cursor_grab(CursorGrabMode::Confined) {
                 log::warn!("cannot capture the mouse (locked: {locked}; confined: {confined})");
@@ -245,6 +251,11 @@ pub fn set_cursor_captured(window: &Window, captured: bool) {
         log::warn!("cannot release the mouse: {e}");
     }
     window.set_cursor_visible(!captured);
+}
+
+/// The middle of a client area of `size`, rounded down.
+fn client_center(size: PhysicalSize<u32>) -> PhysicalPosition<u32> {
+    PhysicalPosition::new(size.width / 2, size.height / 2)
 }
 
 /// Translates a winit key code into a bindable [`Key`]. `Escape` (reserved
@@ -378,5 +389,21 @@ mod tests {
         );
         assert_eq!(translate_mouse_button(MouseButton::Back), None);
         assert_eq!(translate_mouse_button(MouseButton::Other(7)), None);
+    }
+
+    #[test]
+    fn client_center_rounds_odd_sizes_down() {
+        assert_eq!(
+            client_center(PhysicalSize::new(1281, 721)),
+            PhysicalPosition::new(640, 360)
+        );
+        assert_eq!(
+            client_center(PhysicalSize::new(1280, 720)),
+            PhysicalPosition::new(640, 360)
+        );
+        assert_eq!(
+            client_center(PhysicalSize::new(0, 1)),
+            PhysicalPosition::new(0, 0)
+        );
     }
 }

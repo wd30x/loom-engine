@@ -12,10 +12,12 @@ use serde::Serialize;
 /// Game names, sorted: the order the error message lists them in.
 const GAMES: [&str; 2] = ["rogue", "souls"];
 
+/// Both games are boxed, so the enum's size does not depend on what they
+/// hold (clippy::large_enum_variant).
 #[derive(Debug)]
 pub(crate) enum AnyGame {
-    Souls(souls::Game),
-    Rogue(rogue::Game),
+    Souls(Box<souls::Game>),
+    Rogue(Box<rogue::Game>),
 }
 
 /// The state dump's `game`: the inner game's state, unwrapped, so a souls
@@ -39,8 +41,8 @@ impl AnyGame {
                 .join(" and ")
         };
         match scene.game() {
-            Some("souls") => Ok(Self::Souls(souls::Game::new(scene)?)),
-            Some("rogue") => Ok(Self::Rogue(rogue::Game::new(scene)?)),
+            Some("souls") => Ok(Self::Souls(Box::new(souls::Game::new(scene)?))),
+            Some("rogue") => Ok(Self::Rogue(Box::new(rogue::Game::new(scene)?))),
             Some(other) => bail!("unknown game {other:?}: the games are {}", list()),
             None => bail!(
                 "the scene does not say which game runs it: add {} at the top level",
@@ -55,7 +57,9 @@ impl AnyGame {
 
     /// The built-in souls demo scene, used without `--scene`.
     pub fn builtin() -> Result<Self> {
-        Ok(Self::Souls(souls::Game::new(souls::demo_scene())?))
+        Ok(Self::Souls(Box::new(
+            souls::Game::new(souls::demo_scene())?,
+        )))
     }
 
     /// The name the scene's `game` gives this game.

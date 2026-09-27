@@ -59,6 +59,41 @@ public static class SmokeWin32 {
 '@
 }
 
+if (-not ('SmokeImage' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+
+public static class SmokeImage {
+    // Compares two images of `width` pixels per row, 4 bytes per pixel in
+    // the order B, G, R, A (GDI+ Format32bppArgb), rows packed. Counts the
+    // pixels that differ at all and the largest channel difference; returns
+    // null, or a description of the first pixel (row by row) where some
+    // channel differs by more than `tolerance`.
+    public static string Compare(byte[] a, byte[] b, int width, int tolerance, out int differing, out int maxDiff) {
+        differing = 0; maxDiff = 0;
+        string error = null;
+        for (int i = 0; i < a.Length; i += 4) {
+            int worst = 0;
+            for (int c = 0; c < 4; c++) worst = Math.Max(worst, Math.Abs(a[i + c] - b[i + c]));
+            if (worst == 0) continue;
+            differing++;
+            maxDiff = Math.Max(maxDiff, worst);
+            if (worst > tolerance && error == null) {
+                int p = i / 4;
+                error = string.Format("pixel ({0}, {1}) is RGBA {2} vs {3}, {4} apart (at most {5} allowed)",
+                    p % width, p / width, Rgba(a, i), Rgba(b, i), worst, tolerance);
+            }
+        }
+        return error;
+    }
+
+    static string Rgba(byte[] px, int i) {
+        return string.Format("({0},{1},{2},{3})", px[i + 2], px[i + 1], px[i], px[i + 3]);
+    }
+}
+'@
+}
+
 $WM_KEYDOWN = 0x0100; $WM_KEYUP = 0x0101; $WM_CLOSE = 0x0010
 $SW_MINIMIZE = 6; $SW_RESTORE = 9
 # Virtual-key code and scan code; winit reads the physical key from the scan code.
@@ -240,6 +275,44 @@ function Assert-SameBytes([string]$a, [string]$b) {
     Assert-True ($ha -eq $hb) "$a ($ha) differs from $b ($hb)"
 }
 
+# The pixels of $bitmap as bytes B, G, R, A, rows packed (LockBits: GetPixel
+# is far too slow for a whole screenshot).
+function Get-BgraBytes($bitmap) {
+    $rect = [Drawing.Rectangle]::new(0, 0, $bitmap.Width, $bitmap.Height)
+    $data = $bitmap.LockBits($rect, [Drawing.Imaging.ImageLockMode]::ReadOnly,
+        [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        Assert-True ($data.Stride -eq 4 * $bitmap.Width) "unexpected stride $($data.Stride)"
+        $bytes = [byte[]]::new($data.Stride * $bitmap.Height)
+        [Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
+        , $bytes
+    } finally {
+        $bitmap.UnlockBits($data)
+    }
+}
+
+# PNGs $a and $b have the same size and every channel (R, G, B, A) of every
+# pixel differs by at most $tolerance. Returns how many pixels differ and by
+# how much, for the check's detail; the error names the first pixel over.
+function Assert-NearlySameImage([string]$a, [string]$b, [int]$tolerance) {
+    Add-Type -AssemblyName System.Drawing
+    $ia = [Drawing.Bitmap]::new((Join-Path $root $a))
+    $ib = [Drawing.Bitmap]::new((Join-Path $root $b))
+    try {
+        Assert-True ($ia.Width -eq $ib.Width -and $ia.Height -eq $ib.Height) `
+            "$a is $($ia.Width)x$($ia.Height), $b is $($ib.Width)x$($ib.Height)"
+        $differing = 0; $maxDiff = 0
+        $error1 = [SmokeImage]::Compare((Get-BgraBytes $ia), (Get-BgraBytes $ib), $ia.Width, $tolerance,
+            [ref]$differing, [ref]$maxDiff)
+        Assert-True ($null -eq $error1) "$a vs ${b}: $error1"
+        $pixels = if ($differing -eq 1) { '1 pixel differs' } else { "$differing pixels differ" }
+        "$pixels, by at most $maxDiff"
+    } finally {
+        $ia.Dispose()
+        $ib.Dispose()
+    }
+}
+
 # ---------------------------------------------------------------- H: headless
 
 Test-Check 'H1' 'headless screenshots are byte-identical and 1280x720' {
@@ -272,7 +345,7 @@ Test-Check 'H3' 'headless run without screenshot loads no GPU driver' {
     }
 }
 
-Test-Check 'H4' 'WGPU_BACKEND=vulkan overrides the default backend and renders the same image' {
+Test-Check 'H4' 'WGPU_BACKEND=vulkan overrides the default backend and renders the image to within 1 per channel' {
     Assert-True (Test-Path "$out/h1_a.png") 'no screenshot from H1'
     $env:WGPU_BACKEND = 'vulkan'
     try {
@@ -282,7 +355,9 @@ Test-Check 'H4' 'WGPU_BACKEND=vulkan overrides the default backend and renders t
     }
     Assert-ExitOk $r
     Assert-True ($r.Json.adapter.backend -eq 'Vulkan') "backend is $($r.Json.adapter.backend), expected Vulkan"
-    Assert-SameBytes "$out/h1_a.png" "$out/h4.png"
+    # Backends may round differently; only the same machine and driver
+    # promise identical bytes (docs/architecture.md section 4).
+    $script:detail = Assert-NearlySameImage "$out/h1_a.png" "$out/h4.png" 1
 }
 
 Test-Check 'H5' 'serve screenshots match loom run and reuse the renderer' {

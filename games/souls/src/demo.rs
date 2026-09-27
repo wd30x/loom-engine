@@ -25,18 +25,20 @@ mod tests {
     use loom_core::input::Key;
 
     use super::*;
-    use crate::{ATTACK, Game, HEAVY, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL};
+    use crate::{ATTACK, Game, HEAVY, LOCK, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL};
 
     #[test]
-    fn demo_bindings_define_the_game_axes_roll_and_both_attacks() {
+    fn demo_bindings_define_the_game_axes_roll_both_attacks_and_lock() {
         let map = bindings();
         let mut actions: Vec<_> = map.actions().collect();
         actions.sort_unstable();
-        assert_eq!(actions, [ATTACK, HEAVY, ROLL]);
+        assert_eq!(actions, [ATTACK, HEAVY, LOCK, ROLL]);
         for (key, action) in [
             (Key::Space, ROLL),
             (Key::MouseLeft, ATTACK),
             (Key::MouseRight, HEAVY),
+            (Key::MouseMiddle, LOCK),
+            (Key::KeyQ, LOCK),
         ] {
             let pressed = map.actions_for(&BTreeSet::from([key]));
             assert_eq!(pressed, BTreeSet::from([action.to_owned()]), "{key:?}");
@@ -58,6 +60,23 @@ mod tests {
     fn built_in_scene_colliders_are_the_pillars_then_the_wall() {
         let scene = demo_scene();
         let paths: Vec<_> = scene.colliders().iter().map(|&id| scene.path(id)).collect();
-        assert_eq!(paths, ["pillars/a", "pillars/b", "pillars/c", "wall"]);
+        assert_eq!(
+            paths,
+            [
+                "pillars/a",
+                "pillars/b",
+                "pillars/c",
+                "wall",
+                "dummy_a/block",
+                "dummy_b/block",
+                "dummy_c/block"
+            ]
+        );
+    }
+
+    #[test]
+    fn built_in_scene_lock_targets_are_the_three_dummies() {
+        let game = Game::new(demo_scene()).unwrap();
+        assert_eq!(game.target_paths(), ["dummy_a", "dummy_b", "dummy_c"]);
     }
 }

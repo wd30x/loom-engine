@@ -10,7 +10,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-/// State after 60 ticks of the built-in scene without input (scenario A).
+/// State after 60 ticks of the G2.3 demo scene without input (scenario A).
 const SCENARIO_A: &str = concat!(
     "{\n",
     "  \"tick\": 60,\n",
@@ -225,12 +225,14 @@ const SCENARIO_A: &str = concat!(
     "      \"yaw\": 0.0,\n",
     "      \"pitch\": -0.2617994,\n",
     "      \"distance\": 4.0\n",
-    "    }\n",
+    "    },\n",
+    "    \"lock\": null\n",
     "  }\n",
     "}\n",
 );
 
-/// State after 90 ticks, `move_y` at 1.0 for ticks 1..=60 (scenario S1).
+/// State after 90 ticks of the G2.3 demo scene, `move_y` at 1.0 for ticks
+/// 1..=60 (scenario S1).
 const SCENARIO_B: &str = concat!(
     "{\n",
     "  \"tick\": 90,\n",
@@ -445,7 +447,8 @@ const SCENARIO_B: &str = concat!(
     "      \"yaw\": 0.0,\n",
     "      \"pitch\": -0.2617994,\n",
     "      \"distance\": 4.0\n",
-    "    }\n",
+    "    },\n",
+    "    \"lock\": null\n",
     "  }\n",
     "}\n",
 );
@@ -550,6 +553,7 @@ fn headless_run_without_screenshot_reports_null_adapter() {
     assert!(r["renderer_init_ms"].is_null());
     assert!(r["screenshot"].is_null());
     assert!(r["state"].is_null());
+    assert!(r["scene"].is_null());
     assert_eq!(r["frames"], 60);
     assert_eq!(r["ticks"], 60);
     assert_f64_bits(&r["sim_time"], 1.0);
@@ -558,6 +562,8 @@ fn headless_run_without_screenshot_reports_null_adapter() {
 #[test]
 fn state_dump_after_sixty_ticks_matches_expected_bytes() {
     let file = test_dir("state_dump_after_sixty_ticks_matches_expected_bytes").join("s.json");
+    // The G2.3 scene: the dummies would add nodes to the dump.
+    let scene = g2_3_demo();
     let out = run_loom(&[
         "run",
         "--headless",
@@ -565,13 +571,15 @@ fn state_dump_after_sixty_ticks_matches_expected_bytes() {
         "60",
         "--dump-state",
         path_str(&file),
+        "--scene",
+        path_str(&scene),
     ]);
     let r = report(&out);
     assert_eq!(out.code, 0);
     assert_eq!(r["state"], path_str(&file));
     assert!(r["record"].is_null());
     assert!(r["input"].is_null());
-    assert!(r["scene"].is_null());
+    assert_eq!(r["scene"], path_str(&scene));
     assert_eq!(
         fs::read_to_string(&file).expect("state file was written"),
         SCENARIO_A
@@ -696,7 +704,17 @@ fn write_axis_script(dir: &std::path::Path, name: &str, axes: &[&str]) -> PathBu
 }
 
 fn run_headless_replay(frames: &str, script: &std::path::Path, state: &std::path::Path) -> Value {
-    let out = run_loom(&[
+    run_headless_replay_on(None, frames, script, state)
+}
+
+/// [`run_headless_replay`] on `scene`, or the built-in scene without one.
+fn run_headless_replay_on(
+    scene: Option<&std::path::Path>,
+    frames: &str,
+    script: &std::path::Path,
+    state: &std::path::Path,
+) -> Value {
+    let mut args = vec![
         "run",
         "--headless",
         "--frames",
@@ -705,10 +723,20 @@ fn run_headless_replay(frames: &str, script: &std::path::Path, state: &std::path
         path_str(script),
         "--dump-state",
         path_str(state),
-    ]);
+    ];
+    if let Some(scene) = scene {
+        args.extend(["--scene", path_str(scene)]);
+    }
+    let out = run_loom(&args);
     let r = report(&out);
     assert_eq!(out.code, 0, "{r}");
     r
+}
+
+/// The built-in scene as it was in G2.3, before the lock-on dummies:
+/// tests whose results the dummies would change run on it.
+fn g2_3_demo() -> PathBuf {
+    repo_root().join("games/souls/src/g2_3_demo.scene.ron")
 }
 
 #[test]
@@ -723,7 +751,8 @@ fn replayed_forward_run_writes_the_expected_state() {
         ],
     );
     let state = dir.join("s.json");
-    let r = run_headless_replay("90", &script, &state);
+    // The G2.3 scene: the dummies would add nodes to the dump.
+    let r = run_headless_replay_on(Some(&g2_3_demo()), "90", &script, &state);
     assert_eq!(
         r["input"],
         serde_json::json!({"path": path_str(&script), "events": 2, "applied": 2})
@@ -736,10 +765,20 @@ fn replayed_forward_run_writes_the_expected_state() {
 
 /// Replays `axes` headless for `frames` ticks and returns the state dump.
 fn replay_state(name: &str, frames: &str, axes: &[&str]) -> Value {
+    replay_state_on(None, name, frames, axes)
+}
+
+/// [`replay_state`] on `scene`, or the built-in scene without one.
+fn replay_state_on(
+    scene: Option<&std::path::Path>,
+    name: &str,
+    frames: &str,
+    axes: &[&str],
+) -> Value {
     let dir = test_dir(name);
     let script = write_axis_script(&dir, "script.ron", axes);
     let state = dir.join("s.json");
-    run_headless_replay(frames, &script, &state);
+    run_headless_replay_on(scene, frames, &script, &state);
     serde_json::from_str(&fs::read_to_string(&state).expect("state file was written"))
         .expect("state file is valid JSON")
 }
@@ -831,7 +870,9 @@ fn running_while_turning_the_camera_replays_to_the_expected_state() {
 
 #[test]
 fn pillar_blocks_a_replayed_forward_run() {
-    let dump = replay_state(
+    // The G2.3 scene: dummy_b now stands in front of pillar c.
+    let dump = replay_state_on(
+        Some(&g2_3_demo()),
         "pillar_blocks_a_replayed_forward_run",
         "150",
         &[r#"(tick: 1, axis: "move_y", value: 1.0)"#],
@@ -1652,7 +1693,7 @@ const SOULS_MOVES_SCRIPT: &str = concat!(
     "])\n",
 );
 
-/// State after [`SOULS_MOVES_SCRIPT`] and 110 ticks of the built-in scene.
+/// State after [`SOULS_MOVES_SCRIPT`] and 110 ticks of the G2.3 demo scene.
 /// Determinism only: no independent source for every byte. The stamina
 /// is checked by hand in the test.
 const SOULS_MOVES_STATE: &str = concat!(
@@ -1869,7 +1910,8 @@ const SOULS_MOVES_STATE: &str = concat!(
     "      \"yaw\": 0.0,\n",
     "      \"pitch\": -0.2617994,\n",
     "      \"distance\": 4.0\n",
-    "    }\n",
+    "    },\n",
+    "    \"lock\": null\n",
     "  }\n",
     "}\n",
 );
@@ -1879,7 +1921,8 @@ fn souls_roll_backstep_and_sprint_replay_to_the_expected_state() {
     let dir = test_dir("souls_roll_backstep_and_sprint_replay_to_the_expected_state");
     let script = write_file(&dir, "moves.ron", SOULS_MOVES_SCRIPT);
     let state = dir.join("state.json");
-    run_headless_replay("110", &script, &state);
+    // The G2.3 scene: the dummies would add nodes to the dump.
+    run_headless_replay_on(Some(&g2_3_demo()), "110", &script, &state);
     let dump = fs::read_to_string(&state).expect("the state dump was written");
     assert_eq!(dump, SOULS_MOVES_STATE);
     // By hand, with the default props: the roll costs 20 (80 left, 30
@@ -1910,7 +1953,7 @@ const SOULS_ATTACKS_SCRIPT: &str = concat!(
     "], axes: [(tick: 1, axis: \"move_y\", value: 1.0)])\n",
 );
 
-/// State after [`SOULS_ATTACKS_SCRIPT`] and 120 ticks of the built-in
+/// State after [`SOULS_ATTACKS_SCRIPT`] and 120 ticks of the G2.3 demo
 /// scene. Determinism only: no independent source for every byte. The
 /// stamina, the combo and the action are checked by hand in the test.
 const SOULS_ATTACKS_STATE: &str = concat!(
@@ -2127,7 +2170,8 @@ const SOULS_ATTACKS_STATE: &str = concat!(
     "      \"yaw\": 0.0,\n",
     "      \"pitch\": -0.2617994,\n",
     "      \"distance\": 4.0\n",
-    "    }\n",
+    "    },\n",
+    "    \"lock\": null\n",
     "  }\n",
     "}\n",
 );
@@ -2140,7 +2184,7 @@ fn souls_light_combo_then_heavy_replays_to_the_expected_state() {
     // ticks, so each buffered press starts the next one right after the
     // last: light on ticks 1, 31 and 61, heavy on 91.
     let third = dir.join("third.json");
-    run_headless_replay("61", &script, &third);
+    run_headless_replay_on(Some(&g2_3_demo()), "61", &script, &third);
     let dump: Value =
         serde_json::from_str(&fs::read_to_string(&third).expect("the state dump was written"))
             .expect("state file is valid JSON");
@@ -2150,7 +2194,8 @@ fn souls_light_combo_then_heavy_replays_to_the_expected_state() {
     assert_eq!(player["combo"], 3);
 
     let state = dir.join("state.json");
-    run_headless_replay("120", &script, &state);
+    // The G2.3 scene: the dummies would add nodes to the dump.
+    run_headless_replay_on(Some(&g2_3_demo()), "120", &script, &state);
     let dump = fs::read_to_string(&state).expect("the state dump was written");
     assert_eq!(dump, SOULS_ATTACKS_STATE);
     // Tick 120 is heavy tick 30 of 22 + 5 + 23: recovery. Stamina: 100 -
@@ -2167,4 +2212,429 @@ fn souls_light_combo_then_heavy_replays_to_the_expected_state() {
     assert_eq!(player["stamina_wait"], 30);
     let z = player["position"][2].as_f64().expect("z is a number");
     assert!((z + 1.5).abs() < 1e-4, "{z}");
+}
+
+/// Lock on (tick 1: straight ahead is dummy_b), strafe right for a second
+/// (ticks 10..=69), flick `look_x` once (tick 80: over the 0.1 threshold,
+/// to dummy_c on the right), then let go (tick 100).
+const SOULS_LOCK_SCRIPT: &str = concat!(
+    "(version: 1, tick_hz: 60, events: [",
+    "(tick: 1, action: \"lock\", down: true), (tick: 2, action: \"lock\", down: false), ",
+    "(tick: 100, action: \"lock\", down: true), (tick: 101, action: \"lock\", down: false)",
+    "], axes: [",
+    "(tick: 10, axis: \"move_x\", value: 1.0), (tick: 70, axis: \"move_x\", value: 0.0), ",
+    "(tick: 80, axis: \"look_x\", value: 0.12), (tick: 81, axis: \"look_x\", value: 0.0)",
+    "])\n",
+);
+
+/// State after [`SOULS_LOCK_SCRIPT`] and 120 ticks of the built-in scene.
+/// Determinism only: no independent source for every byte. Which target
+/// is locked on when is checked in the test.
+const SOULS_LOCK_STATE: &str = concat!(
+    "{\n",
+    "  \"tick\": 120,\n",
+    "  \"sim_time\": 2.0,\n",
+    "  \"actions\": [],\n",
+    "  \"axes\": {\n",
+    "    \"look_x\": 0.0,\n",
+    "    \"look_y\": 0.0,\n",
+    "    \"move_x\": 0.0,\n",
+    "    \"move_y\": 0.0\n",
+    "  },\n",
+    "  \"nodes\": {\n",
+    "    \"dummy_a\": {\n",
+    "      \"position\": [\n",
+    "        -5.0,\n",
+    "        0.0,\n",
+    "        -6.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_a/block\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.9,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.8,\n",
+    "        1.8,\n",
+    "        0.8\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_a/body\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_b\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        -6.5\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_b/block\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.9,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.8,\n",
+    "        1.8,\n",
+    "        0.8\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_b/body\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_c\": {\n",
+    "      \"position\": [\n",
+    "        5.0,\n",
+    "        0.0,\n",
+    "        -6.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_c/block\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.9,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.8,\n",
+    "        1.8,\n",
+    "        0.8\n",
+    "      ]\n",
+    "    },\n",
+    "    \"dummy_c/body\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"ground\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        40.0,\n",
+    "        1.0,\n",
+    "        40.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"main_cam\": {\n",
+    "      \"position\": [\n",
+    "        2.8141937,\n",
+    "        2.7655094,\n",
+    "        2.5030198\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.15899347,\n",
+    "        -0.123853825,\n",
+    "        -0.020108728,\n",
+    "        0.97927374\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/a\": {\n",
+    "      \"position\": [\n",
+    "        3.0,\n",
+    "        1.5,\n",
+    "        -4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/b\": {\n",
+    "      \"position\": [\n",
+    "        -3.0,\n",
+    "        1.5,\n",
+    "        -4.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"pillars/c\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.5,\n",
+    "        -9.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        3.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        3.758911,\n",
+    "        0.0,\n",
+    "        -1.1720309\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        -0.12547562,\n",
+    "        0.0,\n",
+    "        0.9920967\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"player/visor\": {\n",
+    "      \"position\": [\n",
+    "        0.0,\n",
+    "        1.5,\n",
+    "        -0.3\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        0.0,\n",
+    "        1.0\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        0.4,\n",
+    "        0.15,\n",
+    "        0.3\n",
+    "      ]\n",
+    "    },\n",
+    "    \"sun\": {\n",
+    "      \"position\": [\n",
+    "        4.0,\n",
+    "        8.0,\n",
+    "        3.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        -0.43359014,\n",
+    "        0.39115202,\n",
+    "        0.21679507,\n",
+    "        0.78230405\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        1.0,\n",
+    "        1.0,\n",
+    "        1.0\n",
+    "      ]\n",
+    "    },\n",
+    "    \"wall\": {\n",
+    "      \"position\": [\n",
+    "        -3.0,\n",
+    "        1.0,\n",
+    "        3.0\n",
+    "      ],\n",
+    "      \"rotation\": [\n",
+    "        0.0,\n",
+    "        0.25881904,\n",
+    "        0.0,\n",
+    "        0.9659258\n",
+    "      ],\n",
+    "      \"scale\": [\n",
+    "        4.0,\n",
+    "        2.0,\n",
+    "        0.5\n",
+    "      ]\n",
+    "    }\n",
+    "  },\n",
+    "  \"game\": {\n",
+    "    \"player\": {\n",
+    "      \"position\": [\n",
+    "        3.758911,\n",
+    "        0.0,\n",
+    "        -1.1720309\n",
+    "      ],\n",
+    "      \"facing\": -0.25161445,\n",
+    "      \"stamina\": 100.0,\n",
+    "      \"stamina_wait\": 0,\n",
+    "      \"action\": \"idle\",\n",
+    "      \"action_tick\": 0,\n",
+    "      \"invulnerable\": false,\n",
+    "      \"attack_phase\": null,\n",
+    "      \"combo\": 0,\n",
+    "      \"buffered\": null\n",
+    "    },\n",
+    "    \"camera\": {\n",
+    "      \"yaw\": -0.25161445,\n",
+    "      \"pitch\": -0.3219082,\n",
+    "      \"distance\": 4.0\n",
+    "    },\n",
+    "    \"lock\": null\n",
+    "  }\n",
+    "}\n",
+);
+
+#[test]
+fn souls_lock_strafe_switch_and_release_replay_to_the_expected_state() {
+    let dir = test_dir("souls_lock_strafe_switch_and_release_replay_to_the_expected_state");
+    let script = write_file(&dir, "lock.ron", SOULS_LOCK_SCRIPT);
+    let lock_after = |frames: &str| {
+        let state = dir.join(format!("{frames}.json"));
+        run_headless_replay(frames, &script, &state);
+        let dump: Value =
+            serde_json::from_str(&fs::read_to_string(&state).expect("the state dump was written"))
+                .expect("state file is valid JSON");
+        dump["game"]["lock"].clone()
+    };
+    // The middle dummy is the one straight ahead; the flick on tick 80
+    // switches to the right one; the press on tick 100 lets go.
+    assert_eq!(lock_after("1"), "dummy_b");
+    assert_eq!(lock_after("79"), "dummy_b");
+    assert_eq!(lock_after("80"), "dummy_c");
+    assert_eq!(lock_after("99"), "dummy_c");
+
+    let state = dir.join("state.json");
+    run_headless_replay("120", &script, &state);
+    let dump = fs::read_to_string(&state).expect("the state dump was written");
+    assert_eq!(dump, SOULS_LOCK_STATE);
+    let dump: Value = serde_json::from_str(&dump).expect("state file is valid JSON");
+    assert_eq!(dump["game"]["lock"], Value::Null);
 }

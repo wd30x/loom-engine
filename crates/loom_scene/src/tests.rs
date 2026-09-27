@@ -45,12 +45,32 @@ fn demo_scene_parses_into_the_character_scene_tree() {
             "pillars/b",
             "pillars/c",
             "wall",
+            "dummy_a",
+            "dummy_a/body",
+            "dummy_a/block",
+            "dummy_b",
+            "dummy_b/body",
+            "dummy_b/block",
+            "dummy_c",
+            "dummy_c/body",
+            "dummy_c/block",
             "sun",
             "main_cam"
         ]
     );
     let colliders: Vec<_> = scene.colliders().iter().map(|&id| scene.path(id)).collect();
-    assert_eq!(colliders, ["pillars/a", "pillars/b", "pillars/c", "wall"]);
+    assert_eq!(
+        colliders,
+        [
+            "pillars/a",
+            "pillars/b",
+            "pillars/c",
+            "wall",
+            "dummy_a/block",
+            "dummy_b/block",
+            "dummy_c/block"
+        ]
+    );
     assert_eq!(scene.camera(), scene.find("main_cam").unwrap());
     assert_eq!(scene.light(), scene.find("sun"));
     assert_eq!(scene.character(), scene.find("player"));

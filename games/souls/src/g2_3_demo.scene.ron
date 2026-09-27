@@ -1,0 +1,66 @@
+// Built-in demo scene, used when `loom run` gets no --scene (docs/architecture.md sections 10 and 11).
+(
+    version: 1,
+    game: "souls",                    // 用哪个游戏跑这个场景
+    camera: "main_cam",               // 当前相机节点的路径
+    ambient: (0.2, 0.2, 0.25),        // 环境光，线性 RGB
+    nodes: [
+        (name: "ground", mesh: Plane, scale: (40.0, 1.0, 40.0), color: (0.35, 0.35, 0.38)),
+        (name: "player", position: (0.0, 0.0, 0.0),
+            mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2),
+            character: (run_speed: 4.0, turn_speed: 720.0),
+            // Stamina, roll, sprint and backstep (docs/architecture.md section 11). Every value
+            // here is the default: leaving a prop out gives the same game.
+            props: [
+                ("stamina_max", 100),            // stamina points
+                ("stamina_regen", 45),           // stamina points per second
+                ("stamina_delay_ticks", 30),     // ticks after using stamina before it comes back
+                ("tap_ticks", 15),               // releasing roll within this many ticks is a tap
+                ("sprint_speed", 6),             // meters per second
+                ("sprint_cost", 15),             // stamina points per second
+                ("roll_cost", 20),               // stamina points
+                ("roll_ticks", 32),              // how long a roll lasts
+                ("roll_distance", 3.2),          // meters
+                ("roll_invuln_from", 1),         // invulnerable from this tick of the roll (1-based)
+                ("roll_invuln_to", 20),          // ... to this one, inclusive
+                ("backstep_cost", 12),           // stamina points
+                ("backstep_ticks", 20),          // how long a backstep lasts
+                ("backstep_distance", 1.5),      // meters
+                ("backstep_invuln_from", 1),     // as for the roll
+                ("backstep_invuln_to", 8),
+                ("attack_cost", 15),             // light attack: stamina points
+                ("attack_startup_ticks", 10),    // before the swing; can still turn
+                ("attack_active_ticks", 4),      // the swing, sliding forward
+                ("attack_recovery_ticks", 16),   // after the swing; the next action can be buffered
+                ("attack_distance", 0.3),        // meters slid during the swing
+                ("heavy_cost", 25),              // heavy attack: as for the light one
+                ("heavy_startup_ticks", 22),
+                ("heavy_active_ticks", 5),
+                ("heavy_recovery_ticks", 23),
+                ("heavy_distance", 0.6),
+                ("attack_turn_speed", 180),      // degrees per second, during startup
+                ("combo_max", 3),                // most light attacks in a row
+            ],
+            children: [
+                // 面朝方向的标记：胶囊体本身是旋转对称的，看不出朝向
+                (name: "visor", position: (0.0, 1.5, -0.3), scale: (0.4, 0.15, 0.3),
+                    mesh: Cube, color: (0.9, 0.85, 0.3)),
+            ]),
+        (name: "pillars", children: [
+            (name: "a", position: (3.0, 1.5, -4.0), scale: (1.0, 3.0, 1.0), mesh: Cube, color: (0.6, 0.58, 0.52),
+                collider: Box),
+            (name: "b", position: (-3.0, 1.5, -4.0), scale: (1.0, 3.0, 1.0), mesh: Cube, color: (0.6, 0.58, 0.52),
+                collider: Box),
+            (name: "c", position: (0.0, 1.5, -9.0), scale: (1.0, 3.0, 1.0), mesh: Cube, color: (0.6, 0.58, 0.52),
+                collider: Box),
+        ]),
+        (name: "wall", position: (-3.0, 1.0, 3.0), rotation: (0.0, 30.0, 0.0), scale: (4.0, 2.0, 0.5),
+            mesh: Cube, color: (0.55, 0.5, 0.45), collider: Box),
+        (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
+            light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
+        (name: "main_cam", camera: (fov_y: 60.0, near: 0.1, far: 200.0),
+            orbit_camera: (target: "player", pivot_height: 1.5, distance: 4.0,
+                yaw: 0.0, pitch: -15.0, pitch_min: -70.0, pitch_max: 60.0,
+                collision_radius: 0.2, return_speed: 4.0)),
+    ],
+)

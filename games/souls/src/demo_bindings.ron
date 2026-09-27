@@ -2,12 +2,14 @@
 // (docs/architecture.md section 9). Axis units are defined by the game:
 // move_x/move_y in [-1, 1], look_x/look_y in radians per tick. roll: a tap
 // rolls (a backstep without a direction), holding it sprints; attack and
-// heavy: light and heavy attacks, on the mouse buttons (section 11).
+// heavy: light and heavy attacks, on the mouse buttons; lock: locks on to a
+// target or lets go of it (section 11).
 (
     actions: [
         (action: "roll", keys: [Space]),
         (action: "attack", keys: [MouseLeft]),
         (action: "heavy", keys: [MouseRight]),
+        (action: "lock", keys: [MouseMiddle, KeyQ]),
     ],
     axes: [
         (axis: "move_x", keys: [(KeyD, 1.0), (ArrowRight, 1.0), (KeyA, -1.0), (ArrowLeft, -1.0)]),
