@@ -442,7 +442,7 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | `sprite` | `(sheet, tag)` 或 `(sheet, tag, alternates)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名。`alternates`（E4.4 起，可省略）是游戏运行中可以换成的其他 tag，例如 `["corpse"]` |
 | `tilemap` | `(sheet, legend, rows)` | 无 | 瓦片地图（E4.2 起，第 14 节）：`legend` 是 `[(字符, tag)]` 列表，`rows` 是字符串列表，一个字符一个格子 |
 | `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
-| `character` | `(run_speed, turn_speed)` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒 |
+| `character` | `(run_speed, turn_speed)` 或 `(run_speed, turn_speed, capsule: (radius, height))` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒。`capsule`（E7.4 起）：碰撞和受击用的胶囊体，米，都 > 0，节点带 `model` 时必须写（第 11 节「模型和动画」） |
 | `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max, collision_radius, return_speed)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度。`collision_radius`（米）、`return_speed`（米/秒）是 G1.7 起的相机碰撞参数，必填 |
 | `props` | `[(名字, 数值)]` | 空 | 游戏自定义的数值参数（E4.4 起），例如 `[("hp", 10), ("attack", 1)]`。引擎不解释它们，由游戏读取和校验（`souls` 见第 11 节，`rogue` 见第 15 节）。写在场景里，所以热重载就能调 |
 | `collider` | `Box` | 无 | 静态碰撞体（第 11 节「碰撞」，G1.3 起）：和 `Cube` 一样是单位立方体，用节点的 `scale`、`rotation`、`position` 定大小、朝向和位置。只挡角色，不参与渲染（要看得见就另外写 `mesh: Cube`） |
@@ -480,7 +480,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 - 场景顶层的 `game` 决定用哪个游戏跑它（第 1 节「选择游戏」）。`loom view` 不跑游戏，不看 `game`。
 - 不给 `--scene` 时，用 `souls` 里内置的演示场景，用 `include_str!` 嵌进程序。`rogue` 没有内置场景，用 `assets/scenes/rogue.ron`。
 - `rogue` 对场景的要求见第 15 节。以下是 `souls` 的要求。
-- G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。G1.3 起，角色节点必须带 `mesh: Capsule(...)`（它同时是碰撞形状），`run_speed / 60` 必须小于胶囊体半径（否则一个 tick 可能穿过薄墙）；`collider` 不能在角色或相机节点的子树里（碰撞体必须是静态的）。G1.7 起，角色节点的 `scale` 必须不写或写 `(1, 1, 1)`（渲染会缩放胶囊体，碰撞不会）。不满足就报错。游戏逻辑见第 11 节。
+- G1.2 起，游戏要求场景里有一个带 `character` 的节点，并且场景的当前相机（顶层 `camera`）带 `orbit_camera`、`target` 指向这个角色；角色节点和这个相机节点都必须是**根节点**（游戏直接写它们的局部变换）。G1.3 起，角色节点必须带 `mesh: Capsule(...)`（它同时是碰撞形状；E7.4 起也可以改成 `model` 加 `character.capsule`，见第 11 节「模型和动画」），`run_speed / 60` 必须小于胶囊体半径（否则一个 tick 可能穿过薄墙）；`collider` 不能在角色或相机节点的子树里（碰撞体必须是静态的）。G1.7 起，角色节点的 `scale` 必须不写或写 `(1, 1, 1)`（渲染会缩放胶囊体，碰撞不会）。不满足就报错。游戏逻辑见第 11 节。
 - E0–G1.1 的旋转立方体演示（根节点 `cube`）在 G1.2 被角色取代。
 
 ### 渲染
@@ -2205,6 +2205,76 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 - Boss 血条没有延迟条。
 - HUD 的大小跟着画面高度缩放；截图不是 720 高时，条的边缘可能落在半个像素上。
 
+### 模型和动画（E7.4 起）
+
+用户决定（2026-09-28）：
+- 角色的碰撞、受击形状写进 `character` 组件：`character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8))`。
+- 先接移动和攻击，硬直、死亡、喝瓶、篝火留到 E7.5。
+- 锁定时横移、后退用单独的片段。
+- 移动片段的速度跟着实际移动速度（第 19 节「播放速度和片段起点」）。
+- 硬直、死亡保留节点倾斜。
+
+**角色节点的两种写法**：
+- 老写法：`mesh: Capsule(radius, height)`，不写 `capsule`。行为和以前完全一样，游戏不碰动画。
+- 新写法：`model` 加 `animation`，`character` 里写 `capsule`。
+  - 胶囊体的 `radius`、`height` 就是以前 `mesh: Capsule` 的那两个数：碰撞、受击、各种「小于胶囊体半径」的检查都用它。
+  - 规则：
+    - 有 `model` 没 `capsule`、有 `capsule` 又有 `mesh`、有 `model` 没 `animation`，都报错（`GameError`，文案照 `NotACapsule` 的格式，写进 FEEDBACK）；
+    - `capsule` 的两个数都要 > 0。
+  - `loom_scene` 只检查 `capsule` 本身（两个数 > 0），和 `mesh` 的组合由 souls 查。
+- 状态导出的 `game` 部分和写法无关：同样的输入，两种写法的 `game` 逐字节相同（有测试）。
+
+**片段名**（新写法时，角色的 `clips` 必须都有，缺了报 `the character "<名字>": its animation needs a clip "<片段名>"`）：
+
+| 片段 | 用在 | 片段长度（tick） |
+|---|---|---|
+| `idle` | 站着不动，以及 E7.5 之前的硬直、死亡、喝瓶、篝火 | 随意，循环 |
+| `run` | 往前跑 | 循环；按 `RUN_CLIP_SPEED` = 4 m/s 写 |
+| `run_left`、`run_right`、`run_back` | 锁定时往左、往右、往后移动 | 同上 |
+| `sprint` | 冲刺 | 循环；按 `SPRINT_CLIP_SPEED` = 6 m/s 写 |
+| `roll`、`backstep` | 翻滚、后撤步 | 32、20，也就是默认的 `roll_ticks`、`backstep_ticks` |
+| `attack1`、`attack2`、`attack3` | 轻攻击第 1、2、3 刀；第 4 刀以后用 `attack3` | 30：前摇 0–10、出招 10–14、后摇 14–30，也就是默认的 10、4、16 |
+| `heavy` | 重攻击 | 50：前摇 0–22、出招 22–27、后摇 27–50 |
+
+片段按**默认参数**的长度写。参数改了，游戏用播放速度把每一段拉长或压短，所以片段不用改。
+
+**每个 tick 选片段**：在第 6 步写回角色节点时做，只看这个 tick 结束时的状态，所以是状态的纯函数。按顺序取第一条：
+1. `action` 是 `roll` 或 `backstep`：在 `action_tick == 1` 的那个 tick `play_clip`：
+   - `start` 是当前 tick，`blend` 2，`offset` 0；
+   - `rate = round(100 × 默认 tick 数 / 实际 tick 数)`。
+2. `action` 是 `attack` 或 `heavy`：片段是 `attack<min(combo, 3)>` 或 `heavy`。在每一段（前摇、出招、后摇）的第一个 tick `play_clip`：
+   - `start` 是当前 tick；
+   - `offset` 是这一段在片段里的起点 × 100；
+   - `rate = round(100 × 默认这一段的 tick 数 / 实际这一段的 tick 数)`；
+   - `blend`：前摇是 3，出招、后摇是 0（同一个片段接着播）。
+3. `action` 是 `sprint`：片段 `sprint`，速度 `rate = round(100 × sprint_speed / SPRINT_CLIP_SPEED)`。
+4. `action` 是 `idle`，而且这个 tick 的移动输入不为零（第 2 步的 `v`）：
+   - 用移动方向 `dir` 和角色朝向算：`forward = (-sin f, 0, -cos f)`、`right = (cos f, 0, -sin f)`（`f` 是 `facing`），`a = dot(dir, forward)`、`b = dot(dir, right)`。
+     - `a >= |b|`：`run`；
+     - `-a > |b|`：`run_back`；
+     - 否则 `b > 0` 是 `run_right`，`b < 0` 是 `run_left`。
+     - 不锁定时角色会转向移动方向，所以几乎总是 `run`。
+   - 速度 `rate = round(100 × |v| × run_speed / RUN_CLIP_SPEED)`，`|v|` 是第 2 步限制在 1 以内的长度。喝瓶时是 `flask_walk_speed`，但喝瓶在 E7.4 用 `idle`。
+5. 其他情况（站着不动、硬直、死亡、喝瓶、篝火）：`idle`，速度 100。
+
+**什么时候调接口**：
+- 选出来的片段和正在播的不同，或者是第 1、2 条规定的那个 tick，才调 `play_clip`。
+- 过渡：
+  - 进入翻滚、后撤步用 2；
+  - 进入攻击的前摇用 3；
+  - 其余（站、跑、横移、冲刺之间，以及从攻击、翻滚出来）都用 6。
+- 片段相同、只是速度变了：调 `set_clip_rate`。速度相同就什么都不调。
+- `round` 用 `libm::roundf`；速度算出来小于 1 时取 1（片段不会停住）。
+
+**颜色**：
+- 角色的模型节点也参与闪白、死亡变暗。
+- 模型的底色是白色，乘白色看不出闪，所以模型节点闪的时候用 `FLASH_TINT = (1.0, 0.45, 0.45)`（偏红）；
+- 变暗照旧乘 `DEAD_DIM`。
+
+**场景**：`demo.scene.ron`（内置演示）和 `assets/scenes/boss.ron` 的角色改成新写法，用 `assets/models/humanoid.glb` 和 `assets/anims/humanoid/` 下的片段。
+- 这两个场景的状态导出多了 `nodes.player.animation`，`game` 部分逐字节不变；
+- 截图的基准要重录。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
@@ -2933,8 +3003,9 @@ E6.2 审查时定：
 - **E7.1**：Blender 脚本生成的人形模型；glTF 静态网格的导入和渲染（按绑定姿势画，不蒙皮）；`loom model` 命令导出模型结构。
 - **E7.2**：骨骼和动画片段：RON 片段格式、按 tick 采样、GPU 蒙皮；场景里给模型节点挂片段（从 tick 0 循环播放）；`loom view --ticks` 胶片图；手写的待机、走路片段。
 - **E7.3**：游戏的播放接口（换片段、线性过渡）、状态导出、调试绘制 `skeleton` 类别；从 glTF 转片段的命令。
-- **E7.4**：souls 的角色换成模型，接上各个动作。
-- **E7.5**：Boss 换成模型，接上它的招式和二阶段。
+- **E7.4**：引擎加播放速度和片段起点；souls 的角色换成模型，接上移动和攻击（待机、跑、锁定时的横移和后退、冲刺、翻滚、后撤步、轻攻击三连、重攻击）。
+- **E7.5**：souls 角色的其余动作：硬直、死亡、喝原素瓶、篝火休息。
+- **E7.6**：Boss 换成模型，接上它的招式和二阶段。
 - 切片是规划者在 E7.2 规划时拆的（原来的 E7.2 太大，拆成 E7.2、E7.3）；「事件」没有单列：游戏自己知道什么时候换片段，要发事件由游戏发。
 
 E7.2 用户决定（2026-09-28）：
@@ -3141,3 +3212,49 @@ E7.2 用户决定（2026-09-28）：
   - 多出的报错：被动画的关节没有名字；通道驱动变形目标权重；关键帧的时间和值个数对不上。报错都带 `model <路径>:` 前缀，和 `loom model` 一样。
 - **Blender 的 LINEAR 是按四元数分量线性插值（nlerp）**，不是 loom 的球面插值，而且导出器按每帧采样。所以 Blender 里一段大角度转动转成片段后，关键帧会比 Blender 里多（wave 的右臂从 4 个变成 18 个），播放结果仍在精度内，只是文件长一些。想让片段短，就在 Blender 里把大角度转动拆成几段。
 - **Blender 测试动画**：`tools/blender/humanoid_wave.py` 用 `humanoid.py` 的 `build()`、`export()` 建模型，加 2 秒的 `wave`，只输出到 `out/`，不进仓库；`--render <目录> <帧>` 用 Workbench 渲染，用来和 loom 的胶片图比姿势。Workbench 用的是视口颜色，所以比不了颜色（E7.3 审查时决定暂不处理）。
+
+### 播放速度和片段起点（E7.4 起）
+
+用户决定（2026-09-28）：
+- **引擎加播放速度**，游戏按实际移动速度设，脚步不打滑。
+- 锁定时的横移、后退用单独的片段（见第 11 节「模型和动画」）。
+- 硬直、死亡**保留节点倾斜**，片段只管手脚（E7.5）。
+
+**时间单位**：片段内的时间用**百分之一 tick**（下文写作 ctick）记，整数，所以播放速度可以不是整数倍而结果仍然完全确定。
+
+**运行时状态**（E7.3 的 `Animation` 改成）：
+- `playing`：片段名；
+- `start`：这一段从哪个 tick 起算；
+- `offset`：`start` 那一刻的片段时间，ctick；
+- `rate`：播放速度，百分比，整数（100 是原速，0 是定住）；
+- `from`：过渡来源 `Option<{clip, start, offset, rate}>`；
+- `blend_start`：过渡从哪个 tick 开始；
+- `blend`：过渡的 tick 数。
+
+**片段在 tick `τ` 的时间**：`c = offset + (τ - start) × rate`（ctick，`τ < start` 时 `τ - start` 按 0 算）。
+- `looping` 时 `c = c % (length × 100)`；否则 `c = min(c, length × 100)`。
+- 采样照「采样」一节，只是时间换成 `c / 100`，不一定是整数 tick：
+  - 两个关键帧之间 `s = (c - 100·t0) / (100·(t1 - t0))`，用 f32 算；
+  - `c` 正好等于某个关键帧的 `100·tick` 时，直接取那个关键帧的值。
+
+**过渡权重**：`w = (τ - blend_start) / blend`，规则同 E7.3，只是把 `start` 换成 `blend_start`。来源片段按它自己的 `start`、`offset`、`rate` 算时间。
+
+**接口**：
+- `Scene::play_clip(id, Play)`：`Play { clip, start, blend, offset, rate }`，另有 `Play::new(clip, start)`（`blend` 0、`offset` 0、`rate` 100）和设置其余字段的方法。
+  - 调用后：`from` 取旧的 `{playing, start, offset, rate}`；`blend_start = start`。
+  - 其余规则同 E7.3。
+- `Scene::set_clip_rate(id, tau, rate)`：只改速度，不打断动作，也不影响进行中的过渡。
+  - 算出 `τ` 时的片段时间 `c`（**不取模**，保留原值），然后 `offset = c`、`start = τ`、`rate = rate`；
+  - `from`、`blend_start`、`blend` 不变；
+  - 节点没有 `animation` 时报错。
+- E7.3 的 `play_clip(id, clip, start, blend)` 由新接口取代，旧的调用改成 `Play`。
+
+**状态导出**：`animation` 变成：
+
+```json
+{ "clip": "run", "start": 120, "offset": 0, "rate": 100,
+  "from": { "clip": "idle", "start": 0, "offset": 0, "rate": 100 },
+  "blend_start": 120, "blend": 6 }
+```
+
+没有 `animation` 的节点不变。
