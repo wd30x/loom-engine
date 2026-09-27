@@ -2028,7 +2028,7 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
   - 场景文件是 RON，这里按它的 serde 结构描述：元组是定长数组，可选字段可以不写（RON 里写成裸值），`mesh` 这类枚举是 serde 的外部标签形式。schema 的顶层 `description` 里写明这几条对应关系。
   - `deny_unknown_fields` 体现为 `additionalProperties: false`。
   - 结构以外的规则（名字的正则、`scale > 0`、`near < far` 等）写在对应字段的 `///` 注释里。能直接用 schemars 属性表达的（名字的 `pattern`、`version` 的取值）就用属性。
-- **`props`**：按节点的种类分组，每组是一个列表，每项：
+- **`props`**：按节点的种类分组，每组是一个对象 `{"props": [...], "requires": [...], "constraints": [...]}`（E5.4 审查时按实现定下）。`props` 的每项：
 
 ```json
 { "name": "stamina_max", "default": 100.0, "rule": { "kind": "positive" }, "unit": "stamina points", "description": "…" }
@@ -2040,15 +2040,18 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
     - `at_least`（`min`，≥ min）；
     - `whole`（`min`，可选的 `max`：整数，含两端）；
     - `below`（`min`、`max`：`min ≤ v < max`）；
-    - `arc`（0 < v ≤ 360）。
+    - `arc`（0 < v ≤ 360）；
+    - `any`（值本身不查，只参与 `constraints` 里的规则，例如 souls 角色的 `swing_high`）。
     - 两个游戏用到的规则都要能表示；新规则加进这个列表。
   - `unit`、`description`：英文，写在游戏的参数表里（表多一两列），和代码同一处维护。演示场景里每个 prop 的英文注释可以直接拿来用。
   - souls 的分组：
     - `character`：角色节点的 50 个；
     - `node`：其他节点的 17 个。
-    - 每组另有 `requires`：哪些 prop 必须和哪个一起写，例如 `hp` 的 4 个跟着 `hp`；
+    - `requires`：哪些 prop 必须和哪个一起写，写成「谁: needs/need 谁」，例如 `"poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp"`；
     - `constraints`：跨 prop 的规则，写成字符串，例如 `"lock_range <= lock_break_range"`。
-  - rogue 的分组：`player`、`zombie`（第 15 节）。
+  - rogue 的分组：`player`、`zombie`（第 15 节），`requires`、`constraints` 都是空列表。
+- 对象的 `properties` 按键的字母顺序（workspace 没开 serde_json 的 `preserve_order`），和 serde 实际输出的字段顺序不同；我们自己的结构（`loom_schema`、`scene`、`games`、每个游戏的四部分、props 的每项）按声明顺序。结果是确定的。
+- `description` 来自 `///` 注释，保留了注释的换行，Rust 的写法（比如 `` `None` ``，对应 JSON 的 `null`）原样保留。
 - **`state_dump`**：这个游戏的完整状态导出（第 6 节，包括顶层的 `tick`、`nodes` 等），`game` 是这个游戏的状态类型。
 - **`event`**：这个游戏的事件（第 11、15 节「事件」），每种 `type` 一个分支。
 - **`trace_line`**：轨迹的一行（第 6 节「轨迹」）。
