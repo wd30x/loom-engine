@@ -9,7 +9,9 @@ use glam::{Quat, Vec2, Vec3};
 use loom_core::SimClock;
 use loom_core::debug::DebugDraw;
 use loom_core::input::ActionState;
+use loom_core::props::{PropRule, PropSpec};
 use loom_scene::{MeshKind, NodeId, Scene, SceneError};
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::events::{DropReason, EndReason, Event, HitAttack, Input, LockReason, Outcome};
@@ -34,19 +36,6 @@ pub const HEAVY: &str = "heavy";
 /// Locks on to a target, or lets go of it, on the tick it is pressed.
 pub const LOCK: &str = "lock";
 
-/// How a node prop's value is checked.
-#[derive(Debug, Clone, Copy)]
-enum NodeRule {
-    /// Greater than 0.
-    Positive,
-    /// At least 0.
-    NotNegative,
-    /// A whole number of at least 1.
-    Ticks,
-    /// An angle in degrees, greater than 0 and at most 360.
-    Arc,
-}
-
 /// The props a node other than the character may have, in the order they
 /// are checked, with the default of those that have one:
 /// - `lock_height` makes it a lock-on target (locked on this many meters
@@ -55,25 +44,126 @@ enum NodeRule {
 /// - `hp` makes a hurtbox take damage; the four after it go with `hp`;
 /// - `swing_damage` makes it a swinger, hitting the character; the last
 ///   eight go with `swing_damage`.
-const NODE_PROPS: [(&str, Option<f64>, NodeRule); 17] = [
-    ("lock_height", None, NodeRule::Positive),
-    ("hurt_radius", None, NodeRule::Positive),
-    ("hurt_height", None, NodeRule::Positive),
-    ("hp", None, NodeRule::Positive),
-    ("poise", Some(0.0), NodeRule::NotNegative),
-    ("stagger_ticks", Some(30.0), NodeRule::Ticks),
-    ("poise_reset_ticks", Some(60.0), NodeRule::Ticks),
-    ("revive_ticks", Some(180.0), NodeRule::Ticks),
-    ("swing_damage", None, NodeRule::Positive),
-    ("swing_impact", Some(20.0), NodeRule::NotNegative),
-    ("swing_startup_ticks", Some(40.0), NodeRule::Ticks),
-    ("swing_active_ticks", Some(6.0), NodeRule::Ticks),
-    ("swing_recovery_ticks", Some(74.0), NodeRule::Ticks),
-    ("swing_reach", Some(2.2), NodeRule::Positive),
-    ("swing_arc", Some(150.0), NodeRule::Arc),
-    ("swing_low", Some(0.3), NodeRule::NotNegative),
-    // Also above `swing_low`, checked on its own.
-    ("swing_high", Some(1.6), NodeRule::Positive),
+pub(crate) const NODE_PROPS: [PropSpec; 17] = [
+    PropSpec {
+        name: "lock_height",
+        default: None,
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Makes the node a lock-on target, locked on this far above its position.",
+    },
+    PropSpec {
+        name: "hurt_radius",
+        default: None,
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "With hurt_height, makes the node a hurtbox: a vertical cylinder of this radius around its position.",
+    },
+    PropSpec {
+        name: "hurt_height",
+        default: None,
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "With hurt_radius: the height of the cylinder, from the node's position up.",
+    },
+    PropSpec {
+        name: "hp",
+        default: None,
+        rule: PropRule::Positive,
+        unit: "hp",
+        description: "Gives a hurtbox health: it takes damage, staggers and dies.",
+    },
+    PropSpec {
+        name: "poise",
+        default: Some(0.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "impact",
+        description: "Impacts added up past this stagger it.",
+    },
+    PropSpec {
+        name: "stagger_ticks",
+        default: Some(30.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "How long a stagger lasts.",
+    },
+    PropSpec {
+        name: "poise_reset_ticks",
+        default: Some(60.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Ticks without a hit before impacts are forgotten.",
+    },
+    PropSpec {
+        name: "revive_ticks",
+        default: Some(180.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Ticks lying dead before coming back with full health.",
+    },
+    PropSpec {
+        name: "swing_damage",
+        default: None,
+        rule: PropRule::Positive,
+        unit: "hp",
+        description: "Makes the node a swinger, swinging at the character: health a hit takes off it.",
+    },
+    PropSpec {
+        name: "swing_impact",
+        default: Some(20.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "impact",
+        description: "What a hit adds up against the character's poise.",
+    },
+    PropSpec {
+        name: "swing_startup_ticks",
+        default: Some(40.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "The warning before the swing.",
+    },
+    PropSpec {
+        name: "swing_active_ticks",
+        default: Some(6.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "The swing.",
+    },
+    PropSpec {
+        name: "swing_recovery_ticks",
+        default: Some(74.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "After the swing, until the next round.",
+    },
+    PropSpec {
+        name: "swing_reach",
+        default: Some(2.2),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Radius of the swept sector.",
+    },
+    PropSpec {
+        name: "swing_arc",
+        default: Some(150.0),
+        rule: PropRule::Arc,
+        unit: "degrees",
+        description: "Angle swept, right to left, centered on -Z.",
+    },
+    PropSpec {
+        name: "swing_low",
+        default: Some(0.3),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "meters",
+        description: "Above the character's feet: the bottom of the band the swing sweeps.",
+    },
+    PropSpec {
+        name: "swing_high",
+        default: Some(1.6),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Above the character's feet: the top of the band the swing sweeps.",
+    },
 ];
 
 /// Where the props that go with `hp` and with `swing_damage` are in
@@ -147,44 +237,11 @@ pub enum GameError {
     MovingCollider(String),
     #[error("the character {character:?}: unknown prop {prop:?}")]
     UnknownProp { character: String, prop: String },
-    #[error("the character {character:?}: prop {prop:?} must be greater than 0, got {value}")]
-    NotPositive {
+    #[error("the character {character:?}: prop {prop:?} must be {rule}, got {value}")]
+    BadProp {
         character: String,
         prop: &'static str,
-        value: f64,
-    },
-    #[error(
-        "the character {character:?}: prop {prop:?} must be a whole number of at least {min}, \
-         got {value}"
-    )]
-    NotWhole {
-        character: String,
-        prop: &'static str,
-        min: u32,
-        value: f64,
-    },
-    #[error(
-        "the character {character:?}: prop {prop:?} must be at least 0 and less than 90, \
-         got {value}"
-    )]
-    NotBelow90 {
-        character: String,
-        prop: &'static str,
-        value: f64,
-    },
-    #[error(
-        "the character {character:?}: prop {prop:?} must be greater than 0 and at most 360, \
-         got {value}"
-    )]
-    NotAnArc {
-        character: String,
-        prop: &'static str,
-        value: f64,
-    },
-    #[error("the character {character:?}: prop {prop:?} must be at least 0, got {value}")]
-    Negative {
-        character: String,
-        prop: &'static str,
+        rule: PropRule,
         value: f64,
     },
     #[error(
@@ -216,28 +273,11 @@ pub enum GameError {
          swing_low, swing_high)"
     )]
     UnknownNodeProp { node: String, prop: String },
-    #[error("the node {node:?}: prop {prop:?} must be greater than 0, got {value}")]
-    NodePropNotPositive {
+    #[error("the node {node:?}: prop {prop:?} must be {rule}, got {value}")]
+    NodeBadProp {
         node: String,
         prop: &'static str,
-        value: f64,
-    },
-    #[error("the node {node:?}: prop {prop:?} must be at least 0, got {value}")]
-    NodePropNegative {
-        node: String,
-        prop: &'static str,
-        value: f64,
-    },
-    #[error("the node {node:?}: prop {prop:?} must be a whole number of at least 1, got {value}")]
-    NodePropNotWhole {
-        node: String,
-        prop: &'static str,
-        value: f64,
-    },
-    #[error("the node {node:?}: prop {prop:?} must be greater than 0 and at most 360, got {value}")]
-    NodePropNotAnArc {
-        node: String,
-        prop: &'static str,
+        rule: PropRule,
         value: f64,
     },
     #[error("the node {0:?}: needs both hurt_radius and hurt_height, or neither")]
@@ -263,7 +303,7 @@ pub enum GameError {
 }
 
 /// The game state in the state dump (`game`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct GameState {
     pub player: PlayerState,
     pub camera: CameraState,
@@ -275,12 +315,15 @@ pub struct GameState {
     pub swingers: Vec<SwingerState>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// The character (`game.player`).
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct PlayerState {
     /// Feet position in meters; serialized as `[x, y, z]`.
+    #[schemars(with = "[f32; 3]")]
     pub position: Vec3,
     /// Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.
     pub facing: f32,
+    /// From 0 to `stamina_max`.
     pub stamina: f32,
     /// Ticks left before stamina starts coming back.
     pub stamina_wait: u32,
@@ -288,6 +331,8 @@ pub struct PlayerState {
     /// Which tick of a roll, backstep or attack this is, from 1; 0
     /// otherwise.
     pub action_tick: u32,
+    /// Inside the invulnerability window of a roll or backstep: swings
+    /// miss.
     pub invulnerable: bool,
     /// The part of the attack running; `None` outside attacks.
     pub attack_phase: Option<AttackPhase>,
@@ -303,7 +348,7 @@ pub struct PlayerState {
 }
 
 /// One hit on the character.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct PlayerHit {
     /// The tick it happened on, as in the state dump's `tick`.
     pub tick: u64,
@@ -311,7 +356,8 @@ pub struct PlayerHit {
     pub by: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+/// The orbit camera (`game.camera`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
 pub struct CameraState {
     /// Radians around +Y; 0 looks along -Z.
     pub yaw: f32,
@@ -402,7 +448,7 @@ struct Hurtbox {
 }
 
 /// A hurtbox in the state dump (`game.hurtboxes`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct HurtboxState {
     /// The node's path.
     pub node: String,
@@ -484,7 +530,7 @@ fn slice_of(arc: f32, slice: f32, k: u32) -> (f32, f32) {
 }
 
 /// A swinger in the state dump (`game.swingers`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct SwingerState {
     /// The node's path.
     pub node: String,
@@ -496,7 +542,7 @@ pub struct SwingerState {
 }
 
 /// One hit on a hurtbox.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
 pub struct LastHit {
     /// The tick it happened on, as in the state dump's `tick`.
     pub tick: u64,
@@ -1781,6 +1827,24 @@ struct Roles {
     swingers: Vec<Swinger>,
 }
 
+/// Which node props only go with another one, as [`roles`] checks them
+/// (`loom schema` writes them out).
+pub(crate) const NODE_REQUIRES: [&str; 4] = [
+    "hurt_radius and hurt_height: both or neither",
+    "hp: needs hurt_radius and hurt_height",
+    "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
+    "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, \
+     swing_arc, swing_low, swing_high: need swing_damage",
+];
+
+/// The other rules [`roles`] checks on a node's props.
+pub(crate) const NODE_CONSTRAINTS: [&str; 4] = [
+    "a swinger: swing_low < swing_high",
+    "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
+    "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
+    "a swinger: its child named arm, if any, needs a mesh",
+];
+
 /// Every lock-on target, hurtbox and swinger of `scene`, in pre-order,
 /// checked node by node (every node but the character), in this order: no
 /// props but [`NODE_PROPS`]; each value by its rule; the two hurt props
@@ -1797,41 +1861,32 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
         let path = || scene.path(id);
         if let Some((prop, _)) = node
             .props()
-            .find(|&(p, _)| !NODE_PROPS.iter().any(|&(name, ..)| name == p))
+            .find(|&(p, _)| !NODE_PROPS.iter().any(|spec| spec.name == p))
         {
             return Err(GameError::UnknownNodeProp {
                 node: path(),
                 prop: prop.to_owned(),
             });
         }
-        for (prop, _, rule) in NODE_PROPS {
-            let Some(value) = node.prop(prop) else {
-                continue;
-            };
-            let node = path();
-            match rule {
-                NodeRule::Positive if value <= 0.0 => {
-                    return Err(GameError::NodePropNotPositive { node, prop, value });
-                }
-                NodeRule::NotNegative if value < 0.0 => {
-                    return Err(GameError::NodePropNegative { node, prop, value });
-                }
-                NodeRule::Ticks if value.fract() != 0.0 || value < 1.0 => {
-                    return Err(GameError::NodePropNotWhole { node, prop, value });
-                }
-                NodeRule::Arc if !(value > 0.0 && value <= 360.0) => {
-                    return Err(GameError::NodePropNotAnArc { node, prop, value });
-                }
-                _ => {}
+        for spec in NODE_PROPS {
+            if let Some(value) = node.prop(spec.name)
+                && !spec.rule.allows(value)
+            {
+                return Err(GameError::NodeBadProp {
+                    node: path(),
+                    prop: spec.name,
+                    rule: spec.rule,
+                    value,
+                });
             }
         }
         // Present, or the default; `None` only for a missing prop without one.
         let get = |name: &str| {
-            let &(_, default, _) = NODE_PROPS
+            let spec = NODE_PROPS
                 .iter()
-                .find(|&&(n, ..)| n == name)
+                .find(|spec| spec.name == name)
                 .expect("only names from NODE_PROPS are asked for");
-            node.prop(name).or(default)
+            node.prop(name).or(spec.default)
         };
         // Only for props with a default.
         let value = |name: &str| get(name).expect("only props with a default are asked for");
@@ -1848,19 +1903,25 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
             return Err(GameError::HpWithoutHurtbox(path()));
         }
         if hp.is_none()
-            && let Some(&(prop, ..)) = NODE_PROPS[HP_PROPS]
+            && let Some(spec) = NODE_PROPS[HP_PROPS]
                 .iter()
-                .find(|&&(p, ..)| node.prop(p).is_some())
+                .find(|spec| node.prop(spec.name).is_some())
         {
-            return Err(GameError::NeedsHp { node: path(), prop });
+            return Err(GameError::NeedsHp {
+                node: path(),
+                prop: spec.name,
+            });
         }
         let swing_damage = node.prop("swing_damage");
         if swing_damage.is_none()
-            && let Some(&(prop, ..)) = NODE_PROPS[SWING_PROPS]
+            && let Some(spec) = NODE_PROPS[SWING_PROPS]
                 .iter()
-                .find(|&&(p, ..)| node.prop(p).is_some())
+                .find(|spec| node.prop(spec.name).is_some())
         {
-            return Err(GameError::NeedsSwingDamage { node: path(), prop });
+            return Err(GameError::NeedsSwingDamage {
+                node: path(),
+                prop: spec.name,
+            });
         }
         // Compared as used: after `as f32`, like the character's band.
         if swing_damage.is_some() && value("swing_low") as f32 >= value("swing_high") as f32 {

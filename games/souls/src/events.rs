@@ -5,12 +5,13 @@
 //! changes, revivals). Emitting them never changes the state.
 
 use glam::Vec3;
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::moves::{Action, Buffered};
 
 /// One event; serialized as an object whose first field is `type`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     /// The character hit a hurtbox, or a swinger hit the character.
@@ -30,9 +31,11 @@ pub enum Event {
     },
     /// A swinger's slice touched the character while invulnerable.
     Dodged {
+        /// The swinger's node path.
         by: String,
         /// `Roll` or `Backstep`.
         action: Action,
+        /// Which tick of the roll or backstep, from 1.
         action_tick: u32,
     },
     /// A press that had no effect at all.
@@ -43,38 +46,39 @@ pub enum Event {
         buffered: bool,
     },
     /// A press replaced the buffered action.
-    BufferReplaced {
-        old: Buffered,
-        new: Buffered,
-    },
+    BufferReplaced { old: Buffered, new: Buffered },
+    /// The character started an action.
     ActionStart {
         /// Never `Idle`.
         action: Action,
+        /// Which light attack of a combo, from 1; 0 for other actions.
         combo: u32,
         /// Started from the buffer.
         buffered: bool,
     },
-    ActionEnd {
-        action: Action,
-        reason: EndReason,
-    },
-    /// The lock-on target changed; `None` when let go of.
+    /// The character's action ended, back to idle.
+    ActionEnd { action: Action, reason: EndReason },
+    /// The lock-on target changed.
     Lock {
+        /// The new target's node path; `None` when let go of.
         target: Option<String>,
         reason: LockReason,
     },
     /// A hurtbox came back to life (step 0b).
     Revive {
+        /// The hurtbox's node path.
         node: String,
     },
     /// The character came back to life at its spawn point (step 0b).
     Respawn {
+        /// `[x, y, z]`.
+        #[schemars(with = "[f32; 3]")]
         position: Vec3,
     },
 }
 
 /// What hit: the character's light or heavy attack, or a swinger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum HitAttack {
     Attack,
@@ -83,7 +87,7 @@ pub enum HitAttack {
 }
 
 /// What a hit did to the target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
     /// Neither of the others (always, without health).
@@ -94,7 +98,7 @@ pub enum Outcome {
 }
 
 /// A pressed input: the roll key's tap, or the lock key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Input {
     Attack,
@@ -114,7 +118,7 @@ impl From<Buffered> for Input {
 }
 
 /// Why a press had no effect; when several apply, the first in this order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DropReason {
     Dead,
@@ -130,7 +134,8 @@ pub enum DropReason {
     NoTarget,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Why an action ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EndReason {
     /// Ran its ticks, or the sprint stopped.
@@ -139,7 +144,8 @@ pub enum EndReason {
     Interrupted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Why the lock-on target changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LockReason {
     /// The lock key locked on or let go.

@@ -8,7 +8,9 @@ use glam::Vec3;
 use loom_core::SimClock;
 use loom_core::debug::DebugDraw;
 use loom_core::input::{ActionMap, ActionState};
+use loom_core::props::{PropGroup, PropRule, PropSpec};
 use loom_scene::{Node, NodeId, Scene, SceneError};
+use schemars::JsonSchema;
 use serde::Serialize;
 
 const BINDINGS: &str = include_str!("bindings.ron");
@@ -39,9 +41,74 @@ const CORPSE: &str = "corpse";
 /// Energy a zombie spends per action; it gains `speed` per turn.
 const ACTION_COST: i32 = 100;
 
+/// The rule of every prop. None has a default: all must be given.
+const WHOLE_1_TO_1000: PropRule = PropRule::Whole {
+    min: 1,
+    max: Some(1000),
+};
+
 /// Props of the player and of a zombie, in the order they are checked.
-const PLAYER_PROPS: [&str; 2] = ["hp", "attack"];
-const ZOMBIE_PROPS: [&str; 3] = ["hp", "attack", "speed"];
+/// Checking and `loom schema` both go through these tables.
+const PLAYER_PROPS: [PropSpec; 2] = [
+    PropSpec {
+        name: "hp",
+        default: None,
+        rule: WHOLE_1_TO_1000,
+        unit: "hp",
+        description: "The player's health.",
+    },
+    PropSpec {
+        name: "attack",
+        default: None,
+        rule: WHOLE_1_TO_1000,
+        unit: "hp",
+        description: "Health the player's hit takes off.",
+    },
+];
+const ZOMBIE_PROPS: [PropSpec; 3] = [
+    PropSpec {
+        name: "hp",
+        default: None,
+        rule: WHOLE_1_TO_1000,
+        unit: "hp",
+        description: "The zombie's health.",
+    },
+    PropSpec {
+        name: "attack",
+        default: None,
+        rule: WHOLE_1_TO_1000,
+        unit: "hp",
+        description: "Health the zombie's hit takes off.",
+    },
+    PropSpec {
+        name: "speed",
+        default: None,
+        rule: WHOLE_1_TO_1000,
+        unit: "energy per turn",
+        description: "Energy gained each turn; it acts on reaching 100, so 100 is the player's speed and 67 acts on 2 turns out of 3.",
+    },
+];
+
+/// The props of the player and of a zombie, for `loom schema`
+/// (`docs/architecture.md` section 17).
+pub const PROP_GROUPS: [(&str, PropGroup); 2] = [
+    (
+        "player",
+        PropGroup {
+            props: &PLAYER_PROPS,
+            requires: &[],
+            constraints: &[],
+        },
+    ),
+    (
+        "zombie",
+        PropGroup {
+            props: &ZOMBIE_PROPS,
+            requires: &[],
+            constraints: &[],
+        },
+    ),
+];
 
 /// The game's key bindings: the numpad and vi keys.
 pub fn bindings() -> ActionMap {
@@ -101,10 +168,11 @@ pub enum GameError {
     NoCorpse(String),
     #[error("{name:?}: prop {prop} is missing")]
     MissingProp { name: String, prop: &'static str },
-    #[error("{name:?}: prop {prop} must be a whole number from 1 to 1000, got {value}")]
+    #[error("{name:?}: prop {prop} must be {rule}, got {value}")]
     BadProp {
         name: String,
         prop: &'static str,
+        rule: PropRule,
         value: f64,
     },
     #[error("{name:?}: unknown prop {prop:?} (known: {known})")]
@@ -116,7 +184,7 @@ pub enum GameError {
 }
 
 /// The game state in the state dump (`game`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct GameState {
     /// Turns taken so far: moves, attacks and waits.
     pub turn: u64,
@@ -127,7 +195,8 @@ pub struct GameState {
     pub messages: Vec<Message>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// The player (`game.player`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct PlayerState {
     /// `[column, row]`; row 0 is the map's top row.
     pub cell: [i32; 2],
@@ -135,7 +204,8 @@ pub struct PlayerState {
     pub hp: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// A zombie (`game.zombies[i]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ZombieState {
     /// The node name.
     pub name: String,
@@ -147,17 +217,19 @@ pub struct ZombieState {
     pub energy: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// A line of the message log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Message {
     /// The turn the message belongs to (after that turn was counted).
     pub turn: u64,
+    /// E.g. "You hit z1." or "You die."
     pub text: String,
 }
 
 /// One event of a tick, for traces and `loom serve`'s `step`
 /// (`docs/architecture.md` section 15, "事件"); serialized as an object
 /// whose first field is `type`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     /// The player bumped into a zombie, or a zombie bit the player: one
@@ -176,7 +248,7 @@ pub enum Event {
 }
 
 /// What a hit did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum HitResult {
     Hit,
@@ -612,27 +684,33 @@ fn needs_corpse(scene: &Scene, id: NodeId) -> Result<(), GameError> {
 /// The `known` props of `node`, in that order, each a whole number from 1
 /// to 1000. Missing and invalid ones are reported first (in `known` order),
 /// then any unknown name (in file order).
-fn props<const N: usize>(node: &Node, known: [&'static str; N]) -> Result<[i32; N], GameError> {
+fn props<const N: usize>(node: &Node, known: [PropSpec; N]) -> Result<[i32; N], GameError> {
     let name = || node.name.clone();
     let mut values = [0; N];
-    for (value, prop) in values.iter_mut().zip(known) {
+    for (value, spec) in values.iter_mut().zip(known) {
+        let prop = spec.name;
         let Some(v) = node.prop(prop) else {
             return Err(GameError::MissingProp { name: name(), prop });
         };
-        if v.fract() != 0.0 || !(1.0..=1000.0).contains(&v) {
+        if !spec.rule.allows(v) {
             return Err(GameError::BadProp {
                 name: name(),
                 prop,
+                rule: spec.rule,
                 value: v,
             });
         }
+        // Checked: a whole number from 1 to 1000.
         *value = v as i32;
     }
-    if let Some((prop, _)) = node.props().find(|(p, _)| !known.contains(p)) {
+    if let Some((prop, _)) = node
+        .props()
+        .find(|(p, _)| !known.iter().any(|spec| spec.name == *p))
+    {
         return Err(GameError::UnknownProp {
             name: name(),
             prop: prop.to_owned(),
-            known: known.join(", "),
+            known: known.map(|spec| spec.name).join(", "),
         });
     }
     Ok(values)

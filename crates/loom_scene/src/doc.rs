@@ -41,8 +41,10 @@ const OPTIONAL_FIELDS: [&str; 13] = [
 ];
 
 /// The parsed file structure of a scene: what the file says, before
-/// validation, with the edits made to it.
-#[derive(Debug, Clone, PartialEq)]
+/// validation, with the edits made to it. Serializes as the file does (as
+/// JSON: what [`crate::scene_schema`] describes).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct SceneDoc {
     file: SceneFile,
 }

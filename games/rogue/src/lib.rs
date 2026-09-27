@@ -9,8 +9,8 @@
 mod game;
 
 pub use game::{
-    Event, Game, GameError, GameState, HitResult, MOVES, Message, PlayerState, WAIT, ZombieState,
-    bindings,
+    Event, Game, GameError, GameState, HitResult, MOVES, Message, PROP_GROUPS, PlayerState, WAIT,
+    ZombieState, bindings,
 };
 
 #[cfg(test)]

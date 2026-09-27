@@ -3,13 +3,14 @@
 //! (`docs/architecture.md` section 11, "血量、韧性、死亡").
 
 use loom_scene::NodeId;
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::events::Outcome;
 
 /// Whether a hurtbox with health stands, reels or lies dead; serialized in
 /// lower case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Condition {
     Ok,
@@ -19,7 +20,7 @@ pub enum Condition {
 }
 
 /// A hurtbox's health in the state dump (`game.hurtboxes[i].health`).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
 pub struct HealthState {
     /// From 0 to the full `hp`.
     pub hp: f32,

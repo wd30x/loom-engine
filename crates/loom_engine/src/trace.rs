@@ -8,6 +8,7 @@ use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::games::AnyEvents;
@@ -25,12 +26,17 @@ pub(crate) struct Trace {
     events: u64,
 }
 
-/// One line: the fields in this order.
-#[derive(Serialize)]
-struct Line<'a> {
-    tick: u64,
-    events: AnyEvents<'a>,
-    state: &'a StateDump,
+/// One line of a trace, the fields in this order. Generic only so that `loom schema` can describe a
+/// game's lines from this same type (`docs/architecture.md` section 17).
+#[derive(Serialize, JsonSchema)]
+#[schemars(rename = "TraceLine")]
+pub(crate) struct Line<E, S> {
+    /// The tick the line is about: its state is after that tick ran.
+    pub tick: u64,
+    /// The events that tick emitted, in order.
+    pub events: E,
+    /// The state dump after the tick.
+    pub state: S,
 }
 
 impl Trace {

@@ -95,6 +95,13 @@ impl From<AdapterSummary> for RunAdapter {
     }
 }
 
+/// `loom schema` (`docs/architecture.md` section 17).
+#[derive(Debug, Serialize)]
+pub(crate) struct SchemaReport<'a> {
+    pub status: &'static str,
+    pub schema: &'a crate::schema::LoomSchema,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct InfoReport {
     pub status: &'static str,

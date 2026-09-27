@@ -11,7 +11,7 @@ use loom_scene::Scene;
 use serde::Serialize;
 
 /// Game names, sorted: the order the error message lists them in.
-const GAMES: [&str; 2] = ["rogue", "souls"];
+pub(crate) const GAMES: [&str; 2] = ["rogue", "souls"];
 
 /// Both games are boxed, so the enum's size does not depend on what they
 /// hold (clippy::large_enum_variant).

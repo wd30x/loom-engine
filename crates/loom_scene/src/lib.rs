@@ -17,6 +17,7 @@ mod file;
 use std::collections::BTreeSet;
 
 use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
+use schemars::JsonSchema;
 use serde::Serialize;
 
 pub use doc::{EditError, SceneDoc};
@@ -24,6 +25,16 @@ pub use file::MeshKind;
 use file::{
     CameraDesc, ColliderKind, NodeDesc, OrbitCameraDesc, SceneFile, SpriteDesc, TilemapDesc, Triple,
 };
+
+/// The JSON Schema (draft 2020-12) of a scene file, as `loom schema`
+/// writes it under `scene` (`docs/architecture.md` section 17): what a file
+/// may contain, the RON read as JSON.
+pub fn scene_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft2020_12()
+        .for_deserialize()
+        .into_generator()
+        .into_root_schema_for::<SceneFile>()
+}
 
 /// The only scene file version so far.
 const VERSION: u32 = 1;
@@ -149,10 +160,16 @@ impl NodeId {
 
 /// Local transform, relative to the parent node. Serializes as
 /// `{"position": [x, y, z], "rotation": [x, y, z, w], "scale": [x, y, z]}`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
 pub struct Transform {
+    /// `[x, y, z]`, in meters.
+    #[schemars(with = "[f32; 3]")]
     pub position: Vec3,
+    /// A unit quaternion `[x, y, z, w]`.
+    #[schemars(with = "[f32; 4]")]
     pub rotation: Quat,
+    /// `[x, y, z]`.
+    #[schemars(with = "[f32; 3]")]
     pub scale: Vec3,
 }
 

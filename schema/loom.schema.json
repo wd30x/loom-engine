@@ -1,0 +1,3740 @@
+{
+  "loom_schema": 1,
+  "scene": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "scene",
+    "description": "A loom scene file (`docs/architecture.md` section 10). The file is RON;\nthis schema describes the same data as JSON: a RON tuple such as\n`(1.0, 2.0, 3.0)` is a fixed-length array; an optional field may be left\nout, and when given is written bare in RON (`mesh: Cube`, not\n`mesh: Some(Cube)`); an enum such as `mesh` is serde's externally tagged\nform: a unit variant is its name (`\"Cube\"`), a variant with fields an\nobject with one key (`{\"Capsule\": {\"radius\": 0.35, \"height\": 1.8}}`).\nLoading checks more than the structure: the rules are in the field\ndescriptions.",
+    "type": "object",
+    "properties": {
+      "ambient": {
+        "description": "Ambient light, linear RGB, each component from 0 to 1.",
+        "type": "array",
+        "maxItems": 3,
+        "minItems": 3,
+        "prefixItems": [
+          {
+            "type": "number",
+            "format": "float"
+          },
+          {
+            "type": "number",
+            "format": "float"
+          },
+          {
+            "type": "number",
+            "format": "float"
+          }
+        ]
+      },
+      "camera": {
+        "description": "Path of the active camera node: names joined by \"/\" from a root\nnode. The node needs a camera component.",
+        "type": "string"
+      },
+      "game": {
+        "description": "Which game runs the scene, e.g. \"souls\" or \"rogue\"; `loom run` picks\nthe game by it. Not empty.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nodes": {
+        "description": "The root nodes, in drawing and checking order.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/NodeDesc"
+        }
+      },
+      "version": {
+        "description": "The file format version: 1.",
+        "type": "integer",
+        "format": "uint32",
+        "maximum": 1,
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "version",
+      "camera",
+      "ambient",
+      "nodes"
+    ],
+    "$defs": {
+      "CameraDesc": {
+        "description": "A camera: `near` and `far` in meters, `0 < near < far`.",
+        "type": "object",
+        "properties": {
+          "far": {
+            "description": "Meters to the far clipping plane.",
+            "type": "number",
+            "format": "float"
+          },
+          "fov_y": {
+            "description": "Perspective: vertical field of view in degrees, between 0 and 180.\nExactly one of `fov_y` and `ortho` is given.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "near": {
+            "description": "Meters to the near clipping plane.",
+            "type": "number",
+            "format": "float"
+          },
+          "ortho": {
+            "description": "Orthographic.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OrthoDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "near",
+          "far"
+        ]
+      },
+      "CharacterDesc": {
+        "description": "Makes the node the character the game moves.",
+        "type": "object",
+        "properties": {
+          "run_speed": {
+            "description": "Meters per second, greater than 0.",
+            "type": "number",
+            "format": "float"
+          },
+          "turn_speed": {
+            "description": "Degrees per second, greater than 0.",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "run_speed",
+          "turn_speed"
+        ]
+      },
+      "ColliderKind": {
+        "description": "Static collision shapes, sized and placed by the node's transform.",
+        "oneOf": [
+          {
+            "description": "Unit cube like `mesh: Cube`.",
+            "type": "string",
+            "const": "Box"
+          }
+        ]
+      },
+      "LightDesc": {
+        "description": "A directional light, shining along the node's -Z axis.",
+        "type": "object",
+        "properties": {
+          "color": {
+            "description": "Linear RGB, each component from 0 to 1.",
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              }
+            ]
+          },
+          "intensity": {
+            "description": "At least 0.",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "color",
+          "intensity"
+        ]
+      },
+      "MeshKind": {
+        "description": "Mesh shapes. The first three are unit sized; size them with `scale`.",
+        "oneOf": [
+          {
+            "description": "Edge 1, centered at the origin.",
+            "type": "string",
+            "const": "Cube"
+          },
+          {
+            "description": "1x1 on the XZ plane, facing +Y.",
+            "type": "string",
+            "const": "Plane"
+          },
+          {
+            "description": "Diameter 1, centered at the origin.",
+            "type": "string",
+            "const": "Sphere"
+          },
+          {
+            "description": "A cylinder along Y capped by two half spheres. `height` includes the\ncaps; the origin is at the bottom, so it spans y in `[0, height]`.\nRequires `radius > 0` and `height >= 2 * radius`.",
+            "type": "object",
+            "properties": {
+              "Capsule": {
+                "type": "object",
+                "properties": {
+                  "height": {
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "radius": {
+                    "type": "number",
+                    "format": "float"
+                  }
+                },
+                "required": [
+                  "radius",
+                  "height"
+                ]
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "Capsule"
+            ]
+          }
+        ]
+      },
+      "NodeDesc": {
+        "description": "A scene node. Every number must be finite.",
+        "type": "object",
+        "properties": {
+          "camera": {
+            "description": "Makes the node a camera, looking along its -Z axis.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CameraDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "character": {
+            "description": "The scene's one character, if any.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CharacterDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "children": {
+            "description": "Child nodes, placed relative to this one.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/NodeDesc"
+            }
+          },
+          "collider": {
+            "description": "A static collision shape. Not on the character's node; the node may\nonly rotate around Y (rotation x and z 0, no look_at), and its\nancestors only translate.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ColliderKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "color": {
+            "description": "The mesh color, linear RGB, each component from 0 to 1. Default\n(0.8, 0.8, 0.8).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              }
+            ]
+          },
+          "light": {
+            "description": "The scene's one light, if any.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LightDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "look_at": {
+            "description": "A point, in the parent's space, that the node's -Z axis turns to.\nNot the node's own position, and not straight above or below it.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              }
+            ]
+          },
+          "mesh": {
+            "description": "At most one of `mesh`, `sprite` and `tilemap`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MeshKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "description": "Unique among its siblings.",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "orbit_camera": {
+            "description": "The scene's one orbit camera, if any: on a node with a camera.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OrbitCameraDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position": {
+            "description": "Local position in meters, relative to the parent. Default (0, 0, 0).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              }
+            ]
+          },
+          "props": {
+            "description": "Numbers for the game to interpret, as `(name, value)` pairs in file\norder: names match ^[a-z][a-z0-9_]*$, each given once, values\nfinite. Which names a game knows, and their rules, are under\n`games.<game>.props`. A list, not a map: ron silently keeps the last\nof two duplicate map keys.",
+            "type": "array",
+            "items": {
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number",
+                  "format": "double"
+                }
+              ]
+            }
+          },
+          "rotation": {
+            "description": "YXZ Euler angles in degrees. Not together with `look_at`.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              }
+            ]
+          },
+          "scale": {
+            "description": "Every component greater than 0. Default (1, 1, 1).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              },
+              {
+                "type": "number",
+                "format": "float"
+              }
+            ]
+          },
+          "sprite": {
+            "description": "At most one of `mesh`, `sprite` and `tilemap`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SpriteDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tilemap": {
+            "description": "At most one of `mesh`, `sprite` and `tilemap`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TilemapDesc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ]
+      },
+      "OrbitCameraDesc": {
+        "description": "A camera that orbits the character, as in Dark Souls.",
+        "type": "object",
+        "properties": {
+          "collision_radius": {
+            "description": "Radius of the camera's collision sphere, in meters:\n`0 < collision_radius < pivot_height`.",
+            "type": "number",
+            "format": "float"
+          },
+          "distance": {
+            "description": "Meters from the pivot, greater than 0.",
+            "type": "number",
+            "format": "float"
+          },
+          "pitch": {
+            "description": "Starting angle in degrees, between `pitch_min` and `pitch_max`;\npositive looks up.",
+            "type": "number",
+            "format": "float"
+          },
+          "pitch_max": {
+            "description": "Degrees; see `pitch_min`.",
+            "type": "number",
+            "format": "float"
+          },
+          "pitch_min": {
+            "description": "Degrees; `-90 < pitch_min < pitch_max < 90`.",
+            "type": "number",
+            "format": "float"
+          },
+          "pivot_height": {
+            "description": "Meters above the character's feet the camera orbits around.",
+            "type": "number",
+            "format": "float"
+          },
+          "return_speed": {
+            "description": "Meters per second the camera moves back out once unblocked, greater\nthan 0.",
+            "type": "number",
+            "format": "float"
+          },
+          "target": {
+            "description": "Path (from a root) of the node with the `character` component.",
+            "type": "string"
+          },
+          "yaw": {
+            "description": "Starting angle around +Y, in degrees.",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "target",
+          "pivot_height",
+          "distance",
+          "yaw",
+          "pitch",
+          "pitch_min",
+          "pitch_max",
+          "collision_radius",
+          "return_speed"
+        ]
+      },
+      "OrthoDesc": {
+        "description": "An orthographic projection.",
+        "type": "object",
+        "properties": {
+          "height": {
+            "description": "World length the view covers vertically, greater than 0; the width\nfollows the aspect ratio.",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "height"
+        ]
+      },
+      "SpriteDesc": {
+        "description": "A sprite: one tag of an Aseprite sheet, drawn on the node's XY plane.",
+        "type": "object",
+        "properties": {
+          "alternates": {
+            "description": "Other tags of the sheet the game may switch the sprite to while it\nruns: each once, and not `tag`.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sheet": {
+            "description": "Path of an Aseprite json-array sprite sheet, relative to the\nworking directory. Not empty.",
+            "type": "string"
+          },
+          "tag": {
+            "description": "The tag shown, one of the sheet's. Not empty.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "sheet",
+          "tag"
+        ]
+      },
+      "TilemapDesc": {
+        "description": "A tile map: rows of characters, each drawing a tag of an Aseprite\nsheet, one cell a unit square on the node's XY plane.",
+        "type": "object",
+        "properties": {
+          "legend": {
+            "description": "Which tag each map character draws; each character once.",
+            "type": "array",
+            "items": {
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string",
+                  "maxLength": 1,
+                  "minLength": 1
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "rows": {
+            "description": "One string per row, top row first; one character per cell, every\ncharacter in the legend. At least one row, all of the same length,\nat least 1.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sheet": {
+            "description": "Path of an Aseprite json-array sprite sheet, relative to the\nworking directory. Not empty.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "sheet",
+          "legend",
+          "rows"
+        ]
+      }
+    }
+  },
+  "games": {
+    "rogue": {
+      "props": {
+        "player": {
+          "props": [
+            {
+              "name": "hp",
+              "default": null,
+              "rule": {
+                "kind": "whole",
+                "min": 1,
+                "max": 1000
+              },
+              "unit": "hp",
+              "description": "The player's health."
+            },
+            {
+              "name": "attack",
+              "default": null,
+              "rule": {
+                "kind": "whole",
+                "min": 1,
+                "max": 1000
+              },
+              "unit": "hp",
+              "description": "Health the player's hit takes off."
+            }
+          ],
+          "requires": [],
+          "constraints": []
+        },
+        "zombie": {
+          "props": [
+            {
+              "name": "hp",
+              "default": null,
+              "rule": {
+                "kind": "whole",
+                "min": 1,
+                "max": 1000
+              },
+              "unit": "hp",
+              "description": "The zombie's health."
+            },
+            {
+              "name": "attack",
+              "default": null,
+              "rule": {
+                "kind": "whole",
+                "min": 1,
+                "max": 1000
+              },
+              "unit": "hp",
+              "description": "Health the zombie's hit takes off."
+            },
+            {
+              "name": "speed",
+              "default": null,
+              "rule": {
+                "kind": "whole",
+                "min": 1,
+                "max": 1000
+              },
+              "unit": "energy per turn",
+              "description": "Energy gained each turn; it acts on reaching 100, so 100 is the player's speed and 67 acts on 2 turns out of 3."
+            }
+          ],
+          "requires": [],
+          "constraints": []
+        }
+      },
+      "state_dump": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "StateDump",
+        "description": "Generic over the game state only so that `loom schema` can describe\neach game's dump from this same type (`docs/architecture.md` section 17).",
+        "type": "object",
+        "properties": {
+          "actions": {
+            "description": "Actions active in the last tick, sorted by name.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "axes": {
+            "description": "Every mapped axis with its value in the last tick, sorted by name.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "game": {
+            "description": "The game's own state.",
+            "$ref": "#/$defs/GameState"
+          },
+          "nodes": {
+            "description": "Local transform of every scene node, keyed by path (sorted).",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/Transform"
+            }
+          },
+          "sim_time": {
+            "description": "`tick / 60`, in seconds.",
+            "type": "number",
+            "format": "double"
+          },
+          "tick": {
+            "description": "Ticks run since the scene was loaded.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "tick",
+          "sim_time",
+          "actions",
+          "axes",
+          "nodes",
+          "game"
+        ],
+        "$defs": {
+          "GameState": {
+            "description": "The game state in the state dump (`game`).",
+            "type": "object",
+            "properties": {
+              "messages": {
+                "description": "Every message so far, oldest first.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Message"
+                }
+              },
+              "player": {
+                "$ref": "#/$defs/PlayerState"
+              },
+              "turn": {
+                "description": "Turns taken so far: moves, attacks and waits.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "zombies": {
+                "description": "In scene pre-order; dead ones stay, with `hp` 0, on their corpse.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ZombieState"
+                }
+              }
+            },
+            "required": [
+              "turn",
+              "player",
+              "zombies",
+              "messages"
+            ]
+          },
+          "Message": {
+            "description": "A line of the message log.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "description": "E.g. \"You hit z1.\" or \"You die.\"",
+                "type": "string"
+              },
+              "turn": {
+                "description": "The turn the message belongs to (after that turn was counted).",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "turn",
+              "text"
+            ]
+          },
+          "PlayerState": {
+            "description": "The player (`game.player`).",
+            "type": "object",
+            "properties": {
+              "cell": {
+                "description": "`[column, row]`; row 0 is the map's top row.",
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "hp": {
+                "description": "0 when dead.",
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "required": [
+              "cell",
+              "hp"
+            ]
+          },
+          "Transform": {
+            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
+            "type": "object",
+            "properties": {
+              "position": {
+                "description": "`[x, y, z]`, in meters.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "rotation": {
+                "description": "A unit quaternion `[x, y, z, w]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 4,
+                "minItems": 4
+              },
+              "scale": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "rotation",
+              "scale"
+            ]
+          },
+          "ZombieState": {
+            "description": "A zombie (`game.zombies[i]`).",
+            "type": "object",
+            "properties": {
+              "cell": {
+                "description": "`[column, row]`.",
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "energy": {
+                "description": "Gained `speed` per turn, spent 100 per action.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "hp": {
+                "description": "0 when dead.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "name": {
+                "description": "The node name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "cell",
+              "hp",
+              "energy"
+            ]
+          }
+        }
+      },
+      "trace_line": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TraceLine",
+        "description": "One line of a trace, the fields in this order. Generic only so that `loom schema` can describe a\ngame's lines from this same type (`docs/architecture.md` section 17).",
+        "type": "object",
+        "properties": {
+          "events": {
+            "description": "The events that tick emitted, in order.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Event"
+            }
+          },
+          "state": {
+            "description": "The state dump after the tick.",
+            "$ref": "#/$defs/StateDump"
+          },
+          "tick": {
+            "description": "The tick the line is about: its state is after that tick ran.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "tick",
+          "events",
+          "state"
+        ],
+        "$defs": {
+          "Event": {
+            "description": "One event of a tick, for traces and `loom serve`'s `step`\n(`docs/architecture.md` section 15, \"事件\"); serialized as an object\nwhose first field is `type`.",
+            "oneOf": [
+              {
+                "description": "The player bumped into a zombie, or a zombie bit the player: one\nper `You hit`, `You kill` or `bites you` message.",
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "description": "The attacker's node path.",
+                    "type": "string"
+                  },
+                  "damage": {
+                    "description": "The attacker's attack.",
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "hp": {
+                    "description": "The target's hp after the hit.",
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "result": {
+                    "$ref": "#/$defs/HitResult"
+                  },
+                  "target": {
+                    "description": "The node path of the one hit.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "hit"
+                  }
+                },
+                "required": [
+                  "type",
+                  "by",
+                  "target",
+                  "damage",
+                  "hp",
+                  "result"
+                ]
+              }
+            ]
+          },
+          "GameState": {
+            "description": "The game state in the state dump (`game`).",
+            "type": "object",
+            "properties": {
+              "messages": {
+                "description": "Every message so far, oldest first.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Message"
+                }
+              },
+              "player": {
+                "$ref": "#/$defs/PlayerState"
+              },
+              "turn": {
+                "description": "Turns taken so far: moves, attacks and waits.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "zombies": {
+                "description": "In scene pre-order; dead ones stay, with `hp` 0, on their corpse.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ZombieState"
+                }
+              }
+            },
+            "required": [
+              "turn",
+              "player",
+              "zombies",
+              "messages"
+            ]
+          },
+          "HitResult": {
+            "description": "What a hit did.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "hit"
+                ]
+              },
+              {
+                "description": "Down to 0 hp.",
+                "type": "string",
+                "const": "death"
+              }
+            ]
+          },
+          "Message": {
+            "description": "A line of the message log.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "description": "E.g. \"You hit z1.\" or \"You die.\"",
+                "type": "string"
+              },
+              "turn": {
+                "description": "The turn the message belongs to (after that turn was counted).",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "turn",
+              "text"
+            ]
+          },
+          "PlayerState": {
+            "description": "The player (`game.player`).",
+            "type": "object",
+            "properties": {
+              "cell": {
+                "description": "`[column, row]`; row 0 is the map's top row.",
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "hp": {
+                "description": "0 when dead.",
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "required": [
+              "cell",
+              "hp"
+            ]
+          },
+          "StateDump": {
+            "description": "Generic over the game state only so that `loom schema` can describe\neach game's dump from this same type (`docs/architecture.md` section 17).",
+            "type": "object",
+            "properties": {
+              "actions": {
+                "description": "Actions active in the last tick, sorted by name.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "axes": {
+                "description": "Every mapped axis with its value in the last tick, sorted by name.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "float"
+                }
+              },
+              "game": {
+                "description": "The game's own state.",
+                "$ref": "#/$defs/GameState"
+              },
+              "nodes": {
+                "description": "Local transform of every scene node, keyed by path (sorted).",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/Transform"
+                }
+              },
+              "sim_time": {
+                "description": "`tick / 60`, in seconds.",
+                "type": "number",
+                "format": "double"
+              },
+              "tick": {
+                "description": "Ticks run since the scene was loaded.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tick",
+              "sim_time",
+              "actions",
+              "axes",
+              "nodes",
+              "game"
+            ]
+          },
+          "Transform": {
+            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
+            "type": "object",
+            "properties": {
+              "position": {
+                "description": "`[x, y, z]`, in meters.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "rotation": {
+                "description": "A unit quaternion `[x, y, z, w]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 4,
+                "minItems": 4
+              },
+              "scale": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "rotation",
+              "scale"
+            ]
+          },
+          "ZombieState": {
+            "description": "A zombie (`game.zombies[i]`).",
+            "type": "object",
+            "properties": {
+              "cell": {
+                "description": "`[column, row]`.",
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "energy": {
+                "description": "Gained `speed` per turn, spent 100 per action.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "hp": {
+                "description": "0 when dead.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "name": {
+                "description": "The node name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "cell",
+              "hp",
+              "energy"
+            ]
+          }
+        }
+      },
+      "event": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Event",
+        "description": "One event of a tick, for traces and `loom serve`'s `step`\n(`docs/architecture.md` section 15, \"事件\"); serialized as an object\nwhose first field is `type`.",
+        "oneOf": [
+          {
+            "description": "The player bumped into a zombie, or a zombie bit the player: one\nper `You hit`, `You kill` or `bites you` message.",
+            "type": "object",
+            "properties": {
+              "by": {
+                "description": "The attacker's node path.",
+                "type": "string"
+              },
+              "damage": {
+                "description": "The attacker's attack.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "hp": {
+                "description": "The target's hp after the hit.",
+                "type": "integer",
+                "format": "int32"
+              },
+              "result": {
+                "$ref": "#/$defs/HitResult"
+              },
+              "target": {
+                "description": "The node path of the one hit.",
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "hit"
+              }
+            },
+            "required": [
+              "type",
+              "by",
+              "target",
+              "damage",
+              "hp",
+              "result"
+            ]
+          }
+        ],
+        "$defs": {
+          "HitResult": {
+            "description": "What a hit did.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "hit"
+                ]
+              },
+              {
+                "description": "Down to 0 hp.",
+                "type": "string",
+                "const": "death"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "souls": {
+      "props": {
+        "character": {
+          "props": [
+            {
+              "name": "stamina_max",
+              "default": 100.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "stamina points",
+              "description": "The most stamina the character has."
+            },
+            {
+              "name": "stamina_regen",
+              "default": 45.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "stamina points per second",
+              "description": "How fast stamina comes back."
+            },
+            {
+              "name": "stamina_delay_ticks",
+              "default": 30.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "ticks",
+              "description": "Ticks after using stamina before it comes back."
+            },
+            {
+              "name": "tap_ticks",
+              "default": 15.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Releasing roll within this many ticks is a tap (a roll, or a backstep without a direction); held longer, it sprints."
+            },
+            {
+              "name": "sprint_speed",
+              "default": 6.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters per second",
+              "description": "Speed while sprinting."
+            },
+            {
+              "name": "sprint_cost",
+              "default": 15.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "stamina points per second",
+              "description": "Stamina used while sprinting."
+            },
+            {
+              "name": "roll_cost",
+              "default": 20.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "stamina points",
+              "description": "Stamina a roll uses."
+            },
+            {
+              "name": "roll_ticks",
+              "default": 32.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "How long a roll lasts."
+            },
+            {
+              "name": "roll_distance",
+              "default": 3.2,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "How far a roll goes."
+            },
+            {
+              "name": "roll_invuln_from",
+              "default": 1.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Invulnerable from this tick of the roll (1-based)."
+            },
+            {
+              "name": "roll_invuln_to",
+              "default": 20.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Invulnerable up to this tick of the roll, inclusive."
+            },
+            {
+              "name": "backstep_cost",
+              "default": 12.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "stamina points",
+              "description": "Stamina a backstep uses."
+            },
+            {
+              "name": "backstep_ticks",
+              "default": 20.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "How long a backstep lasts."
+            },
+            {
+              "name": "backstep_distance",
+              "default": 1.5,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "How far a backstep goes."
+            },
+            {
+              "name": "backstep_invuln_from",
+              "default": 1.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Invulnerable from this tick of the backstep (1-based)."
+            },
+            {
+              "name": "backstep_invuln_to",
+              "default": 8.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Invulnerable up to this tick of the backstep, inclusive."
+            },
+            {
+              "name": "attack_cost",
+              "default": 15.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "stamina points",
+              "description": "Stamina a light attack uses."
+            },
+            {
+              "name": "attack_startup_ticks",
+              "default": 10.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Light attack: before the swing; the character can still turn."
+            },
+            {
+              "name": "attack_active_ticks",
+              "default": 4.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Light attack: the swing, sliding forward."
+            },
+            {
+              "name": "attack_recovery_ticks",
+              "default": 16.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Light attack: after the swing; the next action can be buffered."
+            },
+            {
+              "name": "attack_distance",
+              "default": 0.3,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Light attack: how far the character slides during the swing."
+            },
+            {
+              "name": "heavy_cost",
+              "default": 25.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "stamina points",
+              "description": "Stamina a heavy attack uses."
+            },
+            {
+              "name": "heavy_startup_ticks",
+              "default": 22.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Heavy attack: before the swing; the character can still turn."
+            },
+            {
+              "name": "heavy_active_ticks",
+              "default": 5.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Heavy attack: the swing, sliding forward."
+            },
+            {
+              "name": "heavy_recovery_ticks",
+              "default": 23.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Heavy attack: after the swing; the next action can be buffered."
+            },
+            {
+              "name": "heavy_distance",
+              "default": 0.6,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Heavy attack: how far the character slides during the swing."
+            },
+            {
+              "name": "attack_turn_speed",
+              "default": 180.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "degrees per second",
+              "description": "How fast the character turns during an attack's startup."
+            },
+            {
+              "name": "combo_max",
+              "default": 3.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "attacks",
+              "description": "The most light attacks in a row."
+            },
+            {
+              "name": "lock_range",
+              "default": 15.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Targets this close can be locked on to."
+            },
+            {
+              "name": "lock_break_range",
+              "default": 20.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "A locked-on target farther than this is let go."
+            },
+            {
+              "name": "lock_angle",
+              "default": 60.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "degrees",
+              "description": "Targets this far from where the camera looks can be locked on to."
+            },
+            {
+              "name": "lock_camera_speed",
+              "default": 360.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "degrees per second",
+              "description": "How fast the camera follows the locked-on target."
+            },
+            {
+              "name": "lock_pitch_down",
+              "default": 15.0,
+              "rule": {
+                "kind": "below",
+                "min": 0.0,
+                "max": 90.0
+              },
+              "unit": "degrees",
+              "description": "How far below the lock point the camera looks."
+            },
+            {
+              "name": "switch_threshold",
+              "default": 0.1,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "radians",
+              "description": "look_x flicked while locked on, summed up to this, switches targets."
+            },
+            {
+              "name": "switch_cooldown_ticks",
+              "default": 20.0,
+              "rule": {
+                "kind": "whole",
+                "min": 0
+              },
+              "unit": "ticks",
+              "description": "Ticks after a switch before the next one."
+            },
+            {
+              "name": "attack_reach",
+              "default": 2.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Radius of the light attack's sweep."
+            },
+            {
+              "name": "attack_arc",
+              "default": 120.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Angle the light attack sweeps, right to left, centered on the facing."
+            },
+            {
+              "name": "heavy_reach",
+              "default": 2.4,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Radius of the heavy attack's sweep."
+            },
+            {
+              "name": "heavy_arc",
+              "default": 90.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Angle the heavy attack sweeps, right to left, centered on the facing."
+            },
+            {
+              "name": "swing_low",
+              "default": 0.3,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Above the target's feet: the bottom of the band the character's attacks sweep."
+            },
+            {
+              "name": "swing_high",
+              "default": 1.6,
+              "rule": {
+                "kind": "any"
+              },
+              "unit": "meters",
+              "description": "Above the target's feet: the top of that band."
+            },
+            {
+              "name": "attack_damage",
+              "default": 20.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Health a light hit takes off."
+            },
+            {
+              "name": "heavy_damage",
+              "default": 35.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Health a heavy hit takes off."
+            },
+            {
+              "name": "attack_impact",
+              "default": 10.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "What a light hit adds up against the target's poise."
+            },
+            {
+              "name": "heavy_impact",
+              "default": 30.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "What a heavy hit adds up against the target's poise."
+            },
+            {
+              "name": "hp",
+              "default": 100.0,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "The character's own health."
+            },
+            {
+              "name": "poise",
+              "default": 0.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "Impacts added up past this stagger the character; 0: every hit with any impact does."
+            },
+            {
+              "name": "stagger_ticks",
+              "default": 30.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "How long a stagger lasts."
+            },
+            {
+              "name": "poise_reset_ticks",
+              "default": 60.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Ticks without a hit before impacts are forgotten."
+            },
+            {
+              "name": "respawn_ticks",
+              "default": 120.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Ticks lying dead before coming back at the start."
+            }
+          ],
+          "requires": [],
+          "constraints": [
+            "1 <= roll_invuln_from <= roll_invuln_to <= roll_ticks",
+            "1 <= backstep_invuln_from <= backstep_invuln_to <= backstep_ticks",
+            "lock_range <= lock_break_range",
+            "swing_low < swing_high",
+            "each move per tick is shorter than the capsule radius: sprint_speed / 60, roll_distance / roll_ticks, backstep_distance / backstep_ticks, attack_distance / attack_active_ticks, heavy_distance / heavy_active_ticks"
+          ]
+        },
+        "node": {
+          "props": [
+            {
+              "name": "lock_height",
+              "default": null,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Makes the node a lock-on target, locked on this far above its position."
+            },
+            {
+              "name": "hurt_radius",
+              "default": null,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "With hurt_height, makes the node a hurtbox: a vertical cylinder of this radius around its position."
+            },
+            {
+              "name": "hurt_height",
+              "default": null,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "With hurt_radius: the height of the cylinder, from the node's position up."
+            },
+            {
+              "name": "hp",
+              "default": null,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Gives a hurtbox health: it takes damage, staggers and dies."
+            },
+            {
+              "name": "poise",
+              "default": 0.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "Impacts added up past this stagger it."
+            },
+            {
+              "name": "stagger_ticks",
+              "default": 30.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "How long a stagger lasts."
+            },
+            {
+              "name": "poise_reset_ticks",
+              "default": 60.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Ticks without a hit before impacts are forgotten."
+            },
+            {
+              "name": "revive_ticks",
+              "default": 180.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "Ticks lying dead before coming back with full health."
+            },
+            {
+              "name": "swing_damage",
+              "default": null,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "hp",
+              "description": "Makes the node a swinger, swinging at the character: health a hit takes off it."
+            },
+            {
+              "name": "swing_impact",
+              "default": 20.0,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "impact",
+              "description": "What a hit adds up against the character's poise."
+            },
+            {
+              "name": "swing_startup_ticks",
+              "default": 40.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "The warning before the swing."
+            },
+            {
+              "name": "swing_active_ticks",
+              "default": 6.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "The swing."
+            },
+            {
+              "name": "swing_recovery_ticks",
+              "default": 74.0,
+              "rule": {
+                "kind": "whole",
+                "min": 1
+              },
+              "unit": "ticks",
+              "description": "After the swing, until the next round."
+            },
+            {
+              "name": "swing_reach",
+              "default": 2.2,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Radius of the swept sector."
+            },
+            {
+              "name": "swing_arc",
+              "default": 150.0,
+              "rule": {
+                "kind": "arc"
+              },
+              "unit": "degrees",
+              "description": "Angle swept, right to left, centered on -Z."
+            },
+            {
+              "name": "swing_low",
+              "default": 0.3,
+              "rule": {
+                "kind": "at_least",
+                "min": 0.0
+              },
+              "unit": "meters",
+              "description": "Above the character's feet: the bottom of the band the swing sweeps."
+            },
+            {
+              "name": "swing_high",
+              "default": 1.6,
+              "rule": {
+                "kind": "positive"
+              },
+              "unit": "meters",
+              "description": "Above the character's feet: the top of the band the swing sweeps."
+            }
+          ],
+          "requires": [
+            "hurt_radius and hurt_height: both or neither",
+            "hp: needs hurt_radius and hurt_height",
+            "poise, stagger_ticks, poise_reset_ticks, revive_ticks: need hp",
+            "swing_impact, swing_startup_ticks, swing_active_ticks, swing_recovery_ticks, swing_reach, swing_arc, swing_low, swing_high: need swing_damage"
+          ],
+          "constraints": [
+            "a swinger: swing_low < swing_high",
+            "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
+            "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
+            "a swinger: its child named arm, if any, needs a mesh"
+          ]
+        }
+      },
+      "state_dump": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "StateDump",
+        "description": "Generic over the game state only so that `loom schema` can describe\neach game's dump from this same type (`docs/architecture.md` section 17).",
+        "type": "object",
+        "properties": {
+          "actions": {
+            "description": "Actions active in the last tick, sorted by name.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "axes": {
+            "description": "Every mapped axis with its value in the last tick, sorted by name.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "game": {
+            "description": "The game's own state.",
+            "$ref": "#/$defs/GameState"
+          },
+          "nodes": {
+            "description": "Local transform of every scene node, keyed by path (sorted).",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/Transform"
+            }
+          },
+          "sim_time": {
+            "description": "`tick / 60`, in seconds.",
+            "type": "number",
+            "format": "double"
+          },
+          "tick": {
+            "description": "Ticks run since the scene was loaded.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "tick",
+          "sim_time",
+          "actions",
+          "axes",
+          "nodes",
+          "game"
+        ],
+        "$defs": {
+          "Action": {
+            "description": "What the character is doing; serialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "sprint",
+                  "roll",
+                  "backstep"
+                ]
+              },
+              {
+                "description": "A light attack.",
+                "type": "string",
+                "const": "attack"
+              },
+              {
+                "description": "A heavy attack.",
+                "type": "string",
+                "const": "heavy"
+              }
+            ]
+          },
+          "AttackPhase": {
+            "description": "The part of an attack; serialized in lower case.",
+            "type": "string",
+            "enum": [
+              "startup",
+              "active",
+              "recovery"
+            ]
+          },
+          "Buffered": {
+            "description": "An action pressed during an attack, to start once it is over;\nserialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "attack",
+                  "heavy"
+                ]
+              },
+              {
+                "description": "The roll key: a roll, or a backstep without a direction.",
+                "type": "string",
+                "const": "roll"
+              }
+            ]
+          },
+          "CameraState": {
+            "description": "The orbit camera (`game.camera`).",
+            "type": "object",
+            "properties": {
+              "distance": {
+                "description": "Meters from the pivot to the camera: the orbit distance, or less\nwhile something is in the way.",
+                "type": "number",
+                "format": "float"
+              },
+              "pitch": {
+                "description": "Radians; positive looks up.",
+                "type": "number",
+                "format": "float"
+              },
+              "yaw": {
+                "description": "Radians around +Y; 0 looks along -Z.",
+                "type": "number",
+                "format": "float"
+              }
+            },
+            "required": [
+              "yaw",
+              "pitch",
+              "distance"
+            ]
+          },
+          "Condition": {
+            "description": "Whether a hurtbox with health stands, reels or lies dead; serialized in\nlower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "dead"
+                ]
+              },
+              {
+                "description": "Staggered: the impacts added up past its poise.",
+                "type": "string",
+                "const": "stagger"
+              }
+            ]
+          },
+          "GameState": {
+            "description": "The game state in the state dump (`game`).",
+            "type": "object",
+            "properties": {
+              "camera": {
+                "$ref": "#/$defs/CameraState"
+              },
+              "hurtboxes": {
+                "description": "Every hurtbox, in pre-order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/HurtboxState"
+                }
+              },
+              "lock": {
+                "description": "The path of the locked-on target; `None` when not locked on.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "player": {
+                "$ref": "#/$defs/PlayerState"
+              },
+              "swingers": {
+                "description": "Every swinger, in pre-order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/SwingerState"
+                }
+              }
+            },
+            "required": [
+              "player",
+              "camera",
+              "lock",
+              "hurtboxes",
+              "swingers"
+            ]
+          },
+          "HealthState": {
+            "description": "A hurtbox's health in the state dump (`game.hurtboxes[i].health`).",
+            "type": "object",
+            "properties": {
+              "hp": {
+                "description": "From 0 to the full `hp`.",
+                "type": "number",
+                "format": "float"
+              },
+              "impact": {
+                "description": "Impacts added up since the last stagger or reset.",
+                "type": "number",
+                "format": "float"
+              },
+              "impact_wait": {
+                "description": "Ticks left before `impact` goes back to 0; 0 when not waiting.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "state": {
+                "$ref": "#/$defs/Condition"
+              },
+              "state_ticks": {
+                "description": "Ticks left of the stagger or of death; 0 while `Ok`.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "hp",
+              "state",
+              "state_ticks",
+              "impact",
+              "impact_wait"
+            ]
+          },
+          "HurtboxState": {
+            "description": "A hurtbox in the state dump (`game.hurtboxes`).",
+            "type": "object",
+            "properties": {
+              "health": {
+                "description": "`None` without an `hp` prop.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/HealthState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hits": {
+                "description": "Times hit since loading.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "last_hit": {
+                "description": "The latest hit; `None` before the first.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LastHit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "node": {
+                "description": "The node's path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "node",
+              "hits",
+              "last_hit",
+              "health"
+            ]
+          },
+          "LastHit": {
+            "description": "One hit on a hurtbox.",
+            "type": "object",
+            "properties": {
+              "attack": {
+                "description": "`Attack` or `Heavy`.",
+                "$ref": "#/$defs/Action"
+              },
+              "combo": {
+                "description": "The attack's `combo` (0 for a heavy attack).",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "tick": {
+                "description": "The tick it happened on, as in the state dump's `tick`.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tick",
+              "attack",
+              "combo"
+            ]
+          },
+          "PlayerHit": {
+            "description": "One hit on the character.",
+            "type": "object",
+            "properties": {
+              "by": {
+                "description": "The path of the swinger that hit.",
+                "type": "string"
+              },
+              "tick": {
+                "description": "The tick it happened on, as in the state dump's `tick`.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tick",
+              "by"
+            ]
+          },
+          "PlayerState": {
+            "description": "The character (`game.player`).",
+            "type": "object",
+            "properties": {
+              "action": {
+                "$ref": "#/$defs/Action"
+              },
+              "action_tick": {
+                "description": "Which tick of a roll, backstep or attack this is, from 1; 0\notherwise.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "attack_phase": {
+                "description": "The part of the attack running; `None` outside attacks.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AttackPhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffered": {
+                "description": "The action to start once the running attack is over.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Buffered"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "combo": {
+                "description": "Which light attack of a combo this is, from 1; 0 otherwise.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "facing": {
+                "description": "Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.",
+                "type": "number",
+                "format": "float"
+              },
+              "health": {
+                "$ref": "#/$defs/HealthState"
+              },
+              "hits": {
+                "description": "Times a swinger hit the character since loading.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "invulnerable": {
+                "description": "Inside the invulnerability window of a roll or backstep: swings\nmiss.",
+                "type": "boolean"
+              },
+              "last_hit": {
+                "description": "The latest hit on the character; `None` before the first.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PlayerHit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "position": {
+                "description": "Feet position in meters; serialized as `[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "stamina": {
+                "description": "From 0 to `stamina_max`.",
+                "type": "number",
+                "format": "float"
+              },
+              "stamina_wait": {
+                "description": "Ticks left before stamina starts coming back.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "position",
+              "facing",
+              "stamina",
+              "stamina_wait",
+              "action",
+              "action_tick",
+              "invulnerable",
+              "attack_phase",
+              "combo",
+              "buffered",
+              "hits",
+              "last_hit",
+              "health"
+            ]
+          },
+          "SwingerState": {
+            "description": "A swinger in the state dump (`game.swingers`).",
+            "type": "object",
+            "properties": {
+              "node": {
+                "description": "The node's path.",
+                "type": "string"
+              },
+              "phase": {
+                "description": "`None` when `swing_tick` is 0.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AttackPhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "swing_tick": {
+                "description": "Which tick of the round, from 1 to its length; 0 while staggered or\ndead.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "node",
+              "swing_tick",
+              "phase"
+            ]
+          },
+          "Transform": {
+            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
+            "type": "object",
+            "properties": {
+              "position": {
+                "description": "`[x, y, z]`, in meters.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "rotation": {
+                "description": "A unit quaternion `[x, y, z, w]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 4,
+                "minItems": 4
+              },
+              "scale": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "rotation",
+              "scale"
+            ]
+          }
+        }
+      },
+      "trace_line": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TraceLine",
+        "description": "One line of a trace, the fields in this order. Generic only so that `loom schema` can describe a\ngame's lines from this same type (`docs/architecture.md` section 17).",
+        "type": "object",
+        "properties": {
+          "events": {
+            "description": "The events that tick emitted, in order.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Event"
+            }
+          },
+          "state": {
+            "description": "The state dump after the tick.",
+            "$ref": "#/$defs/StateDump"
+          },
+          "tick": {
+            "description": "The tick the line is about: its state is after that tick ran.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "tick",
+          "events",
+          "state"
+        ],
+        "$defs": {
+          "Action": {
+            "description": "What the character is doing; serialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "sprint",
+                  "roll",
+                  "backstep"
+                ]
+              },
+              {
+                "description": "A light attack.",
+                "type": "string",
+                "const": "attack"
+              },
+              {
+                "description": "A heavy attack.",
+                "type": "string",
+                "const": "heavy"
+              }
+            ]
+          },
+          "AttackPhase": {
+            "description": "The part of an attack; serialized in lower case.",
+            "type": "string",
+            "enum": [
+              "startup",
+              "active",
+              "recovery"
+            ]
+          },
+          "Buffered": {
+            "description": "An action pressed during an attack, to start once it is over;\nserialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "attack",
+                  "heavy"
+                ]
+              },
+              {
+                "description": "The roll key: a roll, or a backstep without a direction.",
+                "type": "string",
+                "const": "roll"
+              }
+            ]
+          },
+          "CameraState": {
+            "description": "The orbit camera (`game.camera`).",
+            "type": "object",
+            "properties": {
+              "distance": {
+                "description": "Meters from the pivot to the camera: the orbit distance, or less\nwhile something is in the way.",
+                "type": "number",
+                "format": "float"
+              },
+              "pitch": {
+                "description": "Radians; positive looks up.",
+                "type": "number",
+                "format": "float"
+              },
+              "yaw": {
+                "description": "Radians around +Y; 0 looks along -Z.",
+                "type": "number",
+                "format": "float"
+              }
+            },
+            "required": [
+              "yaw",
+              "pitch",
+              "distance"
+            ]
+          },
+          "Condition": {
+            "description": "Whether a hurtbox with health stands, reels or lies dead; serialized in\nlower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "dead"
+                ]
+              },
+              {
+                "description": "Staggered: the impacts added up past its poise.",
+                "type": "string",
+                "const": "stagger"
+              }
+            ]
+          },
+          "DropReason": {
+            "description": "Why a press had no effect; when several apply, the first in this order.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dead",
+                  "staggered",
+                  "no_stamina"
+                ]
+              },
+              {
+                "description": "Rolling or backstepping.",
+                "type": "string",
+                "const": "rolling"
+              },
+              {
+                "description": "In an attack's startup.",
+                "type": "string",
+                "const": "startup"
+              },
+              {
+                "description": "A press of higher priority (or the buffered action) took effect.",
+                "type": "string",
+                "const": "outranked"
+              },
+              {
+                "description": "The lock key found nothing to lock on to.",
+                "type": "string",
+                "const": "no_target"
+              }
+            ]
+          },
+          "EndReason": {
+            "description": "Why an action ended.",
+            "oneOf": [
+              {
+                "description": "Ran its ticks, or the sprint stopped.",
+                "type": "string",
+                "const": "finished"
+              },
+              {
+                "description": "Staggered or killed.",
+                "type": "string",
+                "const": "interrupted"
+              }
+            ]
+          },
+          "Event": {
+            "description": "One event; serialized as an object whose first field is `type`.",
+            "oneOf": [
+              {
+                "description": "The character hit a hurtbox, or a swinger hit the character.",
+                "type": "object",
+                "properties": {
+                  "attack": {
+                    "$ref": "#/$defs/HitAttack"
+                  },
+                  "by": {
+                    "description": "The character's node path, or the swinger's.",
+                    "type": "string"
+                  },
+                  "combo": {
+                    "description": "The light attack's `combo`; 0 otherwise.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "damage": {
+                    "description": "`None` when the target has no health.",
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "float"
+                  },
+                  "hp": {
+                    "description": "The target's health after the hit; `None` without health.",
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "float"
+                  },
+                  "result": {
+                    "$ref": "#/$defs/Outcome"
+                  },
+                  "target": {
+                    "description": "The hurtbox's path, or the character's.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "hit"
+                  }
+                },
+                "required": [
+                  "type",
+                  "by",
+                  "target",
+                  "attack",
+                  "combo",
+                  "damage",
+                  "hp",
+                  "result"
+                ]
+              },
+              {
+                "description": "A swinger's slice touched the character while invulnerable.",
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "description": "`Roll` or `Backstep`.",
+                    "$ref": "#/$defs/Action"
+                  },
+                  "action_tick": {
+                    "description": "Which tick of the roll or backstep, from 1.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "by": {
+                    "description": "The swinger's node path.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "dodged"
+                  }
+                },
+                "required": [
+                  "type",
+                  "by",
+                  "action",
+                  "action_tick"
+                ]
+              },
+              {
+                "description": "A press that had no effect at all.",
+                "type": "object",
+                "properties": {
+                  "buffered": {
+                    "description": "Only for `NoStamina`: the dropped input was the buffered one.",
+                    "type": "boolean"
+                  },
+                  "input": {
+                    "$ref": "#/$defs/Input"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/DropReason"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "input_dropped"
+                  }
+                },
+                "required": [
+                  "type",
+                  "input",
+                  "reason",
+                  "buffered"
+                ]
+              },
+              {
+                "description": "A press replaced the buffered action.",
+                "type": "object",
+                "properties": {
+                  "new": {
+                    "$ref": "#/$defs/Buffered"
+                  },
+                  "old": {
+                    "$ref": "#/$defs/Buffered"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "buffer_replaced"
+                  }
+                },
+                "required": [
+                  "type",
+                  "old",
+                  "new"
+                ]
+              },
+              {
+                "description": "The character started an action.",
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "description": "Never `Idle`.",
+                    "$ref": "#/$defs/Action"
+                  },
+                  "buffered": {
+                    "description": "Started from the buffer.",
+                    "type": "boolean"
+                  },
+                  "combo": {
+                    "description": "Which light attack of a combo, from 1; 0 for other actions.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "action_start"
+                  }
+                },
+                "required": [
+                  "type",
+                  "action",
+                  "combo",
+                  "buffered"
+                ]
+              },
+              {
+                "description": "The character's action ended, back to idle.",
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "$ref": "#/$defs/Action"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/EndReason"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "action_end"
+                  }
+                },
+                "required": [
+                  "type",
+                  "action",
+                  "reason"
+                ]
+              },
+              {
+                "description": "The lock-on target changed.",
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "$ref": "#/$defs/LockReason"
+                  },
+                  "target": {
+                    "description": "The new target's node path; `None` when let go of.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "lock"
+                  }
+                },
+                "required": [
+                  "type",
+                  "target",
+                  "reason"
+                ]
+              },
+              {
+                "description": "A hurtbox came back to life (step 0b).",
+                "type": "object",
+                "properties": {
+                  "node": {
+                    "description": "The hurtbox's node path.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "revive"
+                  }
+                },
+                "required": [
+                  "type",
+                  "node"
+                ]
+              },
+              {
+                "description": "The character came back to life at its spawn point (step 0b).",
+                "type": "object",
+                "properties": {
+                  "position": {
+                    "description": "`[x, y, z]`.",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "maxItems": 3,
+                    "minItems": 3
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "respawn"
+                  }
+                },
+                "required": [
+                  "type",
+                  "position"
+                ]
+              }
+            ]
+          },
+          "GameState": {
+            "description": "The game state in the state dump (`game`).",
+            "type": "object",
+            "properties": {
+              "camera": {
+                "$ref": "#/$defs/CameraState"
+              },
+              "hurtboxes": {
+                "description": "Every hurtbox, in pre-order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/HurtboxState"
+                }
+              },
+              "lock": {
+                "description": "The path of the locked-on target; `None` when not locked on.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "player": {
+                "$ref": "#/$defs/PlayerState"
+              },
+              "swingers": {
+                "description": "Every swinger, in pre-order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/SwingerState"
+                }
+              }
+            },
+            "required": [
+              "player",
+              "camera",
+              "lock",
+              "hurtboxes",
+              "swingers"
+            ]
+          },
+          "HealthState": {
+            "description": "A hurtbox's health in the state dump (`game.hurtboxes[i].health`).",
+            "type": "object",
+            "properties": {
+              "hp": {
+                "description": "From 0 to the full `hp`.",
+                "type": "number",
+                "format": "float"
+              },
+              "impact": {
+                "description": "Impacts added up since the last stagger or reset.",
+                "type": "number",
+                "format": "float"
+              },
+              "impact_wait": {
+                "description": "Ticks left before `impact` goes back to 0; 0 when not waiting.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "state": {
+                "$ref": "#/$defs/Condition"
+              },
+              "state_ticks": {
+                "description": "Ticks left of the stagger or of death; 0 while `Ok`.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "hp",
+              "state",
+              "state_ticks",
+              "impact",
+              "impact_wait"
+            ]
+          },
+          "HitAttack": {
+            "description": "What hit: the character's light or heavy attack, or a swinger.",
+            "type": "string",
+            "enum": [
+              "attack",
+              "heavy",
+              "swing"
+            ]
+          },
+          "HurtboxState": {
+            "description": "A hurtbox in the state dump (`game.hurtboxes`).",
+            "type": "object",
+            "properties": {
+              "health": {
+                "description": "`None` without an `hp` prop.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/HealthState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hits": {
+                "description": "Times hit since loading.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "last_hit": {
+                "description": "The latest hit; `None` before the first.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LastHit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "node": {
+                "description": "The node's path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "node",
+              "hits",
+              "last_hit",
+              "health"
+            ]
+          },
+          "Input": {
+            "description": "A pressed input: the roll key's tap, or the lock key.",
+            "type": "string",
+            "enum": [
+              "attack",
+              "heavy",
+              "roll",
+              "lock"
+            ]
+          },
+          "LastHit": {
+            "description": "One hit on a hurtbox.",
+            "type": "object",
+            "properties": {
+              "attack": {
+                "description": "`Attack` or `Heavy`.",
+                "$ref": "#/$defs/Action"
+              },
+              "combo": {
+                "description": "The attack's `combo` (0 for a heavy attack).",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "tick": {
+                "description": "The tick it happened on, as in the state dump's `tick`.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tick",
+              "attack",
+              "combo"
+            ]
+          },
+          "LockReason": {
+            "description": "Why the lock-on target changed.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "out_of_range",
+                  "target_died"
+                ]
+              },
+              {
+                "description": "The lock key locked on or let go.",
+                "type": "string",
+                "const": "pressed"
+              },
+              {
+                "description": "A sideways flick switched targets.",
+                "type": "string",
+                "const": "switched"
+              },
+              {
+                "description": "The character died.",
+                "type": "string",
+                "const": "died"
+              }
+            ]
+          },
+          "Outcome": {
+            "description": "What a hit did to the target.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "death"
+                ]
+              },
+              {
+                "description": "Neither of the others (always, without health).",
+                "type": "string",
+                "const": "hit"
+              },
+              {
+                "description": "Staggered it, or staggered it again.",
+                "type": "string",
+                "const": "stagger"
+              }
+            ]
+          },
+          "PlayerHit": {
+            "description": "One hit on the character.",
+            "type": "object",
+            "properties": {
+              "by": {
+                "description": "The path of the swinger that hit.",
+                "type": "string"
+              },
+              "tick": {
+                "description": "The tick it happened on, as in the state dump's `tick`.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tick",
+              "by"
+            ]
+          },
+          "PlayerState": {
+            "description": "The character (`game.player`).",
+            "type": "object",
+            "properties": {
+              "action": {
+                "$ref": "#/$defs/Action"
+              },
+              "action_tick": {
+                "description": "Which tick of a roll, backstep or attack this is, from 1; 0\notherwise.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "attack_phase": {
+                "description": "The part of the attack running; `None` outside attacks.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AttackPhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffered": {
+                "description": "The action to start once the running attack is over.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Buffered"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "combo": {
+                "description": "Which light attack of a combo this is, from 1; 0 otherwise.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "facing": {
+                "description": "Heading in radians around +Y, in `[-π, π)`; 0 faces -Z.",
+                "type": "number",
+                "format": "float"
+              },
+              "health": {
+                "$ref": "#/$defs/HealthState"
+              },
+              "hits": {
+                "description": "Times a swinger hit the character since loading.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "invulnerable": {
+                "description": "Inside the invulnerability window of a roll or backstep: swings\nmiss.",
+                "type": "boolean"
+              },
+              "last_hit": {
+                "description": "The latest hit on the character; `None` before the first.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PlayerHit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "position": {
+                "description": "Feet position in meters; serialized as `[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "stamina": {
+                "description": "From 0 to `stamina_max`.",
+                "type": "number",
+                "format": "float"
+              },
+              "stamina_wait": {
+                "description": "Ticks left before stamina starts coming back.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "position",
+              "facing",
+              "stamina",
+              "stamina_wait",
+              "action",
+              "action_tick",
+              "invulnerable",
+              "attack_phase",
+              "combo",
+              "buffered",
+              "hits",
+              "last_hit",
+              "health"
+            ]
+          },
+          "StateDump": {
+            "description": "Generic over the game state only so that `loom schema` can describe\neach game's dump from this same type (`docs/architecture.md` section 17).",
+            "type": "object",
+            "properties": {
+              "actions": {
+                "description": "Actions active in the last tick, sorted by name.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true
+              },
+              "axes": {
+                "description": "Every mapped axis with its value in the last tick, sorted by name.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "float"
+                }
+              },
+              "game": {
+                "description": "The game's own state.",
+                "$ref": "#/$defs/GameState"
+              },
+              "nodes": {
+                "description": "Local transform of every scene node, keyed by path (sorted).",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/Transform"
+                }
+              },
+              "sim_time": {
+                "description": "`tick / 60`, in seconds.",
+                "type": "number",
+                "format": "double"
+              },
+              "tick": {
+                "description": "Ticks run since the scene was loaded.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tick",
+              "sim_time",
+              "actions",
+              "axes",
+              "nodes",
+              "game"
+            ]
+          },
+          "SwingerState": {
+            "description": "A swinger in the state dump (`game.swingers`).",
+            "type": "object",
+            "properties": {
+              "node": {
+                "description": "The node's path.",
+                "type": "string"
+              },
+              "phase": {
+                "description": "`None` when `swing_tick` is 0.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AttackPhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "swing_tick": {
+                "description": "Which tick of the round, from 1 to its length; 0 while staggered or\ndead.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "node",
+              "swing_tick",
+              "phase"
+            ]
+          },
+          "Transform": {
+            "description": "Local transform, relative to the parent node. Serializes as\n`{\"position\": [x, y, z], \"rotation\": [x, y, z, w], \"scale\": [x, y, z]}`.",
+            "type": "object",
+            "properties": {
+              "position": {
+                "description": "`[x, y, z]`, in meters.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "rotation": {
+                "description": "A unit quaternion `[x, y, z, w]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 4,
+                "minItems": 4
+              },
+              "scale": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              }
+            },
+            "required": [
+              "position",
+              "rotation",
+              "scale"
+            ]
+          }
+        }
+      },
+      "event": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Event",
+        "description": "One event; serialized as an object whose first field is `type`.",
+        "oneOf": [
+          {
+            "description": "The character hit a hurtbox, or a swinger hit the character.",
+            "type": "object",
+            "properties": {
+              "attack": {
+                "$ref": "#/$defs/HitAttack"
+              },
+              "by": {
+                "description": "The character's node path, or the swinger's.",
+                "type": "string"
+              },
+              "combo": {
+                "description": "The light attack's `combo`; 0 otherwise.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "damage": {
+                "description": "`None` when the target has no health.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "float"
+              },
+              "hp": {
+                "description": "The target's health after the hit; `None` without health.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "float"
+              },
+              "result": {
+                "$ref": "#/$defs/Outcome"
+              },
+              "target": {
+                "description": "The hurtbox's path, or the character's.",
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "hit"
+              }
+            },
+            "required": [
+              "type",
+              "by",
+              "target",
+              "attack",
+              "combo",
+              "damage",
+              "hp",
+              "result"
+            ]
+          },
+          {
+            "description": "A swinger's slice touched the character while invulnerable.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "description": "`Roll` or `Backstep`.",
+                "$ref": "#/$defs/Action"
+              },
+              "action_tick": {
+                "description": "Which tick of the roll or backstep, from 1.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "by": {
+                "description": "The swinger's node path.",
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "dodged"
+              }
+            },
+            "required": [
+              "type",
+              "by",
+              "action",
+              "action_tick"
+            ]
+          },
+          {
+            "description": "A press that had no effect at all.",
+            "type": "object",
+            "properties": {
+              "buffered": {
+                "description": "Only for `NoStamina`: the dropped input was the buffered one.",
+                "type": "boolean"
+              },
+              "input": {
+                "$ref": "#/$defs/Input"
+              },
+              "reason": {
+                "$ref": "#/$defs/DropReason"
+              },
+              "type": {
+                "type": "string",
+                "const": "input_dropped"
+              }
+            },
+            "required": [
+              "type",
+              "input",
+              "reason",
+              "buffered"
+            ]
+          },
+          {
+            "description": "A press replaced the buffered action.",
+            "type": "object",
+            "properties": {
+              "new": {
+                "$ref": "#/$defs/Buffered"
+              },
+              "old": {
+                "$ref": "#/$defs/Buffered"
+              },
+              "type": {
+                "type": "string",
+                "const": "buffer_replaced"
+              }
+            },
+            "required": [
+              "type",
+              "old",
+              "new"
+            ]
+          },
+          {
+            "description": "The character started an action.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "description": "Never `Idle`.",
+                "$ref": "#/$defs/Action"
+              },
+              "buffered": {
+                "description": "Started from the buffer.",
+                "type": "boolean"
+              },
+              "combo": {
+                "description": "Which light attack of a combo, from 1; 0 for other actions.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "action_start"
+              }
+            },
+            "required": [
+              "type",
+              "action",
+              "combo",
+              "buffered"
+            ]
+          },
+          {
+            "description": "The character's action ended, back to idle.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "$ref": "#/$defs/Action"
+              },
+              "reason": {
+                "$ref": "#/$defs/EndReason"
+              },
+              "type": {
+                "type": "string",
+                "const": "action_end"
+              }
+            },
+            "required": [
+              "type",
+              "action",
+              "reason"
+            ]
+          },
+          {
+            "description": "The lock-on target changed.",
+            "type": "object",
+            "properties": {
+              "reason": {
+                "$ref": "#/$defs/LockReason"
+              },
+              "target": {
+                "description": "The new target's node path; `None` when let go of.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "const": "lock"
+              }
+            },
+            "required": [
+              "type",
+              "target",
+              "reason"
+            ]
+          },
+          {
+            "description": "A hurtbox came back to life (step 0b).",
+            "type": "object",
+            "properties": {
+              "node": {
+                "description": "The hurtbox's node path.",
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "revive"
+              }
+            },
+            "required": [
+              "type",
+              "node"
+            ]
+          },
+          {
+            "description": "The character came back to life at its spawn point (step 0b).",
+            "type": "object",
+            "properties": {
+              "position": {
+                "description": "`[x, y, z]`.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "maxItems": 3,
+                "minItems": 3
+              },
+              "type": {
+                "type": "string",
+                "const": "respawn"
+              }
+            },
+            "required": [
+              "type",
+              "position"
+            ]
+          }
+        ],
+        "$defs": {
+          "Action": {
+            "description": "What the character is doing; serialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "sprint",
+                  "roll",
+                  "backstep"
+                ]
+              },
+              {
+                "description": "A light attack.",
+                "type": "string",
+                "const": "attack"
+              },
+              {
+                "description": "A heavy attack.",
+                "type": "string",
+                "const": "heavy"
+              }
+            ]
+          },
+          "Buffered": {
+            "description": "An action pressed during an attack, to start once it is over;\nserialized in lower case.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "attack",
+                  "heavy"
+                ]
+              },
+              {
+                "description": "The roll key: a roll, or a backstep without a direction.",
+                "type": "string",
+                "const": "roll"
+              }
+            ]
+          },
+          "DropReason": {
+            "description": "Why a press had no effect; when several apply, the first in this order.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dead",
+                  "staggered",
+                  "no_stamina"
+                ]
+              },
+              {
+                "description": "Rolling or backstepping.",
+                "type": "string",
+                "const": "rolling"
+              },
+              {
+                "description": "In an attack's startup.",
+                "type": "string",
+                "const": "startup"
+              },
+              {
+                "description": "A press of higher priority (or the buffered action) took effect.",
+                "type": "string",
+                "const": "outranked"
+              },
+              {
+                "description": "The lock key found nothing to lock on to.",
+                "type": "string",
+                "const": "no_target"
+              }
+            ]
+          },
+          "EndReason": {
+            "description": "Why an action ended.",
+            "oneOf": [
+              {
+                "description": "Ran its ticks, or the sprint stopped.",
+                "type": "string",
+                "const": "finished"
+              },
+              {
+                "description": "Staggered or killed.",
+                "type": "string",
+                "const": "interrupted"
+              }
+            ]
+          },
+          "HitAttack": {
+            "description": "What hit: the character's light or heavy attack, or a swinger.",
+            "type": "string",
+            "enum": [
+              "attack",
+              "heavy",
+              "swing"
+            ]
+          },
+          "Input": {
+            "description": "A pressed input: the roll key's tap, or the lock key.",
+            "type": "string",
+            "enum": [
+              "attack",
+              "heavy",
+              "roll",
+              "lock"
+            ]
+          },
+          "LockReason": {
+            "description": "Why the lock-on target changed.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "out_of_range",
+                  "target_died"
+                ]
+              },
+              {
+                "description": "The lock key locked on or let go.",
+                "type": "string",
+                "const": "pressed"
+              },
+              {
+                "description": "A sideways flick switched targets.",
+                "type": "string",
+                "const": "switched"
+              },
+              {
+                "description": "The character died.",
+                "type": "string",
+                "const": "died"
+              }
+            ]
+          },
+          "Outcome": {
+            "description": "What a hit did to the target.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "death"
+                ]
+              },
+              {
+                "description": "Neither of the others (always, without health).",
+                "type": "string",
+                "const": "hit"
+              },
+              {
+                "description": "Staggered it, or staggered it again.",
+                "type": "string",
+                "const": "stagger"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

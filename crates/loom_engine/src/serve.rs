@@ -27,6 +27,7 @@ use crate::games::AnyEvent;
 use crate::output::ensure_parent_dir;
 use crate::report::RunAdapter;
 use crate::run::save_screenshot;
+use crate::schema::LoomSchema;
 use crate::sim::{LoadedScene, Sim};
 use crate::{ServeArgs, Size};
 
@@ -358,6 +359,10 @@ impl Session {
                 let source = self.doc()?.to_ron();
                 let saved = save_text(&path, &source).map_err(ServeError::Engine)?;
                 reply(id, SavedResult { path: saved })
+            }
+            "schema" => {
+                let NoParams {} = parse_params(params)?;
+                reply(id, LoomSchema::new())
             }
             "quit" => {
                 let NoParams {} = parse_params(params)?;

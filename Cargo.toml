@@ -34,6 +34,11 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 ron = "0.12.2"
+# JSON Schema of the file and state formats (`loom schema`); the same major
+# version rmcp uses
+schemars = "1.2.2"
+# dev only: checks data against those schemas
+jsonschema = { version = "0.58.1", default-features = false }
 
 # cli / errors / logging
 clap = { version = "4.6.7", features = ["derive"] }

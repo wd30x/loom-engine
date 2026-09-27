@@ -29,8 +29,9 @@ and full state to a JSONL file; `screenshot` can overlay debug wireframes (`debu
 shapes, attack sectors, colliders, lock-on). `scene` and `node` show the scene file; \
 `edit_node`, `add_node`, `remove_node` and `edit_scene` change it, and after each edit the \
 session runs again from tick 0 to the current tick on the recorded input; `save_scene` writes \
-the edited scene, which with `record`'s script replays to the same state. Relative paths are \
-relative to the repository root.";
+the edited scene, which with `record`'s script replays to the same state. `schema` describes \
+the scene file, every game's props (defaults, rules, units), state dump and events as JSON \
+Schema. Relative paths are relative to the repository root.";
 
 /// The first line of a result after the previous session died.
 const NEW_SESSION_NOTE: &str = "note: new loom session, tick starts at 0";
@@ -369,6 +370,16 @@ impl LoomServer {
         Parameters(args): Parameters<SaveSceneArgs>,
     ) -> Result<CallToolResult, McpError> {
         Ok(self.forward("save_scene", to_params(&args)).await)
+    }
+
+    /// The formats, as JSON Schema: `scene` (the scene file, RON read as JSON), and for each
+    /// game `props` (every prop by kind of node: default, rule, unit, description, and which
+    /// go together), `state_dump` (what `state` returns), `trace_line` and `event` (what
+    /// `step` returns in `events`). The same as `loom schema` and the committed
+    /// schema/loom.schema.json.
+    #[tool]
+    async fn schema(&self) -> Result<CallToolResult, McpError> {
+        Ok(self.forward("schema", Map::new()).await)
     }
 }
 

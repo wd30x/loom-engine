@@ -2,13 +2,15 @@
 //! character's own health: the parameters, read from the character node's props with defaults, and the
 //! action state (`docs/architecture.md` section 11).
 
+use loom_core::props::{PropRule, PropSpec};
 use loom_scene::{NodeId, Scene};
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::GameError;
 
 /// What the character is doing; serialized in lower case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
     Idle,
@@ -22,7 +24,7 @@ pub enum Action {
 }
 
 /// The part of an attack; serialized in lower case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AttackPhase {
     Startup,
@@ -32,7 +34,7 @@ pub enum AttackPhase {
 
 /// An action pressed during an attack, to start once it is over;
 /// serialized in lower case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Buffered {
     Attack,
@@ -41,77 +43,363 @@ pub enum Buffered {
     Roll,
 }
 
-/// How a prop's value is checked.
-#[derive(Debug, Clone, Copy)]
-enum Rule {
-    /// Greater than 0.
-    Positive,
-    /// A whole number of at least this.
-    AtLeast(u32),
-    /// An angle in degrees, at least 0 and less than 90.
-    Below90,
-    /// An angle in degrees, greater than 0 and at most 360.
-    Arc,
-    /// At least 0.
-    NotNegative,
-    /// Any value: checked only against another prop.
-    Any,
-}
-
 /// Every prop the character understands, with its default and rule, in
-/// the order they are checked. Reading, checking and rejecting unknown
-/// names all go through this one table.
-const PARAMS: [(&str, f64, Rule); 50] = [
-    ("stamina_max", 100.0, Rule::Positive),
-    ("stamina_regen", 45.0, Rule::Positive),
-    ("stamina_delay_ticks", 30.0, Rule::AtLeast(0)),
-    ("tap_ticks", 15.0, Rule::AtLeast(1)),
-    ("sprint_speed", 6.0, Rule::Positive),
-    ("sprint_cost", 15.0, Rule::Positive),
-    ("roll_cost", 20.0, Rule::Positive),
-    ("roll_ticks", 32.0, Rule::AtLeast(1)),
-    ("roll_distance", 3.2, Rule::Positive),
-    ("roll_invuln_from", 1.0, Rule::AtLeast(1)),
-    ("roll_invuln_to", 20.0, Rule::AtLeast(1)),
-    ("backstep_cost", 12.0, Rule::Positive),
-    ("backstep_ticks", 20.0, Rule::AtLeast(1)),
-    ("backstep_distance", 1.5, Rule::Positive),
-    ("backstep_invuln_from", 1.0, Rule::AtLeast(1)),
-    ("backstep_invuln_to", 8.0, Rule::AtLeast(1)),
-    ("attack_cost", 15.0, Rule::Positive),
-    ("attack_startup_ticks", 10.0, Rule::AtLeast(1)),
-    ("attack_active_ticks", 4.0, Rule::AtLeast(1)),
-    ("attack_recovery_ticks", 16.0, Rule::AtLeast(1)),
-    ("attack_distance", 0.3, Rule::Positive),
-    ("heavy_cost", 25.0, Rule::Positive),
-    ("heavy_startup_ticks", 22.0, Rule::AtLeast(1)),
-    ("heavy_active_ticks", 5.0, Rule::AtLeast(1)),
-    ("heavy_recovery_ticks", 23.0, Rule::AtLeast(1)),
-    ("heavy_distance", 0.6, Rule::Positive),
-    ("attack_turn_speed", 180.0, Rule::Positive),
-    ("combo_max", 3.0, Rule::AtLeast(1)),
-    ("lock_range", 15.0, Rule::Positive),
-    ("lock_break_range", 20.0, Rule::Positive),
-    ("lock_angle", 60.0, Rule::Positive),
-    ("lock_camera_speed", 360.0, Rule::Positive),
-    ("lock_pitch_down", 15.0, Rule::Below90),
-    ("switch_threshold", 0.1, Rule::Positive),
-    ("switch_cooldown_ticks", 20.0, Rule::AtLeast(0)),
-    ("attack_reach", 2.0, Rule::Positive),
-    ("attack_arc", 120.0, Rule::Arc),
-    ("heavy_reach", 2.4, Rule::Positive),
-    ("heavy_arc", 90.0, Rule::Arc),
-    ("swing_low", 0.3, Rule::NotNegative),
-    ("swing_high", 1.6, Rule::Any),
-    ("attack_damage", 20.0, Rule::Positive),
-    ("heavy_damage", 35.0, Rule::Positive),
-    ("attack_impact", 10.0, Rule::NotNegative),
-    ("heavy_impact", 30.0, Rule::NotNegative),
-    ("hp", 100.0, Rule::Positive),
-    ("poise", 0.0, Rule::NotNegative),
-    ("stagger_ticks", 30.0, Rule::AtLeast(1)),
-    ("poise_reset_ticks", 60.0, Rule::AtLeast(1)),
-    ("respawn_ticks", 120.0, Rule::AtLeast(1)),
+/// the order they are checked. Reading, checking, rejecting unknown names
+/// and `loom schema` all go through this one table.
+pub(crate) const PARAMS: [PropSpec; 50] = [
+    PropSpec {
+        name: "stamina_max",
+        default: Some(100.0),
+        rule: PropRule::Positive,
+        unit: "stamina points",
+        description: "The most stamina the character has.",
+    },
+    PropSpec {
+        name: "stamina_regen",
+        default: Some(45.0),
+        rule: PropRule::Positive,
+        unit: "stamina points per second",
+        description: "How fast stamina comes back.",
+    },
+    PropSpec {
+        name: "stamina_delay_ticks",
+        default: Some(30.0),
+        rule: PropRule::Whole { min: 0, max: None },
+        unit: "ticks",
+        description: "Ticks after using stamina before it comes back.",
+    },
+    PropSpec {
+        name: "tap_ticks",
+        default: Some(15.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Releasing roll within this many ticks is a tap (a roll, or a backstep without a direction); held longer, it sprints.",
+    },
+    PropSpec {
+        name: "sprint_speed",
+        default: Some(6.0),
+        rule: PropRule::Positive,
+        unit: "meters per second",
+        description: "Speed while sprinting.",
+    },
+    PropSpec {
+        name: "sprint_cost",
+        default: Some(15.0),
+        rule: PropRule::Positive,
+        unit: "stamina points per second",
+        description: "Stamina used while sprinting.",
+    },
+    PropSpec {
+        name: "roll_cost",
+        default: Some(20.0),
+        rule: PropRule::Positive,
+        unit: "stamina points",
+        description: "Stamina a roll uses.",
+    },
+    PropSpec {
+        name: "roll_ticks",
+        default: Some(32.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "How long a roll lasts.",
+    },
+    PropSpec {
+        name: "roll_distance",
+        default: Some(3.2),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "How far a roll goes.",
+    },
+    PropSpec {
+        name: "roll_invuln_from",
+        default: Some(1.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Invulnerable from this tick of the roll (1-based).",
+    },
+    PropSpec {
+        name: "roll_invuln_to",
+        default: Some(20.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Invulnerable up to this tick of the roll, inclusive.",
+    },
+    PropSpec {
+        name: "backstep_cost",
+        default: Some(12.0),
+        rule: PropRule::Positive,
+        unit: "stamina points",
+        description: "Stamina a backstep uses.",
+    },
+    PropSpec {
+        name: "backstep_ticks",
+        default: Some(20.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "How long a backstep lasts.",
+    },
+    PropSpec {
+        name: "backstep_distance",
+        default: Some(1.5),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "How far a backstep goes.",
+    },
+    PropSpec {
+        name: "backstep_invuln_from",
+        default: Some(1.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Invulnerable from this tick of the backstep (1-based).",
+    },
+    PropSpec {
+        name: "backstep_invuln_to",
+        default: Some(8.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Invulnerable up to this tick of the backstep, inclusive.",
+    },
+    PropSpec {
+        name: "attack_cost",
+        default: Some(15.0),
+        rule: PropRule::Positive,
+        unit: "stamina points",
+        description: "Stamina a light attack uses.",
+    },
+    PropSpec {
+        name: "attack_startup_ticks",
+        default: Some(10.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Light attack: before the swing; the character can still turn.",
+    },
+    PropSpec {
+        name: "attack_active_ticks",
+        default: Some(4.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Light attack: the swing, sliding forward.",
+    },
+    PropSpec {
+        name: "attack_recovery_ticks",
+        default: Some(16.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Light attack: after the swing; the next action can be buffered.",
+    },
+    PropSpec {
+        name: "attack_distance",
+        default: Some(0.3),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Light attack: how far the character slides during the swing.",
+    },
+    PropSpec {
+        name: "heavy_cost",
+        default: Some(25.0),
+        rule: PropRule::Positive,
+        unit: "stamina points",
+        description: "Stamina a heavy attack uses.",
+    },
+    PropSpec {
+        name: "heavy_startup_ticks",
+        default: Some(22.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Heavy attack: before the swing; the character can still turn.",
+    },
+    PropSpec {
+        name: "heavy_active_ticks",
+        default: Some(5.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Heavy attack: the swing, sliding forward.",
+    },
+    PropSpec {
+        name: "heavy_recovery_ticks",
+        default: Some(23.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Heavy attack: after the swing; the next action can be buffered.",
+    },
+    PropSpec {
+        name: "heavy_distance",
+        default: Some(0.6),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Heavy attack: how far the character slides during the swing.",
+    },
+    PropSpec {
+        name: "attack_turn_speed",
+        default: Some(180.0),
+        rule: PropRule::Positive,
+        unit: "degrees per second",
+        description: "How fast the character turns during an attack's startup.",
+    },
+    PropSpec {
+        name: "combo_max",
+        default: Some(3.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "attacks",
+        description: "The most light attacks in a row.",
+    },
+    PropSpec {
+        name: "lock_range",
+        default: Some(15.0),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Targets this close can be locked on to.",
+    },
+    PropSpec {
+        name: "lock_break_range",
+        default: Some(20.0),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "A locked-on target farther than this is let go.",
+    },
+    PropSpec {
+        name: "lock_angle",
+        default: Some(60.0),
+        rule: PropRule::Positive,
+        unit: "degrees",
+        description: "Targets this far from where the camera looks can be locked on to.",
+    },
+    PropSpec {
+        name: "lock_camera_speed",
+        default: Some(360.0),
+        rule: PropRule::Positive,
+        unit: "degrees per second",
+        description: "How fast the camera follows the locked-on target.",
+    },
+    PropSpec {
+        name: "lock_pitch_down",
+        default: Some(15.0),
+        rule: PropRule::Below {
+            min: 0.0,
+            max: 90.0,
+        },
+        unit: "degrees",
+        description: "How far below the lock point the camera looks.",
+    },
+    PropSpec {
+        name: "switch_threshold",
+        default: Some(0.1),
+        rule: PropRule::Positive,
+        unit: "radians",
+        description: "look_x flicked while locked on, summed up to this, switches targets.",
+    },
+    PropSpec {
+        name: "switch_cooldown_ticks",
+        default: Some(20.0),
+        rule: PropRule::Whole { min: 0, max: None },
+        unit: "ticks",
+        description: "Ticks after a switch before the next one.",
+    },
+    PropSpec {
+        name: "attack_reach",
+        default: Some(2.0),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Radius of the light attack's sweep.",
+    },
+    PropSpec {
+        name: "attack_arc",
+        default: Some(120.0),
+        rule: PropRule::Arc,
+        unit: "degrees",
+        description: "Angle the light attack sweeps, right to left, centered on the facing.",
+    },
+    PropSpec {
+        name: "heavy_reach",
+        default: Some(2.4),
+        rule: PropRule::Positive,
+        unit: "meters",
+        description: "Radius of the heavy attack's sweep.",
+    },
+    PropSpec {
+        name: "heavy_arc",
+        default: Some(90.0),
+        rule: PropRule::Arc,
+        unit: "degrees",
+        description: "Angle the heavy attack sweeps, right to left, centered on the facing.",
+    },
+    PropSpec {
+        name: "swing_low",
+        default: Some(0.3),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "meters",
+        description: "Above the target's feet: the bottom of the band the character's attacks sweep.",
+    },
+    PropSpec {
+        name: "swing_high",
+        default: Some(1.6),
+        rule: PropRule::Any,
+        unit: "meters",
+        description: "Above the target's feet: the top of that band.",
+    },
+    PropSpec {
+        name: "attack_damage",
+        default: Some(20.0),
+        rule: PropRule::Positive,
+        unit: "hp",
+        description: "Health a light hit takes off.",
+    },
+    PropSpec {
+        name: "heavy_damage",
+        default: Some(35.0),
+        rule: PropRule::Positive,
+        unit: "hp",
+        description: "Health a heavy hit takes off.",
+    },
+    PropSpec {
+        name: "attack_impact",
+        default: Some(10.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "impact",
+        description: "What a light hit adds up against the target's poise.",
+    },
+    PropSpec {
+        name: "heavy_impact",
+        default: Some(30.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "impact",
+        description: "What a heavy hit adds up against the target's poise.",
+    },
+    PropSpec {
+        name: "hp",
+        default: Some(100.0),
+        rule: PropRule::Positive,
+        unit: "hp",
+        description: "The character's own health.",
+    },
+    PropSpec {
+        name: "poise",
+        default: Some(0.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "impact",
+        description: "Impacts added up past this stagger the character; 0: every hit with any impact does.",
+    },
+    PropSpec {
+        name: "stagger_ticks",
+        default: Some(30.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "How long a stagger lasts.",
+    },
+    PropSpec {
+        name: "poise_reset_ticks",
+        default: Some(60.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Ticks without a hit before impacts are forgotten.",
+    },
+    PropSpec {
+        name: "respawn_ticks",
+        default: Some(120.0),
+        rule: PropRule::Whole { min: 1, max: None },
+        unit: "ticks",
+        description: "Ticks lying dead before coming back at the start.",
+    },
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -199,18 +487,31 @@ pub(crate) struct Lock {
     pub switch_cooldown_ticks: u32,
 }
 
+/// Rules across the character's props, checked after each value, in this
+/// order (`loom schema` writes them out).
+pub(crate) const CHARACTER_CONSTRAINTS: [&str; 5] = [
+    "1 <= roll_invuln_from <= roll_invuln_to <= roll_ticks",
+    "1 <= backstep_invuln_from <= backstep_invuln_to <= backstep_ticks",
+    "lock_range <= lock_break_range",
+    "swing_low < swing_high",
+    "each move per tick is shorter than the capsule radius: sprint_speed / 60, \
+     roll_distance / roll_ticks, backstep_distance / backstep_ticks, \
+     attack_distance / attack_active_ticks, heavy_distance / heavy_active_ticks",
+];
+
 impl Params {
     /// Reads and checks the props of the character `id`, whose capsule has
     /// `radius`: unknown names (in file order), then each value (in table
-    /// order), then the invulnerability windows (roll, backstep), then
-    /// `lock_range <= lock_break_range`, then `swing_low < swing_high`,
-    /// then the per-tick distances (sprint, roll, backstep, attack, heavy).
+    /// order), then [`CHARACTER_CONSTRAINTS`] in order: the invulnerability
+    /// windows (roll, backstep), `lock_range <= lock_break_range`,
+    /// `swing_low < swing_high`, the per-tick distances (sprint, roll,
+    /// backstep, attack, heavy).
     pub fn new(scene: &Scene, id: NodeId, radius: f32) -> Result<Self, GameError> {
         let node = scene.node(id);
         let character = scene.path(id);
         if let Some((prop, _)) = node
             .props()
-            .find(|(p, _)| !PARAMS.iter().any(|(name, ..)| name == p))
+            .find(|(p, _)| !PARAMS.iter().any(|spec| spec.name == *p))
         {
             return Err(GameError::UnknownProp {
                 character,
@@ -218,52 +519,23 @@ impl Params {
             });
         }
         let mut values = [0.0; PARAMS.len()];
-        for (value, &(prop, default, rule)) in values.iter_mut().zip(&PARAMS) {
-            let v = node.prop(prop).unwrap_or(default);
-            match rule {
-                Rule::Positive if v <= 0.0 => {
-                    return Err(GameError::NotPositive {
-                        character,
-                        prop,
-                        value: v,
-                    });
-                }
-                Rule::AtLeast(min) if v.fract() != 0.0 || v < f64::from(min) => {
-                    return Err(GameError::NotWhole {
-                        character,
-                        prop,
-                        min,
-                        value: v,
-                    });
-                }
-                Rule::Below90 if !(0.0..90.0).contains(&v) => {
-                    return Err(GameError::NotBelow90 {
-                        character,
-                        prop,
-                        value: v,
-                    });
-                }
-                Rule::Arc if !(v > 0.0 && v <= 360.0) => {
-                    return Err(GameError::NotAnArc {
-                        character,
-                        prop,
-                        value: v,
-                    });
-                }
-                Rule::NotNegative if v < 0.0 => {
-                    return Err(GameError::Negative {
-                        character,
-                        prop,
-                        value: v,
-                    });
-                }
-                _ => *value = v,
+        for (value, spec) in values.iter_mut().zip(&PARAMS) {
+            let default = spec.default.expect("every character prop has a default");
+            let v = node.prop(spec.name).unwrap_or(default);
+            if !spec.rule.allows(v) {
+                return Err(GameError::BadProp {
+                    character,
+                    prop: spec.name,
+                    rule: spec.rule,
+                    value: v,
+                });
             }
+            *value = v;
         }
         let get = |prop: &str| {
             let i = PARAMS
                 .iter()
-                .position(|(name, ..)| *name == prop)
+                .position(|spec| spec.name == prop)
                 .expect("only names from PARAMS are asked for");
             values[i]
         };

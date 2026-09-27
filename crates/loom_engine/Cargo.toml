@@ -21,11 +21,15 @@ souls.workspace = true
 glam.workspace = true
 image.workspace = true
 serde.workspace = true
+schemars.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
 
 [lints]
 workspace = true

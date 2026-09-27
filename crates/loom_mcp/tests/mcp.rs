@@ -196,6 +196,7 @@ fn tools_forward_to_loom_serve_and_keep_its_numbers_exact() {
             "reset",
             "save_scene",
             "scene",
+            "schema",
             "screenshot",
             "state",
             "step",
@@ -351,5 +352,17 @@ fn edit_tools_forward_props_with_null_and_a_root_node_without_parent() {
     let (is_error, text) = mcp.call("edit_scene", json!({"set": "game: \"rogue\""}));
     assert!(is_error, "{text}");
     assert_eq!(text, "error -32602: edit_scene cannot change game");
+    assert_eq!(mcp.close(), 0);
+}
+
+#[test]
+fn schema_tool_returns_what_loom_serve_replies() {
+    let loom = loom_exe();
+    let mut mcp = Mcp::start(&loom);
+    let (is_error, text) = mcp.call("schema", json!({}));
+    assert!(!is_error, "{text}");
+    assert_eq!(text, serve_result(&loom, &[json!(["schema", {}])]));
+    let schema: Value = serde_json::from_str(&text).expect("the schema is JSON");
+    assert_eq!(schema["loom_schema"], 1);
     assert_eq!(mcp.close(), 0);
 }

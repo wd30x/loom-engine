@@ -8,14 +8,20 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use loom_core::input::{ActionMap, ActionSet, ActionState};
 use loom_scene::Transform;
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::games::{AnyGame, AnyGameState};
 use crate::output::ensure_parent_dir;
 
-#[derive(Debug, Serialize)]
-pub(crate) struct StateDump {
+/// Generic over the game state only so that `loom schema` can describe
+/// each game's dump from this same type (`docs/architecture.md` section 17).
+#[derive(Debug, Serialize, JsonSchema)]
+#[schemars(rename = "StateDump")]
+pub(crate) struct StateDump<G = AnyGameState> {
+    /// Ticks run since the scene was loaded.
     pub tick: u64,
+    /// `tick / 60`, in seconds.
     pub sim_time: f64,
     /// Actions active in the last tick, sorted by name.
     pub actions: ActionSet,
@@ -23,9 +29,8 @@ pub(crate) struct StateDump {
     pub axes: BTreeMap<String, f32>,
     /// Local transform of every scene node, keyed by path (sorted).
     pub nodes: BTreeMap<String, Transform>,
-    /// Game state: souls' (`docs/architecture.md` section 11) or rogue's
-    /// (section 15), unwrapped.
-    pub game: AnyGameState,
+    /// The game's own state.
+    pub game: G,
 }
 
 impl StateDump {

@@ -1477,3 +1477,18 @@ fn edit_at_tick_0_swaps_the_scene_without_running_a_tick() {
         json!([2.0, 0.0, -1.0])
     );
 }
+
+// ---------------------------------------------------------------- schema
+
+#[test]
+fn schema_request_replies_the_committed_schema() {
+    let replies = serve(&[
+        req(1, "schema", json!({})),
+        req(2, "schema", json!({"game": "souls"})),
+    ]);
+    let committed = fs::read_to_string(repo_root().join("schema/loom.schema.json"))
+        .expect("the schema file is committed");
+    let committed: Value = serde_json::from_str(&committed).expect("JSON");
+    assert_eq!(*result(&replies[0]), committed);
+    assert_eq!(error_code(&replies[1]), -32602);
+}

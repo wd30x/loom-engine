@@ -22,3 +22,26 @@ pub use game::{
 };
 pub use health::{Condition, HealthState};
 pub use moves::{Action, AttackPhase, Buffered};
+
+use loom_core::props::PropGroup;
+
+/// The props of each kind of node, from the tables that check them, for
+/// `loom schema` (`docs/architecture.md` section 17).
+pub const PROP_GROUPS: [(&str, PropGroup); 2] = [
+    (
+        "character",
+        PropGroup {
+            props: &moves::PARAMS,
+            requires: &[],
+            constraints: &moves::CHARACTER_CONSTRAINTS,
+        },
+    ),
+    (
+        "node",
+        PropGroup {
+            props: &game::NODE_PROPS,
+            requires: &game::NODE_REQUIRES,
+            constraints: &game::NODE_CONSTRAINTS,
+        },
+    ),
+];

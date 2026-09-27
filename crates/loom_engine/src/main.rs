@@ -10,6 +10,7 @@ mod output;
 mod reload;
 mod report;
 mod run;
+mod schema;
 mod serve;
 mod sheet;
 mod sim;
@@ -44,6 +45,9 @@ enum Command {
     /// Render a scene once, headless and without simulating it (so it needs
     /// no character), and save a screenshot.
     View(ViewArgs),
+    /// Print the formats of scene files, props, state dumps, trace lines
+    /// and events, as JSON Schema.
+    Schema,
 }
 
 #[derive(Debug, clap::Args)]
@@ -157,6 +161,13 @@ fn main() -> ExitCode {
         Command::Run(args) => run::run(&args, started).map(|r| report::emit(&r)),
         Command::Info => run::info().map(|r| report::emit(&r)),
         Command::View(args) => view::view(&args, started).map(|r| report::emit(&r)),
+        Command::Schema => {
+            report::emit(&report::SchemaReport {
+                status: "ok",
+                schema: &schema::LoomSchema::new(),
+            });
+            Ok(())
+        }
         // Replies are written as they go; only a startup error is reported below.
         Command::Serve(args) => serve::serve(&args),
     };
