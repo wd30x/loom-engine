@@ -1,0 +1,697 @@
+{
+  "tick": 763,
+  "sim_time": 12.716666666666667,
+  "actions": [],
+  "axes": {
+    "look_x": 0.0,
+    "look_y": 0.0,
+    "move_x": 0.0,
+    "move_y": 0.0
+  },
+  "nodes": {
+    "bloodstain": {
+      "position": [
+        0.0,
+        0.05,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.4,
+        0.1,
+        0.4
+      ]
+    },
+    "bonfire": {
+      "position": [
+        -6.0,
+        0.0,
+        6.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "bonfire/block": {
+      "position": [
+        0.0,
+        0.25,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "bonfire/fire": {
+      "position": [
+        0.0,
+        0.25,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "dummy_a": {
+      "position": [
+        -5.0,
+        0.0,
+        -6.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "dummy_a/block": {
+      "position": [
+        0.0,
+        0.9,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.8,
+        1.8,
+        0.8
+      ]
+    },
+    "dummy_a/body": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "dummy_a/hp_bar": {
+      "position": [
+        0.0,
+        2.1,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.8,
+        0.08,
+        0.08
+      ]
+    },
+    "dummy_b": {
+      "position": [
+        0.0,
+        0.0,
+        -6.5
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "dummy_b/block": {
+      "position": [
+        0.0,
+        0.9,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.8,
+        1.8,
+        0.8
+      ]
+    },
+    "dummy_b/body": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "dummy_b/hp_bar": {
+      "position": [
+        0.0,
+        2.1,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.8,
+        0.08,
+        0.08
+      ]
+    },
+    "dummy_c": {
+      "position": [
+        5.0,
+        0.0,
+        -6.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "dummy_c/block": {
+      "position": [
+        0.0,
+        0.9,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.8,
+        1.8,
+        0.8
+      ]
+    },
+    "dummy_c/body": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "dummy_c/hp_bar": {
+      "position": [
+        0.0,
+        2.1,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.8,
+        0.08,
+        0.08
+      ]
+    },
+    "ground": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ]
+    },
+    "main_cam": {
+      "position": [
+        0.0,
+        2.5352764,
+        3.8637035
+      ],
+      "rotation": [
+        -0.1305262,
+        0.0,
+        0.0,
+        0.9914449
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "pillars": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "pillars/a": {
+      "position": [
+        3.0,
+        1.5,
+        -4.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        3.0,
+        1.0
+      ]
+    },
+    "pillars/b": {
+      "position": [
+        -3.0,
+        1.5,
+        -4.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        3.0,
+        1.0
+      ]
+    },
+    "pillars/c": {
+      "position": [
+        0.0,
+        1.5,
+        -9.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        3.0,
+        1.0
+      ]
+    },
+    "player": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "player/flask": {
+      "position": [
+        0.5,
+        1.2,
+        -0.3
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.12,
+        0.25,
+        0.12
+      ]
+    },
+    "player/visor": {
+      "position": [
+        0.0,
+        1.5,
+        -0.3
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.4,
+        0.15,
+        0.3
+      ]
+    },
+    "stake": {
+      "position": [
+        6.0,
+        0.0,
+        2.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "stake/arm": {
+      "position": [
+        1.159111,
+        1.0999999,
+        -0.31058282
+      ],
+      "rotation": [
+        0.0,
+        -0.6087614,
+        0.0,
+        0.7933533
+      ],
+      "scale": [
+        0.1,
+        0.1,
+        2.0
+      ]
+    },
+    "stake/block": {
+      "position": [
+        0.0,
+        0.8,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.3,
+        1.6,
+        0.3
+      ]
+    },
+    "stake/hp_bar": {
+      "position": [
+        0.0,
+        1.9,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.8,
+        0.08,
+        0.08
+      ]
+    },
+    "stake/post": {
+      "position": [
+        0.0,
+        0.8,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.3,
+        1.6,
+        0.3
+      ]
+    },
+    "sun": {
+      "position": [
+        4.0,
+        8.0,
+        3.0
+      ],
+      "rotation": [
+        -0.43359014,
+        0.39115202,
+        0.21679507,
+        0.78230405
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "wall": {
+      "position": [
+        -3.0,
+        1.0,
+        3.0
+      ],
+      "rotation": [
+        0.0,
+        0.25881904,
+        0.0,
+        0.9659258
+      ],
+      "scale": [
+        4.0,
+        2.0,
+        0.5
+      ]
+    }
+  },
+  "game": {
+    "player": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "facing": 0.0,
+      "stamina": 100.0,
+      "stamina_wait": 0,
+      "action": "idle",
+      "action_tick": 0,
+      "invulnerable": false,
+      "attack_phase": null,
+      "combo": 0,
+      "buffered": null,
+      "hits": 4,
+      "last_hit": {
+        "tick": 643,
+        "by": "stake"
+      },
+      "health": {
+        "hp": 100.0,
+        "state": "ok",
+        "state_ticks": 0,
+        "impact": 0.0,
+        "impact_wait": 0
+      },
+      "flask": 3,
+      "souls": 0,
+      "hp_trail": 100.0,
+      "hp_trail_wait": 0
+    },
+    "camera": {
+      "yaw": 0.0,
+      "pitch": -0.2617994,
+      "distance": 4.0
+    },
+    "lock": null,
+    "hurtboxes": [
+      {
+        "node": "dummy_a",
+        "hits": 0,
+        "last_hit": null,
+        "health": {
+          "hp": 100.0,
+          "state": "ok",
+          "state_ticks": 0,
+          "impact": 0.0,
+          "impact_wait": 0
+        }
+      },
+      {
+        "node": "dummy_b",
+        "hits": 0,
+        "last_hit": null,
+        "health": {
+          "hp": 100.0,
+          "state": "ok",
+          "state_ticks": 0,
+          "impact": 0.0,
+          "impact_wait": 0
+        }
+      },
+      {
+        "node": "dummy_c",
+        "hits": 0,
+        "last_hit": null,
+        "health": {
+          "hp": 100.0,
+          "state": "ok",
+          "state_ticks": 0,
+          "impact": 0.0,
+          "impact_wait": 0
+        }
+      },
+      {
+        "node": "stake",
+        "hits": 0,
+        "last_hit": null,
+        "health": {
+          "hp": 100.0,
+          "state": "ok",
+          "state_ticks": 0,
+          "impact": 0.0,
+          "impact_wait": 0
+        }
+      }
+    ],
+    "swingers": [
+      {
+        "node": "stake",
+        "swing_tick": 1,
+        "phase": "startup"
+      }
+    ],
+    "enemies": [],
+    "respawn": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "facing": 0.0,
+      "bonfire": null
+    },
+    "bloodstain": null
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "tick": 28,
+  "sim_time": 0.4666666666666667,
+  "actions": [],
+  "axes": {},
+  "nodes": {
+    "cam": {
+      "position": [
+        9.5,
+        -5.125,
+        10.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "map": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "player": {
+      "position": [
+        4.0,
+        -1.0,
+        1.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "zombie": {
+      "position": [
+        4.0,
+        -2.0,
+        0.25
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "zombie_2": {
+      "position": [
+        5.0,
+        -1.0,
+        0.5
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "game": {
+    "turn": 13,
+    "player": {
+      "cell": [
+        4,
+        1
+      ],
+      "hp": 9
+    },
+    "zombies": [
+      {
+        "name": "zombie",
+        "cell": [
+          4,
+          2
+        ],
+        "hp": 0,
+        "energy": 69
+      },
+      {
+        "name": "zombie_2",
+        "cell": [
+          5,
+          1
+        ],
+        "hp": 3,
+        "energy": 71
+      }
+    ],
+    "messages": [
+      {
+        "turn": 6,
+        "text": "You hit zombie."
+      },
+      {
+        "turn": 6,
+        "text": "zombie bites you."
+      },
+      {
+        "turn": 7,
+        "text": "You hit zombie."
+      },
+      {
+        "turn": 8,
+        "text": "You kill zombie."
+      }
+    ]
+  }
+}

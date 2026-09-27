@@ -1,0 +1,439 @@
+{
+  "tick": 520,
+  "sim_time": 8.666666666666666,
+  "actions": [],
+  "axes": {
+    "look_x": 0.0,
+    "look_y": 0.0,
+    "move_x": 0.0,
+    "move_y": 0.0
+  },
+  "nodes": {
+    "bloodstain": {
+      "position": [
+        0.0,
+        0.05,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.4,
+        0.1,
+        0.4
+      ]
+    },
+    "bonfire": {
+      "position": [
+        4.0,
+        0.0,
+        12.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "bonfire/block": {
+      "position": [
+        0.0,
+        0.25,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "bonfire/fire": {
+      "position": [
+        0.0,
+        0.25,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "boss": {
+      "position": [
+        -2.7521955e-7,
+        0.0,
+        3.4166713
+      ],
+      "rotation": [
+        0.0,
+        -1.0,
+        0.0,
+        7.54979e-8
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "boss/arm": {
+      "position": [
+        -1.785416,
+        1.8,
+        -0.6498382
+      ],
+      "rotation": [
+        0.0,
+        0.57357645,
+        0.0,
+        0.81915206
+      ],
+      "scale": [
+        0.15,
+        0.15,
+        2.8
+      ]
+    },
+    "boss/body": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "boss/hp_bar": {
+      "position": [
+        -0.05333333,
+        3.4,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.4933333,
+        0.1,
+        0.1
+      ]
+    },
+    "ground": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ]
+    },
+    "main_cam": {
+      "position": [
+        1.6993454e-8,
+        1.413521,
+        9.132406
+      ],
+      "rotation": [
+        0.010810493,
+        2.5560663e-8,
+        -2.763395e-10,
+        0.9999416
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "pillars": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "pillars/a": {
+      "position": [
+        -7.0,
+        1.5,
+        -8.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        3.0,
+        1.0
+      ]
+    },
+    "pillars/b": {
+      "position": [
+        7.0,
+        1.5,
+        -8.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        3.0,
+        1.0
+      ]
+    },
+    "pillars/c": {
+      "position": [
+        -7.0,
+        1.5,
+        4.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        3.0,
+        1.0
+      ]
+    },
+    "pillars/d": {
+      "position": [
+        7.0,
+        1.5,
+        4.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        1.0,
+        3.0,
+        1.0
+      ]
+    },
+    "player": {
+      "position": [
+        -1.87456e-7,
+        0.0,
+        5.133341
+      ],
+      "rotation": [
+        0.70710677,
+        1.8075186e-8,
+        -8.869497e-8,
+        0.70710677
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "player/flask": {
+      "position": [
+        0.5,
+        1.2,
+        -0.3
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.12,
+        0.25,
+        0.12
+      ]
+    },
+    "player/visor": {
+      "position": [
+        0.0,
+        1.5,
+        -0.3
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "scale": [
+        0.4,
+        0.15,
+        0.3
+      ]
+    },
+    "sun": {
+      "position": [
+        4.0,
+        8.0,
+        3.0
+      ],
+      "rotation": [
+        -0.43359014,
+        0.39115202,
+        0.21679507,
+        0.78230405
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "game": {
+    "player": {
+      "position": [
+        -1.87456e-7,
+        0.0,
+        5.133341
+      ],
+      "facing": 5.1124346e-8,
+      "stamina": 74.5,
+      "stamina_wait": 0,
+      "action": "idle",
+      "action_tick": 0,
+      "invulnerable": false,
+      "attack_phase": null,
+      "combo": 0,
+      "buffered": null,
+      "hits": 4,
+      "last_hit": {
+        "tick": 518,
+        "by": "boss"
+      },
+      "health": {
+        "hp": 0.0,
+        "state": "dead",
+        "state_ticks": 118,
+        "impact": 0.0,
+        "impact_wait": 0
+      },
+      "flask": 3,
+      "souls": 0,
+      "hp_trail": 55.0,
+      "hp_trail_wait": 27
+    },
+    "camera": {
+      "yaw": 5.1124314e-8,
+      "pitch": 0.021621406,
+      "distance": 4.0
+    },
+    "lock": null,
+    "hurtboxes": [
+      {
+        "node": "boss",
+        "hits": 2,
+        "last_hit": {
+          "tick": 471,
+          "attack": "attack",
+          "combo": 2
+        },
+        "health": {
+          "hp": 560.0,
+          "state": "ok",
+          "state_ticks": 0,
+          "impact": 20.0,
+          "impact_wait": 11
+        }
+      }
+    ],
+    "swingers": [],
+    "enemies": [
+      {
+        "node": "boss",
+        "stage": 1,
+        "state": "attack",
+        "move": "combo",
+        "move_tick": 64,
+        "phase": "active",
+        "hit": 3,
+        "facing": -3.1415925,
+        "rest": 0,
+        "chase": 0,
+        "rng": 13064056694810536069
+      }
+    ],
+    "respawn": {
+      "position": [
+        0.0,
+        0.0,
+        8.0
+      ],
+      "facing": 0.0,
+      "bonfire": null
+    },
+    "bloodstain": null
+  }
+}

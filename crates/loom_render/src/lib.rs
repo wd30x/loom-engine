@@ -4,8 +4,12 @@
 //! blits that target to the surface; headless mode reads it back to CPU
 //! memory. The two paths share all drawing code. See `docs/architecture.md`.
 
+mod buffers;
 mod frame;
+mod gpu;
 mod mesh;
+mod pipelines;
+mod target;
 
 use std::sync::mpsc;
 
@@ -16,6 +20,13 @@ pub use frame::{
 };
 use frame::{GpuDraw, GpuGlobals, GpuSprite, HudVertex, LineVertex, hud_vertices, line_vertices};
 pub use mesh::MeshKind;
+
+use buffers::{
+    DrawBuffer, GpuMesh, INITIAL_DRAW_CAPACITY, INITIAL_HUD_VERTICES, INITIAL_LINE_VERTICES,
+    VertexBuffer,
+};
+use gpu::{EXIT, INIT, adapter_options, init_step, new_instance, step};
+use target::{Offscreen, Presenter};
 
 /// Format of the offscreen color target. Readback returns its bytes as-is,
 /// i.e. sRGB-encoded RGBA8.
@@ -106,395 +117,6 @@ pub fn probe_adapter() -> Result<AdapterSummary, RenderError> {
     let instance = new_instance();
     let adapter = pollster::block_on(instance.request_adapter(&adapter_options(None)))?;
     Ok(AdapterSummary::from_info(&adapter.get_info()))
-}
-
-/// The backends used unless `WGPU_BACKEND` overrides them. On Windows only
-/// Dx12: with Vulkan, exiting after a window run sometimes hung for about
-/// 2 minutes or died with exit code 2173 on this project's machine, while
-/// Dx12 never did in the same measurements (`docs/architecture.md` section
-/// 3). Elsewhere, wgpu's default.
-fn default_backends() -> wgpu::Backends {
-    if cfg!(windows) {
-        wgpu::Backends::DX12
-    } else {
-        wgpu::Backends::default()
-    }
-}
-
-fn new_instance() -> wgpu::Instance {
-    // `with_env` lets WGPU_BACKEND (and the flag and backend-option
-    // variables) override the defaults, e.g. `WGPU_BACKEND=vulkan` to debug.
-    wgpu::Instance::new(
-        wgpu::InstanceDescriptor {
-            backends: default_backends(),
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        }
-        .with_env(),
-    )
-}
-
-/// Log prefix of the renderer creation steps.
-const INIT: &str = "renderer init";
-/// Log prefix of the renderer shutdown steps.
-const EXIT: &str = "renderer exit";
-
-/// Runs one step of renderer creation or shutdown (`phase`), logging (at
-/// debug level) before it starts and how long it took. If a step hangs, the
-/// last line of the log names it.
-fn step<T>(phase: &str, name: &str, f: impl FnOnce() -> T) -> T {
-    log::debug!("{phase}: {name} ...");
-    let start = std::time::Instant::now();
-    let out = f();
-    log::debug!("{phase}: {name} took {} ms", start.elapsed().as_millis());
-    out
-}
-
-/// [`step`] of renderer creation.
-fn init_step<T>(name: &str, f: impl FnOnce() -> T) -> T {
-    step(INIT, name, f)
-}
-
-fn adapter_options<'a>(
-    surface: Option<&'a wgpu::Surface<'a>>,
-) -> wgpu::RequestAdapterOptions<'a, 'a> {
-    wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: surface,
-        ..Default::default()
-    }
-}
-
-impl DrawBuffer {
-    /// A buffer for `capacity` items of `stride` bytes, bound with `globals`.
-    fn new(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        globals: &wgpu::Buffer,
-        label: &'static str,
-        stride: usize,
-        capacity: usize,
-    ) -> Self {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: (capacity * stride) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(label),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: buffer.as_entire_binding(),
-                },
-            ],
-        });
-        Self {
-            buffer,
-            label,
-            stride,
-            capacity,
-            bind_group,
-        }
-    }
-
-    /// Replaces the buffer with a larger one if `len` items do not fit.
-    fn reserve(
-        &mut self,
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        globals: &wgpu::Buffer,
-        len: usize,
-    ) {
-        if len > self.capacity {
-            let capacity = len.next_power_of_two();
-            *self = Self::new(device, layout, globals, self.label, self.stride, capacity);
-        }
-    }
-}
-
-/// The vertex buffer of the debug lines or of the HUD. Grows as needed,
-/// never shrinks.
-struct VertexBuffer {
-    buffer: wgpu::Buffer,
-    label: &'static str,
-    /// Bytes per vertex.
-    stride: usize,
-    /// In vertices.
-    capacity: usize,
-}
-
-impl VertexBuffer {
-    fn new(device: &wgpu::Device, label: &'static str, stride: usize, capacity: usize) -> Self {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: (capacity * stride) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        Self {
-            buffer,
-            label,
-            stride,
-            capacity,
-        }
-    }
-
-    /// Replaces the buffer with a larger one if `len` vertices do not fit.
-    fn reserve(&mut self, device: &wgpu::Device, len: usize) {
-        if len > self.capacity {
-            *self = Self::new(device, self.label, self.stride, len.next_power_of_two());
-        }
-    }
-}
-
-/// Offscreen color + depth target that every frame is drawn into.
-struct Offscreen {
-    width: u32,
-    height: u32,
-    color: wgpu::Texture,
-    color_view: wgpu::TextureView,
-    depth_view: wgpu::TextureView,
-}
-
-impl Offscreen {
-    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-        let color = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offscreen color"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: COLOR_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let depth = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offscreen depth"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        Self {
-            width,
-            height,
-            color_view: color.create_view(&Default::default()),
-            depth_view: depth.create_view(&Default::default()),
-            color,
-        }
-    }
-}
-
-/// Window output: the surface plus the blit pass that copies the offscreen
-/// target onto it.
-struct Presenter {
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    /// sRGB view format used when rendering into the surface texture.
-    view_format: wgpu::TextureFormat,
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    /// Binds the current offscreen color view; rebuilt on resize.
-    bind_group: Option<wgpu::BindGroup>,
-    /// `config` changed since the surface was last configured. Configuring
-    /// is deferred to the next acquire: on Vulkan, destroying a swapchain
-    /// that was configured but never presented kills the process (exit code
-    /// 2173) when the window closes before the first frame.
-    needs_configure: bool,
-}
-
-impl Presenter {
-    fn new(
-        device: &wgpu::Device,
-        adapter: &wgpu::Adapter,
-        surface: wgpu::Surface<'static>,
-    ) -> Result<Self, RenderError> {
-        let caps = init_step("get_capabilities", || surface.get_capabilities(adapter));
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(wgpu::TextureFormat::is_srgb)
-            .or_else(|| caps.formats.first().copied())
-            .ok_or(RenderError::SurfaceUnsupported)?;
-        let alpha_mode = caps
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or(RenderError::SurfaceUnsupported)?;
-        // Always present through an sRGB view so the blit re-encodes the
-        // linear values it reads from the offscreen target.
-        let view_format = format.add_srgb_suffix();
-        let view_formats = if view_format == format {
-            vec![]
-        } else {
-            vec![view_format]
-        };
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            width: 0,
-            height: 0,
-            desired_maximum_frame_latency: 2,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode,
-            view_formats,
-        };
-        log::info!("surface format {format:?} (view {view_format:?}), alpha {alpha_mode:?}");
-
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/blit.wgsl"));
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("blit"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("blit"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blit"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(view_format.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        Ok(Self {
-            surface,
-            config,
-            view_format,
-            pipeline,
-            bind_group_layout,
-            bind_group: None,
-            needs_configure: false,
-        })
-    }
-
-    fn resize(&mut self, device: &wgpu::Device, offscreen: &Offscreen) {
-        self.config.width = offscreen.width;
-        self.config.height = offscreen.height;
-        self.needs_configure = true;
-        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit"),
-            layout: &self.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&offscreen.color_view),
-            }],
-        }));
-    }
-
-    /// Configures the surface if needed, then acquires the next surface
-    /// texture. Returns `None` (after reconfiguring when needed) if this
-    /// frame cannot be presented.
-    fn acquire(&mut self, device: &wgpu::Device) -> Option<(wgpu::SurfaceTexture, bool)> {
-        // Only reached with a bind group, i.e. after a non-zero resize, so
-        // the surface is never configured with a zero size.
-        if self.needs_configure {
-            self.surface.configure(device, &self.config);
-            self.needs_configure = false;
-        }
-        match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) => Some((t, false)),
-            wgpu::CurrentSurfaceTexture::Suboptimal(t) => Some((t, true)),
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                log::debug!("surface outdated or lost; reconfiguring");
-                self.surface.configure(device, &self.config);
-                None
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => None,
-            wgpu::CurrentSurfaceTexture::Validation => {
-                log::warn!("surface validation error; skipping present");
-                None
-            }
-        }
-    }
-}
-
-/// Draw items the per-draw buffer holds before it first has to grow.
-const INITIAL_DRAW_CAPACITY: usize = 64;
-/// Debug line vertices the first line buffer holds (two per line).
-const INITIAL_LINE_VERTICES: usize = 1024;
-/// HUD vertices the first HUD buffer holds (six per item).
-const INITIAL_HUD_VERTICES: usize = 96;
-
-/// Vertex and index buffers of one mesh.
-struct GpuMesh {
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
-    index_count: u32,
-}
-
-impl GpuMesh {
-    fn new(device: &wgpu::Device, kind: MeshKind) -> Self {
-        let (vertices, indices) = mesh::mesh(kind);
-        Self {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh vertices"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh indices"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
-            index_count: u32::try_from(indices.len()).expect("meshes have few indices"),
-        }
-    }
-}
-
-/// Per-draw data for every draw item (or sprite) of a frame, read by the
-/// shader by instance index, bound together with the globals. Grows as needed.
-struct DrawBuffer {
-    buffer: wgpu::Buffer,
-    label: &'static str,
-    /// Bytes per item.
-    stride: usize,
-    capacity: usize,
-    bind_group: wgpu::BindGroup,
 }
 
 /// The renderer. Draws a [`Frame`] (lit meshes seen from a camera) into an
@@ -588,37 +210,8 @@ impl Renderer {
         let resources_start = std::time::Instant::now();
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl"));
-        let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("globals"),
-            size: std::mem::size_of::<GpuGlobals>() as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mesh"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let globals_buffer = pipelines::globals_buffer(&device);
+        let bind_group_layout = pipelines::mesh_bind_group_layout(&device);
         let draws = DrawBuffer::new(
             &device,
             &bind_group_layout,
@@ -627,59 +220,12 @@ impl Renderer {
             std::mem::size_of::<GpuDraw>(),
             INITIAL_DRAW_CAPACITY,
         );
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mesh"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mesh"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(mesh::Vertex::layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(COLOR_FORMAT.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = pipelines::mesh_pipeline(&device, &shader, &bind_group_layout);
 
         // Sprites share group 0's layout with meshes (globals, then per-draw
         // storage read by the vertex stage); group 1 is the texture.
         let sprite_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/sprite.wgsl"));
-        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sprite texture"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
+        let texture_layout = pipelines::texture_layout(&device);
         let sprites = DrawBuffer::new(
             &device,
             &bind_group_layout,
@@ -688,108 +234,18 @@ impl Renderer {
             std::mem::size_of::<GpuSprite>(),
             INITIAL_DRAW_CAPACITY,
         );
-        let sprite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sprite"),
-            bind_group_layouts: &[Some(&bind_group_layout), Some(&texture_layout)],
-            immediate_size: 0,
-        });
-        let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sprite"),
-            layout: Some(&sprite_layout),
-            vertex: wgpu::VertexState {
-                module: &sprite_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                front_face: wgpu::FrontFace::Ccw,
-                // No culling: a sprite stays visible whichever way its node is
-                // turned (e.g. a negative scale to mirror it), rather than
-                // depending on the winding surviving the model matrix.
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &sprite_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(COLOR_FORMAT.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let sprite_pipeline = pipelines::sprite_pipeline(
+            &device,
+            &sprite_shader,
+            &bind_group_layout,
+            &texture_layout,
+        );
 
         // Debug lines: world-space vertices, the globals' view-projection,
         // no depth test and no depth writes, drawn last.
         let line_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/line.wgsl"));
-        let line_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("debug lines"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let line_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("debug lines"),
-            layout: &line_bind_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals_buffer.as_entire_binding(),
-            }],
-        });
-        let line_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("debug lines"),
-            bind_group_layouts: &[Some(&line_bind_layout)],
-            immediate_size: 0,
-        });
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("debug lines"),
-            layout: Some(&line_layout),
-            vertex: wgpu::VertexState {
-                module: &line_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(LineVertex::layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            // Same pass as the meshes, so the same depth format, but the
-            // depth buffer is neither tested nor written.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &line_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(COLOR_FORMAT.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let (line_bind_group, line_pipeline) =
+            pipelines::line_pipeline(&device, &line_shader, &globals_buffer);
         let lines = VertexBuffer::new(
             &device,
             "debug lines",
@@ -800,52 +256,8 @@ impl Renderer {
         // HUD: NDC vertices, no bindings, alpha blending, no depth test and
         // no depth writes, drawn between the sprites and the debug lines.
         let hud_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/hud.wgsl"));
-        // Text and images bind a sprite texture as group 0.
-        let hud_pipeline = |label: &str, layouts: &[Option<&wgpu::BindGroupLayout>], fs: &str| {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(label),
-                bind_group_layouts: layouts,
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &hud_shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(HudVertex::layout())],
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &hud_shader,
-                    entry_point: Some(fs),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: COLOR_FORMAT,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let hud_solid_pipeline = hud_pipeline("hud", &[], "fs_solid");
-        let hud_textured_pipeline =
-            hud_pipeline("hud textured", &[Some(&texture_layout)], "fs_textured");
+        let (hud_solid_pipeline, hud_textured_pipeline) =
+            pipelines::hud_pipelines(&device, &hud_shader, &texture_layout);
         let hud = VertexBuffer::new(
             &device,
             "hud",
@@ -1283,15 +695,6 @@ impl Renderer {
         }
         buffer.unmap();
         Ok(pixels)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(windows)]
-    #[test]
-    fn default_backend_on_windows_is_dx12_only() {
-        assert_eq!(super::default_backends(), wgpu::Backends::DX12);
     }
 }
 
