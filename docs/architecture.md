@@ -321,6 +321,7 @@ RON 文件，里面是两个列表（**不用 map**：实测 ron 遇到重复的
 - `ActionState::axis(name) -> f32`：本 tick 的值；没有输入时是 0.0。
 
 **窗口模式抓鼠标**：窗口获得焦点时隐藏指针并锁定（`CursorGrabMode::Locked`，不支持时退回 `Confined`），失焦时释放。Esc 照常退出。`--input` 回放时鼠标和键盘一样被忽略。
+- G3.1 起，**抓之前先把指针移到客户区中央**（`Window::set_cursor_position`，失败只打 `warn`）。Windows 上 winit 0.30 的 `Locked` 是在指针当前的位置做一个 1×1 的 `ClipCursor`，指针原来在窗口外时就被锁在窗口外，第一次点击会落到别的程序上（G2.3 实现者实测发现）。
 - E4.3 起，**只有键位表里有鼠标轴（带 `mouse` 的轴）时才抓**。`rogue` 只用键盘，抓住指针没有意义。判断放在引擎里（`ActionMap::uses_mouse()`），不需要游戏另外声明。
 
 **输入脚本**加一个可选的 `axes` 列表（缺省为空，`version` 仍是 1）：
@@ -404,7 +405,7 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | `light` | `(color, intensity)` | 无 | 方向光，照向节点的 -Z |
 | `character` | `(run_speed, turn_speed)` | 无 | 角色组件（第 11 节）。`run_speed` 米/秒，`turn_speed` 度/秒 |
 | `orbit_camera` | `(target, pivot_height, distance, yaw, pitch, pitch_min, pitch_max, collision_radius, return_speed)` | 无 | 环绕相机组件（第 11 节），必须和 `camera` 在同一个节点上。`target` 是带 `character` 的节点路径；角度都是度。`collision_radius`（米）、`return_speed`（米/秒）是 G1.7 起的相机碰撞参数，必填 |
-| `props` | `[(名字, 数值)]` | 空 | 游戏自定义的数值参数（E4.4 起），例如 `[("hp", 10), ("attack", 1)]`。引擎不解释它们，由游戏读取和校验（`rogue` 见第 15 节）。写在场景里，所以热重载就能调 |
+| `props` | `[(名字, 数值)]` | 空 | 游戏自定义的数值参数（E4.4 起），例如 `[("hp", 10), ("attack", 1)]`。引擎不解释它们，由游戏读取和校验（`souls` 见第 11 节，`rogue` 见第 15 节）。写在场景里，所以热重载就能调 |
 | `collider` | `Box` | 无 | 静态碰撞体（第 11 节「碰撞」，G1.3 起）：和 `Cube` 一样是单位立方体，用节点的 `scale`、`rotation`、`position` 定大小、朝向和位置。只挡角色，不参与渲染（要看得见就另外写 `mesh: Cube`） |
 | `children` | 节点列表 | `[]` | |
 
@@ -477,6 +478,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 
 ```text
 // 1. 相机角度（look_x 向右为正，look_y 向上为正，单位是这个 tick 转的弧度）
+//    G3.1 起前面多了锁定键的处理，锁定时这一步换成相机追目标，见下文「锁定」
 yaw   = wrap(yaw - look_x)                  // wrap 见第 5 步；yaw 始终在 [-π, π)
 pitch = clamp(pitch + look_y, pitch_min, pitch_max)
 
@@ -537,6 +539,7 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 
 - `camera.distance`（G1.7 起）：`cam_distance`，相机当前离 `pivot` 的距离
 - `player` 的 `stamina`、`stamina_wait`、`action`、`action_tick`、`invulnerable`（G2.1 起）见下文「耐力、翻滚、冲刺」
+- `game.lock`（G3.1 起，在 `camera` 后面）见下文「锁定」
 
 ### 耐力、翻滚、冲刺（G2.1 起）
 
@@ -743,6 +746,162 @@ attack_tick(a):                                           // S、A、R 是 a 的
 - `busy` 规则不变：攻击期间（包括开始和结束的那个 tick）都算 busy，不恢复耐力。
 - 攻击方向：出招阶段沿**当前 facing** 的前方滑动，也就是前摇里转完之后的朝向。
 - **没有画面上的耐力条**：要显示得先有 HUD 或文字渲染，还没有使用者。目前在状态导出里看。
+
+### 锁定（G3.1 起）
+
+用户决定（2026-09-27）：
+- **鼠标中键和 Q 都能锁定**，按一下锁定，再按一下解锁。
+- **锁离视线方向最近的目标**：在锁定距离内，选和相机朝向夹角最小的那个，和黑魂 3 一样。
+- **锁定时横甩鼠标换目标**：鼠标在锁定时不再转相机，横向甩过一个阈值，就换到那一侧的下一个目标。
+- **黑魂 3 式移动**：
+  - 走路时始终面朝目标，可以横移、后退；
+  - 翻滚仍朝输入方向；
+  - 攻击的前摇自动转向目标；
+  - 冲刺时面朝跑的方向；
+  - 相机自动转到角色身后，看向目标。
+
+**锁定目标**：带 prop `lock_height` 的节点（第 10 节的 `props`）。锁定点在节点位置上方 `lock_height` 米处，相机对准的是这个点。
+- 目标必须是**根节点**，并且不能是相机节点。每个 tick 从场景读它的位置（G3.1 的目标不会动，G4 的敌人会动）。
+- 目标的先后顺序是场景的先序。「相等时取先出现的」都按这个顺序。
+- 角色节点之外的节点，props 只认 `lock_height`，写了别的名字就报错（防拼写错误）。
+- 演示场景里放了三个假人 `dummy_a`、`dummy_b`、`dummy_c`：
+  - 根节点带 `lock_height`；
+  - 子节点 `body` 是胶囊体网格，子节点 `block` 是挡路的 `collider: Box`（角色不能穿过假人）。
+
+**键位**：动作 `lock` 绑 `MouseMiddle`、`KeyQ`，按下的那个 tick 触发（`just_pressed`）。
+
+**参数**：角色节点的 props，可以省略，规则和「耐力、翻滚、冲刺」相同。
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `lock_range` | 15 | 米，> 0。按锁定键和切换目标时，只考虑水平距离不超过它的目标 |
+| `lock_break_range` | 20 | 米，> 0，并且 ≥ `lock_range`。锁定中，目标的水平距离超过它就自动解锁 |
+| `lock_angle` | 60 | 度，> 0。按锁定键时，目标方向和相机朝向的水平夹角不超过它才能选 |
+| `lock_camera_speed` | 360 | 度/秒，> 0。锁定时相机 yaw、pitch 追目标的最大速度 |
+| `lock_pitch_down` | 15 | 度，0 ≤ v < 90。锁定时相机比「正对锁定点」再往下压这么多，让目标露在角色头顶上方 |
+| `switch_threshold` | 0.1 | 弧度（`look_x` 的单位），> 0。锁定时 `look_x` 连续累计到这么多就换目标 |
+| `switch_cooldown_ticks` | 20 | 整数 ≥ 0。换目标（或者甩了但那一侧没有目标）之后，这么多 tick 内不再换 |
+
+- 换算：`lock_angle`、`lock_pitch_down` 转成弧度，`cam_step = lock_camera_speed.to_radians() / 60`。和前面一样，props 是 f64，先 `as f32` 再算。
+- 新的报错：
+  - `the character "<名字>": prop "lock_pitch_down" must be at least 0 and less than 90, got v`
+  - `the character "<名字>": needs lock_range <= lock_break_range`
+  - `the node "<路径>": unknown prop "<p>" (known: lock_height)`
+  - `the node "<路径>": prop "lock_height" must be greater than 0, got v`
+  - `the lock target "<路径>" must be a root node, and not the camera`
+- 检查顺序：
+  - 7 个新参数的取值检查，接在 G2.3 参数的后面（同一张表）；
+  - `lock_range <= lock_break_range` 接在无敌帧区间的后面、每 tick 距离的前面；
+  - 目标节点的检查放在最后：按先序逐个节点，依次查不认识的名字、`lock_height` 的取值、根节点。
+
+**状态**：
+- `game.lock`：锁定目标的节点路径，没锁定时是 `null`。放在 `camera` 后面：
+
+```json
+"game": { "player": { … }, "camera": { … }, "lock": "dummy_b" }
+```
+
+- 不进状态导出的内部状态：
+  - `flick`：锁定时 `look_x` 的连续累计量，f32；
+  - `switch_wait`：还要等多少 tick 才能再换目标。
+
+下面的伪代码里：
+- `bearing(from, to) = atan2f(-(to.x - from.x), -(to.z - from.z))`，也就是从 `from` 看 `to` 的水平方向，和 `facing`、`yaw` 用同一种角度：0 是 -Z，正数往左（从上往下看是逆时针）。
+- `hdist(from, to) = Vec2(to.x - from.x, to.z - from.z).length()`。
+- `lock_point(t) = t.position + Vec3(0, lock_height, 0)`。
+- `position` 在第 1 步里是本 tick 开始时角色的位置，在第 5 步和攻击里是当时的位置。
+
+**第 1 步**换成：
+
+```text
+// 1a. 锁定键和自动解锁
+if input.just_pressed("lock") {
+    lock = (lock == null) ? acquire() : null
+    flick = 0.0; switch_wait = 0
+} else if lock != null && hdist(position, lock) > lock_break_range {
+    lock = null
+}
+
+if lock == null {
+    （原来的第 1 步：look_x 转 yaw，look_y 转 pitch）
+} else {
+    // 1b. 横甩换目标（look_y 不起作用）
+    if switch_wait > 0 {
+        switch_wait -= 1; flick = 0.0
+    } else if look_x == 0.0 {
+        flick = 0.0
+    } else {
+        flick += look_x
+        if |flick| >= switch_threshold {
+            if let Some(t) = switch_target(flick > 0.0 ? right : left) { lock = t }
+            flick = 0.0; switch_wait = switch_cooldown_ticks
+        }
+    }
+    // 1c. 相机追目标
+    pivot = position + Vec3(0, pivot_height, 0); p = lock_point(lock)
+    dh = Vec2(p.x - pivot.x, p.z - pivot.z).length()
+    if dh > 0.0 {
+        yaw_t   = bearing(pivot, p)
+        pitch_t = clamp(atan2f(p.y - pivot.y, dh) - lock_pitch_down, pitch_min, pitch_max)
+        yaw     = wrap(yaw + clamp(wrap(yaw_t - yaw), -cam_step, cam_step))
+        pitch   = pitch + clamp(pitch_t - pitch, -cam_step, cam_step)
+    }
+}
+
+acquire():                                    // 离视线方向最近的
+    best = null
+    for t in 目标（先序）:
+        d = hdist(position, t)
+        if d == 0.0 || d > lock_range: continue
+        a = |wrap(bearing(position, t) - yaw)|    // yaw 是本 tick 开始时的值
+        if a > lock_angle: continue
+        if best == null || a < best_a: best = t; best_a = a
+    return best
+
+switch_target(side):                          // 那一侧离当前目标方向最近的
+    cur = bearing(position, lock)
+    best = null
+    for t in 目标（先序），t != lock:
+        d = hdist(position, t)
+        if d == 0.0 || d > lock_range: continue
+        δ = wrap(bearing(position, t) - cur)       // 正数在左边，负数在右边
+        right：要求 δ < 0，取 δ 最大的；left：要求 δ > 0，取 δ 最小的；相等时取先出现的
+    return best
+```
+
+**第 5 步（转身）**，只在「冲刺或普通跑」的分支里执行，改成：
+
+```text
+if lock != null && action != sprint {
+    if hdist(position, lock) > 0.0 { 按原公式朝 bearing(position, lock) 转，每 tick 最多 max_turn }
+} else if v.length_squared() > 0.0 {
+    （原来的第 5 步：朝 dir 转）
+}
+```
+
+**攻击的前摇**（`attack_tick` 的 startup 分支）改成：
+
+```text
+if lock != null {
+    if hdist(position, lock) > 0.0 { 朝 bearing(position, lock) 转，每 tick 最多 attack_turn_step }
+} else if v.length_squared() > 0.0 {
+    （原来的：朝 dir 转）
+}
+```
+
+- **移动方向**照旧相对相机（第 3 步）。锁定时相机在角色身后对着目标，所以「前」就是朝目标走，「左右」就是绕着目标横移。
+- **翻滚、后撤步**不变：翻滚朝输入方向，并且立刻转过去；后撤步朝 facing 的反方向（锁定时 facing 通常对着目标，所以是背离目标）。结束后，普通跑的分支会按上面的第 5 步转回去对着目标。
+- 锁定键和动作无关，翻滚、攻击期间也能锁定和解锁。
+- 解锁的那个 tick，第 1 步已经按「没锁定」走，`look_x`、`look_y` 照常转相机。
+- 按锁定键时范围内没有目标：什么也不发生（黑魂 3 这时会把相机转回角色身后，这里没做）。
+- 键盘的 `J`、`L` 也是 `look_x`，锁定时按住它们同样会换目标：`0.04` 每 tick，第 3 个 tick 累计到 0.12，达到默认阈值。
+- 只用加减乘除、`sqrt`、`abs`、`min`、`max` 和 libm 的 `atan2f`，符合第 4 节。
+
+**已知限制**（G3.1）：
+- **不检查视线**：隔着柱子也能锁定，被挡住也不解锁。
+- 目标之间方向完全相同（`δ == 0`，一个挡在另一个正后方）时，后面那个换不过去。
+- 画面上没有锁定标记（要有 HUD 或者额外的标记节点），目前在状态导出的 `lock` 里看。
+- 目标不会死，所以不会因为目标死亡而解锁。这是 G3.3 的事。
 
 ### 碰撞（G1.3 起）
 
