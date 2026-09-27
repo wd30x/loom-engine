@@ -7,6 +7,8 @@ use anyhow::{Result, bail};
 use loom_core::SimClock;
 use loom_core::debug::DebugDraw;
 use loom_core::hud::{Hud, HudView};
+
+use crate::sheet::HudSheets;
 use loom_core::input::{ActionMap, ActionState};
 use loom_scene::Scene;
 use serde::Serialize;
@@ -134,6 +136,14 @@ impl AnyGame {
         match self {
             Self::Souls(game) => game.debug_draw(categories, draw),
             Self::Rogue(game) => game.debug_draw(categories, draw),
+        }
+    }
+
+    /// The sheets and tags the game's HUD draws images from.
+    pub fn hud_sheets(&self) -> HudSheets {
+        match self {
+            Self::Souls(_) => souls::Game::hud_sheets(),
+            Self::Rogue(_) => rogue::Game::hud_sheets(),
         }
     }
 

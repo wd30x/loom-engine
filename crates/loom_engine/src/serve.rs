@@ -28,6 +28,7 @@ use crate::output::ensure_parent_dir;
 use crate::report::RunAdapter;
 use crate::run::save_screenshot;
 use crate::schema::LoomSchema;
+use crate::sheet::HudFont;
 use crate::sim::{LoadedScene, Sim};
 use crate::{ServeArgs, Size};
 
@@ -51,9 +52,10 @@ impl std::error::Error for AfterReplies {}
 /// with an error, or failing to close the trace at the end
 /// ([`AfterReplies`]).
 pub(crate) fn serve(args: &ServeArgs) -> Result<()> {
+    let font = HudFont::load()?;
     let sim = match &args.scene {
-        Some(path) => sim_from_file(path)?,
-        None => sim_builtin()?,
+        Some(path) => sim_from_file(path, font)?,
+        None => sim_builtin(font)?,
     };
     let mut session = Session {
         sim,
@@ -153,9 +155,9 @@ impl Session {
                             "give either path or source, not both"
                         )));
                     }
-                    (Some(path), None) => sim_from_file(Path::new(&path)),
-                    (None, Some(source)) => sim_from_source(source),
-                    (None, None) => sim_builtin(),
+                    (Some(path), None) => sim_from_file(Path::new(&path), self.sim.font().clone()),
+                    (None, Some(source)) => sim_from_source(source, self.sim.font().clone()),
+                    (None, None) => sim_builtin(self.sim.font().clone()),
                 }
                 .map_err(ServeError::Engine)?;
                 // Only now: a failed load keeps the session as it was.
@@ -424,6 +426,7 @@ impl Session {
             loaded,
             self.sim.scene_path(),
             self.sim.scene_source().map(str::to_owned),
+            self.sim.font().clone(),
         ))
     }
 
@@ -450,7 +453,7 @@ impl Session {
 }
 
 /// A session on the scene file at `path`, remembering its text for `reset`.
-fn sim_from_file(path: &Path) -> Result<Sim> {
+fn sim_from_file(path: &Path, font: HudFont) -> Result<Sim> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("reading scene {}", path.display()))?;
     let loaded = LoadedScene::from_source(&source)
@@ -459,6 +462,7 @@ fn sim_from_file(path: &Path) -> Result<Sim> {
         loaded,
         Some(path.display().to_string()),
         Some(source),
+        font,
     ))
 }
 
@@ -477,14 +481,14 @@ fn invalid(e: EditError) -> ServeError {
 }
 
 /// A session on scene text given inline.
-fn sim_from_source(source: String) -> Result<Sim> {
+fn sim_from_source(source: String, font: HudFont) -> Result<Sim> {
     let loaded = LoadedScene::from_source(&source).context("invalid scene source")?;
-    Ok(Sim::held(loaded, None, Some(source)))
+    Ok(Sim::held(loaded, None, Some(source), font))
 }
 
 /// A session on the built-in demo scene.
-fn sim_builtin() -> Result<Sim> {
-    Ok(Sim::held(LoadedScene::builtin()?, None, None))
+fn sim_builtin(font: HudFont) -> Result<Sim> {
+    Ok(Sim::held(LoadedScene::builtin()?, None, None, font))
 }
 
 // ---------------------------------------------------------------- protocol

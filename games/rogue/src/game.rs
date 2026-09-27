@@ -638,6 +638,11 @@ impl Game {
     /// section 18).
     pub fn hud(&self, _view: &HudView, _hud: &mut Hud) {}
 
+    /// The sheets the HUD draws images from: none.
+    pub fn hud_sheets() -> &'static [(&'static str, &'static [&'static str])] {
+        &[]
+    }
+
     pub fn clock(&self) -> SimClock {
         self.clock
     }

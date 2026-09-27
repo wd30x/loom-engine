@@ -48,6 +48,11 @@ pub(crate) struct NodeDesc {
     /// Unique among its siblings.
     #[schemars(pattern("^[a-z][a-z0-9_]*$"))]
     pub name: String,
+    /// A name for people to read, e.g. over a boss's health bar. Not
+    /// empty; which characters it may have is the game's to say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub display_name: Option<String>,
     /// Local position in meters, relative to the parent. Default (0, 0, 0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Triple>,
@@ -235,6 +240,7 @@ pub(crate) struct OrbitCameraDesc {
 #[serde(deny_unknown_fields)]
 pub(crate) struct NodePatch {
     pub name: Option<String>,
+    pub display_name: Option<String>,
     pub position: Option<Triple>,
     pub rotation: Option<Triple>,
     pub look_at: Option<Triple>,

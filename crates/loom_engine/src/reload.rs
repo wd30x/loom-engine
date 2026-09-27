@@ -137,8 +137,16 @@ mod tests {
         io::Error::new(io::ErrorKind::NotFound, "gone")
     }
 
-    /// A watcher started at `t0` on `GOOD` with modification time 1.
+    /// A watcher started at `t0` on `GOOD` with modification time 1. The
+    /// working directory becomes the repository root, as for `loom`: the
+    /// souls HUD's icon sheet path is relative to it. Every test in this
+    /// binary that depends on the working directory wants that root.
     fn watcher(t0: Instant) -> SceneWatcher {
+        static ROOT: std::sync::Once = std::sync::Once::new();
+        ROOT.call_once(|| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            std::env::set_current_dir(root).expect("the repository root exists");
+        });
         SceneWatcher::new(t0, Some(at(1)), GOOD.to_owned())
     }
 

@@ -6,6 +6,8 @@ use bytemuck::{Pod, Zeroable};
 use glam::camera::rh;
 use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 
+use std::ops::Range;
+
 use crate::{MeshKind, TextureId};
 
 /// Everything needed to draw one frame.
@@ -45,6 +47,17 @@ pub enum HudDraw {
     Disc {
         center: Vec2,
         radius: f32,
+        color: Vec4,
+    },
+    /// The pixels `rect` (x, y, width, height; inside the texture) of
+    /// `texture` stretched over `min`..`min + size`, unfiltered: texels with
+    /// alpha < 0.5 are left out, the rest are their color times `color`,
+    /// with `color`'s alpha.
+    Image {
+        texture: TextureId,
+        min: Vec2,
+        size: Vec2,
+        rect: [u32; 4],
         color: Vec4,
     },
 }
@@ -233,14 +246,19 @@ pub(crate) fn line_vertices(lines: &[LineDraw]) -> Vec<LineVertex> {
 pub(crate) struct HudVertex {
     /// NDC.
     position: [f32; 2],
-    /// -1..1 across a disc's bounding square; 0 on a rectangle.
+    /// -1..1 across a disc's bounding square; 0 on anything else.
     local: [f32; 2],
     color: [f32; 4],
+    /// 0 at the quad's top-left corner, 1 at the bottom-right.
+    uv: [f32; 2],
+    /// An image's x, y, width, height in texture pixels; 0 on the rest.
+    rect: [u32; 4],
 }
 
 impl HudVertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
+    const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x2, 4 => Uint32x4
+    ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -251,48 +269,75 @@ impl HudVertex {
     }
 }
 
+/// A run of HUD vertices drawn alike: solid (`None`) or with one texture.
+pub(crate) type HudRun = (Option<TextureId>, Range<u32>);
+
 /// The vertices of `hud` for a triangle list on a `width` x `height` pixel
-/// target: two triangles per item, in order; a disc is its bounding square.
-pub(crate) fn hud_vertices(hud: &[HudDraw], width: u32, height: u32) -> Vec<HudVertex> {
+/// target, two triangles per item in order (a disc is its bounding square),
+/// and the runs to draw them in: consecutive items drawn alike (solid, or
+/// the same texture) share a run, so drawing the runs in order keeps the
+/// list's order.
+pub(crate) fn hud_vertices(
+    hud: &[HudDraw],
+    width: u32,
+    height: u32,
+) -> (Vec<HudVertex>, Vec<HudRun>) {
     let (w, h) = (width as f32, height as f32);
     let ndc = |p: Vec2| [p.x / w * 2.0 - 1.0, 1.0 - p.y / h * 2.0];
-    hud.iter()
-        .flat_map(|item| {
-            let (min, max, disc, color) = match *item {
-                HudDraw::Rect { min, size, color } => (min, min + size, false, color),
-                HudDraw::Disc {
-                    center,
-                    radius,
-                    color,
-                } => (
-                    center - Vec2::splat(radius),
-                    center + Vec2::splat(radius),
-                    true,
-                    color,
-                ),
+    let mut vertices = Vec::with_capacity(hud.len() * 6);
+    let mut runs: Vec<HudRun> = Vec::new();
+    for item in hud {
+        let (min, max, disc, color, texture, rect) = match *item {
+            HudDraw::Rect { min, size, color } => (min, min + size, false, color, None, [0; 4]),
+            HudDraw::Disc {
+                center,
+                radius,
+                color,
+            } => (
+                center - Vec2::splat(radius),
+                center + Vec2::splat(radius),
+                true,
+                color,
+                None,
+                [0; 4],
+            ),
+            HudDraw::Image {
+                texture,
+                min,
+                size,
+                rect,
+                color,
+            } => (min, min + size, false, color, Some(texture), rect),
+        };
+        let corner = |x: bool, y: bool| {
+            let p = Vec2::new(if x { max.x } else { min.x }, if y { max.y } else { min.y });
+            let local = if disc {
+                [if x { 1.0 } else { -1.0 }, if y { 1.0 } else { -1.0 }]
+            } else {
+                [0.0, 0.0]
             };
-            let corner = |x: bool, y: bool| {
-                let p = Vec2::new(if x { max.x } else { min.x }, if y { max.y } else { min.y });
-                let local = if disc {
-                    [if x { 1.0 } else { -1.0 }, if y { 1.0 } else { -1.0 }]
-                } else {
-                    [0.0, 0.0]
-                };
-                HudVertex {
-                    position: ndc(p),
-                    local,
-                    color: color.to_array(),
-                }
-            };
-            let (a, b, c, d) = (
-                corner(false, false),
-                corner(true, false),
-                corner(true, true),
-                corner(false, true),
-            );
-            [a, b, c, a, c, d]
-        })
-        .collect()
+            HudVertex {
+                position: ndc(p),
+                local,
+                color: color.to_array(),
+                uv: [f32::from(u8::from(x)), f32::from(u8::from(y))],
+                rect,
+            }
+        };
+        let (a, b, c, d) = (
+            corner(false, false),
+            corner(true, false),
+            corner(true, true),
+            corner(false, true),
+        );
+        let first = u32::try_from(vertices.len()).expect("hud vertex count fits in u32");
+        vertices.extend([a, b, c, a, c, d]);
+        match runs.last_mut() {
+            Some((t, range)) if *t == texture => range.end = first + 6,
+            _ => runs.push((texture, first..first + 6)),
+        }
+    }
+    (vertices, runs)
 }
 
 #[cfg(test)]
@@ -312,21 +357,66 @@ mod tests {
                 radius: 25.0,
                 color: Vec4::ONE,
             },
+            HudDraw::Image {
+                texture: TextureId(3),
+                min: Vec2::new(150.0, 50.0),
+                size: Vec2::new(50.0, 50.0),
+                rect: [16, 0, 16, 16],
+                color: Vec4::ONE,
+            },
         ];
-        let v = hud_vertices(&hud, 200, 100);
-        assert_eq!(v.len(), 12);
+        let (v, runs) = hud_vertices(&hud, 200, 100);
+        assert_eq!(v.len(), 18);
         // The rectangle: the top-left quarter of the screen, local 0.
         assert_eq!(v[0].position, [-1.0, 1.0]);
         assert_eq!(v[2].position, [0.0, 0.0]);
         assert_eq!(v[5].position, [-1.0, 0.0]);
-        assert!(v[..6].iter().all(|v| v.local == [0.0, 0.0]));
+        assert!(
+            v[..6]
+                .iter()
+                .all(|v| v.local == [0.0, 0.0] && v.rect == [0; 4])
+        );
         assert_eq!(v[0].color, [1.0, 0.0, 0.0, 0.5]);
         // The disc: its bounding square around the center, local ±1.
         assert_eq!((v[6].position, v[6].local), ([-0.25, 0.5], [-1.0, -1.0]));
         assert_eq!((v[8].position, v[8].local), ([0.25, -0.5], [1.0, 1.0]));
-        // 32 bytes a vertex, as the shader's three attributes.
-        assert_eq!(bytemuck::cast_slice::<_, u8>(&v).len(), 12 * 32);
-        assert!(hud_vertices(&[], 200, 100).is_empty());
+        // The image: uv from the top-left corner, its rect on every corner.
+        assert_eq!((v[12].position, v[12].uv), ([0.5, 0.0], [0.0, 0.0]));
+        assert_eq!((v[14].position, v[14].uv), ([1.0, -1.0], [1.0, 1.0]));
+        assert!(v[12..].iter().all(|v| v.rect == [16, 0, 16, 16]));
+        // 56 bytes a vertex, as the shader's five attributes.
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&v).len(), 18 * 56);
+        // The two solid items share a run; the image has its own.
+        assert_eq!(runs, [(None, 0..12), (Some(TextureId(3)), 12..18)]);
+        assert_eq!(hud_vertices(&[], 200, 100), (Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn hud_runs_split_wherever_the_kind_or_texture_changes() {
+        let rect = HudDraw::Rect {
+            min: Vec2::ZERO,
+            size: Vec2::ONE,
+            color: Vec4::ONE,
+        };
+        let image = |t| HudDraw::Image {
+            texture: TextureId(t),
+            min: Vec2::ZERO,
+            size: Vec2::ONE,
+            rect: [0, 0, 1, 1],
+            color: Vec4::ONE,
+        };
+        let hud = [image(1), image(1), rect, image(1), image(2), rect, rect];
+        let (_, runs) = hud_vertices(&hud, 10, 10);
+        assert_eq!(
+            runs,
+            [
+                (Some(TextureId(1)), 0..12),
+                (None, 12..18),
+                (Some(TextureId(1)), 18..24),
+                (Some(TextureId(2)), 24..30),
+                (None, 30..42),
+            ]
+        );
     }
 
     #[test]

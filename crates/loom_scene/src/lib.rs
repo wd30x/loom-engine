@@ -68,6 +68,8 @@ pub enum Problem {
     InvalidName,
     #[error("another node with the same parent has the same name")]
     DuplicateName,
+    #[error("display_name must not be empty")]
+    EmptyDisplayName,
     #[error("{0} contains a non-finite number")]
     NotFinite(&'static str),
     #[error("scale components must be greater than 0")]
@@ -321,6 +323,8 @@ pub enum Collider {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub name: String,
+    /// A name for people to read; never empty.
+    pub display_name: Option<String>,
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     pub transform: Transform,
@@ -714,6 +718,9 @@ impl<'a> Builder<'a> {
 /// Validates one node's own fields (not its name or children). The
 /// `orbit_camera` is validated but left out: its target is resolved later.
 fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Problem> {
+    if desc.display_name.as_deref() == Some("") {
+        return Err(Problem::EmptyDisplayName);
+    }
     let position = finite(desc.position.unwrap_or((0.0, 0.0, 0.0)), "position")?;
     let scale = finite(desc.scale.unwrap_or((1.0, 1.0, 1.0)), "scale")?;
     if scale.cmple(Vec3::ZERO).any() {
@@ -815,6 +822,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     };
     Ok(Node {
         name: desc.name.clone(),
+        display_name: desc.display_name.clone(),
         parent,
         children: Vec::new(),
         transform: Transform {

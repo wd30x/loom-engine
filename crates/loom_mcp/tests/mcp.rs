@@ -10,6 +10,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+/// Where `loom` runs, as in use: the repository root, which the paths of the
+/// HUD font and sheets are relative to.
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `loom` next to `loom-mcp` in the same target directory.
@@ -40,6 +46,7 @@ struct Mcp {
 impl Mcp {
     fn start(loom: &Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_loom-mcp"))
+            .current_dir(repo_root())
             .arg("--loom")
             .arg(loom)
             .env("RUST_LOG", "off")
@@ -142,6 +149,7 @@ impl Mcp {
 /// (numbered 1, 2, ...).
 fn serve_result(loom: &Path, requests: &[Value]) -> String {
     let mut child = Command::new(loom)
+        .current_dir(repo_root())
         .arg("serve")
         .env("RUST_LOG", "off")
         .stdin(Stdio::piped())

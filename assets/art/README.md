@@ -1,16 +1,21 @@
 # assets/art
 
-`rogue` 的美术源文件和导出结果。`.aseprite` 是二进制源文件（走 Git LFS），这份 README 是它的文本说明：**改图之前先读这里**，改完同步更新。
+`rogue` 和 `souls` 的美术源文件和导出结果。`.aseprite` 是二进制源文件（走 Git LFS），这份 README 是它的文本说明：**改图之前先读这里**，改完同步更新。
 
 | 文件 | 说明 |
 |---|---|
-| `tiles.aseprite` | 源文件：16×16，indexed，5 帧，每帧一个 tag |
+| `tiles.aseprite` | `rogue` 的瓦片源文件：16×16，indexed，5 帧，每帧一个 tag |
 | `tiles.png` | 导出的 sprite sheet，80×16，横排，索引色 PNG（走 LFS） |
 | `tiles.json` | 导出的数据，json-array 格式，带 `frameTags` |
+| `souls_hud.aseprite` | `souls` 的 HUD 图标源文件：16×16，RGB，2 帧，每帧一个 tag（见下文「souls 的 HUD 图标」） |
+| `souls_hud.png` | 导出的 sprite sheet，32×16，横排，RGBA PNG（走 LFS） |
+| `souls_hud.json` | 导出的数据，json-array 格式，带 `frameTags` |
+
+HUD 的像素字体不在这里，在 `assets/fonts/`，说明见那里的 README。
 
 `.ase-mcp/` 是 aseprite 的 MCP（`ase-mcp`）存放 undo 快照和临时文件的私有目录，不属于美术资源。
 
-## 瓦片
+## 瓦片（tiles）
 
 所有瓦片都是俯视、像素风，末日废土。可读性第一：原始尺寸下也要一眼分得清。
 
@@ -195,3 +200,137 @@ list_tags: true
 - `meta.frameTags` 依次是 `floor`、`wall`、`player`、`zombie`、`corpse`，`from == to`，分别是 0 到 4；
 - `meta.format` 是 `I8`；
 - `meta.size` 是 80×16。
+
+## souls 的 HUD 图标（souls_hud）
+
+`souls` 的 HUD 在屏幕下方画这两个图标（`docs/architecture.md` 第 11 节「HUD」的「文字和图标」）。游戏在 `hud_sheets()` 里声明它们，引擎在场景加载时读进来，并检查两个 tag 都存在。HUD 按 `scale` 2 画，所以屏幕上是 32×32 个 HUD 单位。
+
+| 帧（1 起） | tag | JSON 里的 `from`/`to` | 内容 | 背景 |
+|---|---|---|---|---|
+| 1 | `flask` | 0 | 原素瓶：深棕轮廓；瓶口是棕色软木塞，下面一道横边；细瓶颈往下展开成圆肚。瓶身是金色玻璃，左边一道高光，右边一道暗金；下半部装着橙色的原素。颜色和场景里瓶子的 `(0.9, 0.7, 0.2)` 相近。瓶数为 0 时，游戏把它乘上 `(0.35, 0.35, 0.35)` 画成暗色，不另画一帧 | 透明 |
+| 2 | `soul` | 1 | 魂：一团往上收尖的光，形状像水滴。从外到内依次是蓝边、浅蓝、淡蓝白，中心是纯白 | 透明 |
+
+两帧都是左右大致对称。在原始 16×16 下，在浅灰地面和深色天空上都分得清。
+
+### 颜色
+
+RGB 模式，所以没有调色板。只用到下面这些不透明色，其余像素全透明（alpha 0）。字母是下文 Lua 字符图里的记号：
+
+| 字母 | 颜色 | 用途 |
+|---|---|---|
+| `a` | `#3b2412` | 瓶：轮廓 |
+| `b` | `#9a6a36` | 瓶：软木塞 |
+| `c` | `#fff6cc` | 瓶：玻璃高光 |
+| `d` | `#f3da7c` | 瓶：金色玻璃 |
+| `e` | `#b8862e` | 瓶：暗金 |
+| `f` | `#ff9f2e` | 瓶：原素 |
+| `g` | `#4f8fd0` | 魂：外边 |
+| `h` | `#8cc8f0` | 魂：浅蓝 |
+| `i` | `#cdeeff` | 魂：淡蓝白 |
+| `j` | `#ffffff` | 魂：中心 |
+
+### 怎么画出来的
+
+用 aseprite 的 MCP，两次调用就能从零重建 `souls_hud.aseprite`：
+
+1. `create_sprite`：`file: "souls_hud.aseprite"`，`width: 16`，`height: 16`，`color_mode: "rgb"`，不传 `palette`。已有文件时加 `overwrite: true`。
+2. `run_lua`：`file: "souls_hud.aseprite"`，代码见下文。
+
+像素写成字符串，一行一个，一个字母对应上表的一个颜色，`.` 是透明。两帧都是手画的字符图。E6.2 核对过：按这两步重建，再按下文导出，得到的 PNG 和 JSON 与仓库里的逐字节相同。
+
+```lua
+-- One string per row, one letter per color; '.' is transparent.
+local pc = app.pixelColor
+local colors = {
+  a = pc.rgba(59, 36, 18, 255),    -- flask: outline
+  b = pc.rgba(154, 106, 54, 255),  -- flask: cork
+  c = pc.rgba(255, 246, 204, 255), -- flask: glass highlight
+  d = pc.rgba(243, 218, 124, 255), -- flask: gold glass
+  e = pc.rgba(184, 134, 46, 255),  -- flask: dark gold
+  f = pc.rgba(255, 159, 46, 255),  -- flask: estus
+  g = pc.rgba(79, 143, 208, 255),  -- soul: edge
+  h = pc.rgba(140, 200, 240, 255), -- soul: blue
+  i = pc.rgba(205, 238, 255, 255), -- soul: pale
+  j = pc.rgba(255, 255, 255, 255), -- soul: core
+}
+local icons = {
+  { name = "flask", rows = {
+    "......aaaa......",
+    "......abba......",
+    ".....aaaaaa.....",
+    "......acda......",
+    "......acda......",
+    ".....acddea.....",
+    "....acddddea....",
+    "...accdddddea...",
+    "..acffffffffea..",
+    "..acffffffffea..",
+    "..adffffffffea..",
+    "..adffffffffea..",
+    "...adffffffea...",
+    "....addddeea....",
+    ".....aaaaaa.....",
+    "................",
+  } },
+  { name = "soul", rows = {
+    "................",
+    ".......g........",
+    "......gh........",
+    "......ghg.......",
+    ".....ghihg......",
+    ".....ghiihg.....",
+    "....ghiiiihg....",
+    "...ghiijjiihg...",
+    "..ghiijjjjiihg..",
+    "..ghijjjjjjihg..",
+    "..ghijjjjjjihg..",
+    "..ghiijjjjiihg..",
+    "...ghiijjiihg...",
+    "....ghhiihhg....",
+    ".....gghhgg.....",
+    "......gggg......",
+  } },
+}
+
+local spr = app.sprite
+local layer = spr.layers[1]
+while #spr.frames < #icons do spr:newEmptyFrame() end
+for i, icon in ipairs(icons) do
+  local cel = layer:cel(i) or spr:newCel(layer, i)
+  local img = Image(spr.width, spr.height, spr.colorMode)
+  for y, row in ipairs(icon.rows) do
+    for x = 1, #row do
+      local ch = row:sub(x, x)
+      if ch ~= "." then img:drawPixel(x - 1, y - 1, colors[ch]) end
+    end
+  end
+  cel.image = img
+  cel.position = Point(0, 0)
+  local tag = spr:newTag(i, i)
+  tag.name = icon.name
+end
+```
+
+和瓦片一样，先建好全部帧再加 tag，所以不会遇到 tag 被自动延长的问题。
+
+### 怎么重新导出
+
+aseprite 的 MCP `export_sheet`：
+
+```
+file: "souls_hud.aseprite"
+png: "souls_hud.png"
+data: "souls_hud.json"
+data_format: "json-array"
+sheet_type: "horizontal"
+list_tags: true
+```
+
+`sheet_type` 和 `list_tags` 用的都是默认值，写出来是为了明确。导出后检查 `souls_hud.json`：
+- `frames` 有 2 项，都是 16×16，`trimmed` 都是 false，`frame` 依次是 `(0, 0)` 和 `(16, 0)`；
+- `meta.frameTags` 依次是 `flask`（0–0）和 `soul`（1–1）；
+- `meta.image` 是相对文件名 `"souls_hud.png"`，不能是绝对路径；
+- `meta.format` 是 `RGBA8888`；
+- `meta.size` 是 32×16。
+
+改了 tag 名，`games/souls/src/hud.rs` 里的 `FLASK_ICON`、`SOUL_ICON` 要一起改，否则场景加载时会报 `HUD sheet assets/art/souls_hud.json has no tag …`。

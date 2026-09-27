@@ -20,7 +20,7 @@ use crate::debug;
 use crate::games::AnyGame;
 use crate::output::ensure_parent_dir;
 use crate::report::{InputReport, TraceReport};
-use crate::sheet::Sheets;
+use crate::sheet::{HudFont, Sheets};
 use crate::state::StateDump;
 use crate::trace::Trace;
 use crate::view::{HudFn, render_scene};
@@ -44,7 +44,7 @@ impl LoadedScene {
     }
 
     fn new(game: AnyGame) -> Result<Self> {
-        let sheets = Sheets::load(game.scene())?;
+        let sheets = Sheets::load(game.scene(), game.hud_sheets())?;
         Ok(Self { game, sheets })
     }
 }
@@ -82,6 +82,9 @@ pub(crate) struct Sim {
     /// Whether frames show the HUD: not with `--no-hud`. A serve session
     /// chooses per screenshot instead.
     hud: bool,
+    /// The engine's HUD font, read once at startup; each scene's sheets get
+    /// a copy.
+    font: HudFont,
     /// `--scene` as given; `None` for the built-in scene.
     scene_path: Option<String>,
     /// Source text of the scene as loaded (`--scene`, or a scene a serve
@@ -90,9 +93,11 @@ pub(crate) struct Sim {
 }
 
 impl Sim {
-    /// Reads and validates `--scene` and `--input` (if given) before any
-    /// tick runs. Without a script, `live` selects keyboard input over none.
+    /// Reads the HUD font, then reads and validates `--scene` and `--input`
+    /// (if given) before any tick runs. Without a script, `live` selects
+    /// keyboard input over none.
     pub fn new(args: &RunArgs, live: bool) -> Result<Self> {
+        let font = HudFont::load()?;
         let (loaded, scene_source) = match &args.scene {
             Some(path) => {
                 let src = std::fs::read_to_string(path)
@@ -126,9 +131,11 @@ impl Sim {
             None if live => InputSource::Live(InputCollector::new()),
             None => InputSource::Idle,
         };
+        let mut sheets = loaded.sheets;
+        sheets.set_font(font.clone());
         let mut sim = Self {
             game: loaded.game,
-            sheets: loaded.sheets,
+            sheets,
             actions: ActionState::new(),
             bindings,
             source,
@@ -136,6 +143,7 @@ impl Sim {
             trace: None,
             debug_draw,
             hud: !args.no_hud,
+            font,
             scene_path: args.scene.as_ref().map(|p| p.display().to_string()),
             scene_source,
         };
@@ -153,17 +161,21 @@ impl Sim {
         loaded: LoadedScene,
         scene_path: Option<String>,
         scene_source: Option<String>,
+        font: HudFont,
     ) -> Self {
+        let mut sheets = loaded.sheets;
+        sheets.set_font(font.clone());
         Self {
             bindings: loaded.game.bindings(),
             game: loaded.game,
-            sheets: loaded.sheets,
+            sheets,
             actions: ActionState::new(),
             source: InputSource::Held(TickInput::default()),
             recorder: Some(InputRecorder::new()),
             trace: None,
             debug_draw: None,
             hud: true,
+            font,
             scene_path,
             scene_source,
         }
@@ -176,6 +188,7 @@ impl Sim {
         self.bindings = loaded.game.bindings();
         self.game = loaded.game;
         self.sheets = loaded.sheets;
+        self.sheets.set_font(self.font.clone());
         self.actions = ActionState::new();
         if self.recorder.is_some() {
             self.recorder = Some(InputRecorder::new());
@@ -210,16 +223,19 @@ impl Sim {
             .clone()
             .context("a serve session always records")?;
         let mut player = ScriptPlayer::new(recorder.clone().finish());
+        let mut sheets = loaded.sheets;
+        sheets.set_font(self.font.clone());
         let mut sim = Self {
             bindings: loaded.game.bindings(),
             game: loaded.game,
-            sheets: loaded.sheets,
+            sheets,
             actions: ActionState::new(),
             source: InputSource::Held(held.clone()),
             recorder: Some(recorder),
             trace: None,
             debug_draw: None,
             hud: self.hud,
+            font: self.font.clone(),
             scene_path: self.scene_path.clone(),
             scene_source: Some(source),
         };
@@ -392,6 +408,11 @@ impl Sim {
     /// Whether frames show the HUD: `false` with `--no-hud`.
     pub fn hud(&self) -> bool {
         self.hud
+    }
+
+    /// The HUD font this session was started with.
+    pub fn font(&self) -> &HudFont {
+        &self.font
     }
 
     /// `--debug-draw`: the categories it turned on; `None` without it.

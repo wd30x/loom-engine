@@ -357,3 +357,58 @@ fn edits_that_break_a_scene_rule_fail_to_build_with_the_load_message() {
         r#"node "box": character and collider cannot be on the same node"#
     );
 }
+
+// ---------------------------------------------------------------- display_name
+
+#[test]
+fn display_name_is_read_and_written_right_after_the_name() {
+    let src = r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+        (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+        (mesh: Cube, display_name: "Iudex Gundyr", name: "boss"),
+    ])"#;
+    let scene = Scene::parse(src).unwrap();
+    let boss = scene.find("boss").unwrap();
+    assert_eq!(
+        scene.node(boss).display_name.as_deref(),
+        Some("Iudex Gundyr")
+    );
+    assert_eq!(scene.node(scene.find("cam").unwrap()).display_name, None);
+    let doc = SceneDoc::parse(src).unwrap();
+    assert_eq!(
+        ron_of(&doc, "boss"),
+        "(\n    name: \"boss\",\n    display_name: \"Iudex Gundyr\",\n    mesh: Cube,\n)\n"
+    );
+}
+
+#[test]
+fn empty_display_name_is_a_scene_error_naming_the_node() {
+    let src = r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+        (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+        (name: "g", children: [(name: "boss", display_name: "")]),
+    ])"#;
+    assert_eq!(
+        Scene::parse(src).unwrap_err().to_string(),
+        "node \"g/boss\": display_name must not be empty"
+    );
+}
+
+#[test]
+fn edit_node_sets_and_unsets_display_name() {
+    let mut doc = small();
+    doc.edit_node("box", Some(r#"display_name: "The Box""#), &[], &no_props())
+        .unwrap();
+    assert!(ron_of(&doc, "box").starts_with(
+        "(\n    name: \"box\",\n    display_name: \"The Box\",\n    position: (1.0, 0.0, 0.0),\n"
+    ));
+    let scene = Scene::parse(&doc.to_ron()).unwrap();
+    assert_eq!(
+        scene
+            .node(scene.find("box").unwrap())
+            .display_name
+            .as_deref(),
+        Some("The Box")
+    );
+    doc.edit_node("box", None, &["display_name".to_owned()], &no_props())
+        .unwrap();
+    assert!(!ron_of(&doc, "box").contains("display_name"));
+}

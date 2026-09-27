@@ -281,6 +281,14 @@
               }
             ]
           },
+          "display_name": {
+            "description": "A name for people to read, e.g. over a boss's health bar. Not\nempty; which characters it may have is the game's to say.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
           "light": {
             "description": "The scene's one light, if any.",
             "anyOf": [
@@ -2771,7 +2779,8 @@
             "an enemy: enemy_speed / 60, lunge_distance / lunge_active_ticks and, with phase2_at, enemy_speed / 60 / phase2_speed_scale are less than hurt_radius",
             "an enemy has no collider in its subtree",
             "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a lock target, hurtbox, swinger or enemy",
-            "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children"
+            "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children",
+            "an enemy with boss_bar 1: its display_name has only the characters 32 to 126"
           ]
         }
       },

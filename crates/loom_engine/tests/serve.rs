@@ -19,7 +19,7 @@ struct Session {
 /// Starts `loom serve`, writes `requests` one per line, closes stdin and
 /// collects every reply until the process exits.
 fn serve_raw(requests: &[String]) -> Session {
-    serve_raw_in(std::path::Path::new("."), requests)
+    serve_raw_in(&repo_root(), requests)
 }
 
 /// The repository root: scenes under `assets/` name their sheets relative
@@ -66,7 +66,7 @@ fn serve_raw_in(dir: &std::path::Path, requests: &[String]) -> Session {
 /// [`serve_raw`], checking the exit code 0 and one reply per request.
 /// Returns the parsed replies.
 fn serve(requests: &[String]) -> Vec<Value> {
-    serve_in(std::path::Path::new("."), requests)
+    serve_in(&repo_root(), requests)
 }
 
 /// [`serve`] with `dir` as the working directory.
@@ -166,6 +166,7 @@ fn stepping_with_held_input_matches_replaying_the_recording() {
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .current_dir(repo_root())
         .args(["run", "--headless", "--frames", "60", "--input"])
         .arg(&record)
         .arg("--dump-state")
@@ -626,6 +627,7 @@ fn souls_roll_key_sprints_when_held_rolls_when_tapped_and_replays() {
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .current_dir(repo_root())
         .args(["run", "--headless", "--frames", "23", "--input"])
         .arg(&record)
         .arg("--dump-state")
@@ -686,6 +688,7 @@ fn souls_attack_pressed_through_held_input_reaches_its_active_phase_and_replays(
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .current_dir(repo_root())
         .args(["run", "--headless", "--frames", "12", "--input"])
         .arg(&record)
         .arg("--dump-state")
@@ -736,6 +739,7 @@ fn souls_lock_pressed_through_held_input_locks_on_to_dummy_b_and_replays() {
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .current_dir(repo_root())
         .args(["run", "--headless", "--frames", "10", "--input"])
         .arg(&record)
         .arg("--dump-state")
@@ -845,6 +849,7 @@ fn step_events_carry_their_tick_and_the_text_the_replayed_trace_has() {
     assert_eq!(session.code, 0);
     assert_eq!(session.lines.len(), requests.len(), "{:?}", session.lines);
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .current_dir(repo_root())
         .args(["run", "--headless", "--frames", "250", "--input"])
         .arg(&record)
         .arg("--trace")
@@ -1028,6 +1033,7 @@ fn trace_that_fails_to_close_after_quit_exits_1_without_another_stdout_line() {
     let dir = test_dir("trace_that_fails_to_close_after_quit_exits_1_without_another_stdout_line");
     let trace = dir.join("t.jsonl");
     let mut child = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .current_dir(repo_root())
         .arg("serve")
         .env("RUST_LOG", "off")
         .stdin(Stdio::piped())
@@ -1120,6 +1126,7 @@ fn replay(
     extra: &[&std::path::Path; 2],
 ) {
     let out = Command::new(env!("CARGO_BIN_EXE_loom"))
+        .current_dir(repo_root())
         .args(["run", "--headless", "--scene"])
         .arg(scene)
         .arg("--input")

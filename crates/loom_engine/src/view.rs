@@ -6,11 +6,11 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use glam::{Mat4, Vec3};
-use loom_core::hud::{Hud, HudItem, HudView};
+use glam::{Mat4, Vec2, Vec3};
+use loom_core::hud::{GLYPH_CELL, Hud, HudItem, HudView, glyph_cell};
 use loom_render::{
     DirectionalLight, DrawItem, Frame, HudDraw, LineDraw, Projection, RenderError, Renderer,
-    SpriteDraw, view_projection,
+    SpriteDraw, TextureId, view_projection,
 };
 use loom_scene::{NodeId, Scene};
 
@@ -65,7 +65,10 @@ pub(crate) fn render_scene(
             let view_proj = view_projection(view, projection, aspect, camera.near, camera.far);
             let mut items = Hud::new();
             hud(&HudView::new(width, height, view_proj), &mut items);
-            hud_draws(items.items(), height)
+            let font = sheets.font(renderer).transpose()?;
+            hud_draws(items.items(), height, font, |sheet, tag| {
+                sheets.hud_image(renderer, sheet, tag).transpose()
+            })?
         }
         _ => Vec::new(),
     };
@@ -83,28 +86,83 @@ pub(crate) fn render_scene(
     })
 }
 
-/// HUD items in HUD units to pixels of a frame `height` pixels high.
-fn hud_draws(items: &[HudItem], height: u32) -> Vec<HudDraw> {
-    let scale = height as f32 / loom_core::hud::HUD_HEIGHT;
-    items
-        .iter()
-        .map(|&item| match item {
-            HudItem::Rect { min, size, color } => HudDraw::Rect {
-                min: min * scale,
-                size: size * scale,
+/// HUD items in HUD units to draws in pixels of a frame `height` pixels
+/// high: text as one quad a character from the `font` texture, an image as
+/// one quad of the texture and rectangle `image(sheet, tag)` gives. Text
+/// without a font, and an image `image` gives `None` for (not in the game's
+/// HUD sheets), is left out with an error in the log.
+fn hud_draws(
+    items: &[HudItem],
+    height: u32,
+    font: Option<TextureId>,
+    mut image: impl FnMut(&str, &str) -> Result<Option<(TextureId, [u32; 4])>, RenderError>,
+) -> Result<Vec<HudDraw>, RenderError> {
+    let px = height as f32 / loom_core::hud::HUD_HEIGHT;
+    let [cell_w, cell_h] = GLYPH_CELL;
+    let mut draws = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            &HudItem::Rect { min, size, color } => draws.push(HudDraw::Rect {
+                min: min * px,
+                size: size * px,
                 color,
-            },
-            HudItem::Disc {
+            }),
+            &HudItem::Disc {
                 center,
                 radius,
                 color,
-            } => HudDraw::Disc {
-                center: center * scale,
-                radius: radius * scale,
+            } => draws.push(HudDraw::Disc {
+                center: center * px,
+                radius: radius * px,
                 color,
-            },
-        })
-        .collect()
+            }),
+            HudItem::Text {
+                at,
+                scale,
+                color,
+                text,
+            } => {
+                let Some(texture) = font else {
+                    log::error!("HUD text {text:?} is not drawn: there is no font");
+                    continue;
+                };
+                for (i, c) in text.chars().enumerate() {
+                    let [col, row] = glyph_cell(c);
+                    let x = at.x + (i as f32) * cell_w as f32 * scale;
+                    draws.push(HudDraw::Image {
+                        texture,
+                        min: Vec2::new(x, at.y) * px,
+                        // The glyph, without the blank column and row.
+                        size: Vec2::new((cell_w - 1) as f32, (cell_h - 1) as f32) * *scale * px,
+                        rect: [col * cell_w, row * cell_h, cell_w - 1, cell_h - 1],
+                        color: *color,
+                    });
+                }
+            }
+            &HudItem::Image {
+                sheet,
+                tag,
+                at,
+                scale,
+                color,
+            } => {
+                let Some((texture, rect)) = image(sheet, tag)? else {
+                    log::error!(
+                        "HUD image {tag:?} of {sheet} is not drawn: it is not in the game's HUD sheets"
+                    );
+                    continue;
+                };
+                draws.push(HudDraw::Image {
+                    texture,
+                    min: at * px,
+                    size: Vec2::new(rect[2] as f32, rect[3] as f32) * scale * px,
+                    rect,
+                    color,
+                });
+            }
+        }
+    }
+    Ok(draws)
 }
 
 /// One draw per drawn node with a mesh ([`Scene::is_drawn`]), in scene
@@ -205,8 +263,9 @@ pub(crate) fn view(args: &ViewArgs, started: Instant) -> Result<ViewReport> {
     let src = std::fs::read_to_string(path)
         .with_context(|| format!("reading scene {}", path.display()))?;
     let scene = Scene::parse(&src).with_context(|| format!("invalid scene {}", path.display()))?;
+    // No game, so no HUD sheets.
     let mut sheets =
-        Sheets::load(&scene).with_context(|| format!("invalid scene {}", path.display()))?;
+        Sheets::load(&scene, &[]).with_context(|| format!("invalid scene {}", path.display()))?;
     let mut renderer = Renderer::new_headless(args.size.width, args.size.height)?;
     let renderer_init_ms = millis_since(started);
     render_scene(&mut renderer, &scene, &mut sheets, &[], None)?;
@@ -230,6 +289,21 @@ mod tests {
 
     use super::*;
 
+    /// The font's and every image's stand-in texture in these tests.
+    fn font() -> Option<TextureId> {
+        Some(TextureId::from_index(0))
+    }
+
+    /// `hud_draws` with the test font and one declared image: `flask` of
+    /// `icons.json`, 16x16 at (16, 0) in texture 1.
+    fn draws(items: &[HudItem], height: u32) -> Vec<HudDraw> {
+        hud_draws(items, height, font(), |sheet, tag| {
+            Ok((sheet == "icons.json" && tag == "flask")
+                .then(|| (TextureId::from_index(1), [16, 0, 16, 16])))
+        })
+        .unwrap()
+    }
+
     #[test]
     fn hud_units_scale_to_pixels_by_the_frame_height() {
         let items = [
@@ -246,7 +320,7 @@ mod tests {
         ];
         // 720 high: one unit a pixel.
         assert_eq!(
-            hud_draws(&items, 720),
+            draws(&items, 720),
             [
                 HudDraw::Rect {
                     min: Vec2::new(40.0, 40.0),
@@ -262,13 +336,118 @@ mod tests {
         );
         // 360 high: half a pixel a unit.
         assert_eq!(
-            hud_draws(&items, 360)[0],
+            draws(&items, 360)[0],
             HudDraw::Rect {
                 min: Vec2::new(20.0, 20.0),
                 size: Vec2::new(150.0, 6.0),
                 color: Vec4::ONE,
             }
         );
+    }
+
+    fn glyph(x: f32, y: f32, scale: f32, rect: [u32; 4], color: Vec4) -> HudDraw {
+        HudDraw::Image {
+            texture: TextureId::from_index(0),
+            min: Vec2::new(x, y),
+            size: Vec2::new(5.0, 7.0) * scale,
+            rect,
+            color,
+        }
+    }
+
+    #[test]
+    fn text_is_one_glyph_quad_a_character_six_units_apart() {
+        let color = Vec4::new(0.9, 0.8, 0.7, 1.0);
+        let items = [HudItem::Text {
+            at: Vec2::new(80.0, 657.0),
+            scale: 2.0,
+            color,
+            text: "A1é".to_owned(),
+        }];
+        // 'A' (65) is in column 1, row 2; '1' (49) in column 1, row 1; 'é'
+        // is drawn as '?' (63): column 15, row 1. Each glyph is the 5x7 at
+        // its 6x8 cell's top left.
+        assert_eq!(
+            draws(&items, 720),
+            [
+                glyph(80.0, 657.0, 2.0, [6, 16, 5, 7], color),
+                glyph(92.0, 657.0, 2.0, [6, 8, 5, 7], color),
+                glyph(104.0, 657.0, 2.0, [90, 8, 5, 7], color),
+            ]
+        );
+        // Twice the pixels at twice the height.
+        assert_eq!(
+            draws(&items, 1440)[1],
+            glyph(184.0, 1314.0, 4.0, [6, 8, 5, 7], color)
+        );
+        let empty = [HudItem::Text {
+            at: Vec2::ZERO,
+            scale: 2.0,
+            color,
+            text: String::new(),
+        }];
+        assert!(draws(&empty, 720).is_empty());
+    }
+
+    #[test]
+    fn image_is_its_tags_first_frame_scaled() {
+        let color = Vec4::new(0.35, 0.35, 0.35, 1.0);
+        let items = [HudItem::Image {
+            sheet: "icons.json",
+            tag: "flask",
+            at: Vec2::new(40.0, 648.0),
+            scale: 2.0,
+            color,
+        }];
+        assert_eq!(
+            draws(&items, 720),
+            [HudDraw::Image {
+                texture: TextureId::from_index(1),
+                min: Vec2::new(40.0, 648.0),
+                size: Vec2::new(32.0, 32.0),
+                rect: [16, 0, 16, 16],
+                color,
+            }]
+        );
+    }
+
+    #[test]
+    fn undeclared_images_and_text_without_a_font_are_left_out() {
+        let rect = HudItem::Rect {
+            min: Vec2::ZERO,
+            size: Vec2::ONE,
+            color: Vec4::ONE,
+        };
+        let items = [
+            HudItem::Image {
+                sheet: "icons.json",
+                tag: "flsk",
+                at: Vec2::ZERO,
+                scale: 2.0,
+                color: Vec4::ONE,
+            },
+            rect.clone(),
+            HudItem::Image {
+                sheet: "other.json",
+                tag: "flask",
+                at: Vec2::ZERO,
+                scale: 2.0,
+                color: Vec4::ONE,
+            },
+        ];
+        assert_eq!(draws(&items, 720).len(), 1);
+        let text = [
+            HudItem::Text {
+                at: Vec2::ZERO,
+                scale: 2.0,
+                color: Vec4::ONE,
+                text: "0".to_owned(),
+            },
+            rect,
+        ];
+        let no_font = hud_draws(&text, 720, None, |_, _| Ok(None)).unwrap();
+        assert_eq!(no_font.len(), 1);
+        assert!(matches!(no_font[0], HudDraw::Rect { .. }));
     }
 
     #[test]

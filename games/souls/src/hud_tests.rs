@@ -34,9 +34,15 @@ fn scene(player: &str, nodes: &str) -> String {
 /// An enemy `name` at `(x, 0, z)` with 200 hp and an aggro range of 5,
 /// with `boss_bar` 1 when `boss`.
 fn enemy(name: &str, x: f32, z: f32, boss: bool) -> String {
+    named_enemy(name, None, x, z, boss)
+}
+
+/// `enemy` with a `display_name`, if any.
+fn named_enemy(name: &str, display: Option<&str>, x: f32, z: f32, boss: bool) -> String {
     let bar = if boss { r#", ("boss_bar", 1)"# } else { "" };
+    let display = display.map_or(String::new(), |d| format!("display_name: {d:?}, "));
     format!(
-        r#"(name: "{name}", position: ({x:?}, 0.0, {z:?}), props: [("lock_height", 1.5),
+        r#"(name: "{name}", {display}position: ({x:?}, 0.0, {z:?}), props: [("lock_height", 1.5),
         ("hurt_radius", 0.5), ("hurt_height", 2), ("hp", 200), ("enemy_speed", 0.6),
         ("enemy_aggro_range", 5.0), ("enemy_face_angle", 1),
         ("approach_weight_per_meter", 0), ("lunge_distance", 0.2){bar}]),"#
@@ -128,12 +134,54 @@ fn bars(trail: f32, hp: f32, stamina: f32) -> Vec<HudItem> {
     items
 }
 
+fn text(x: f32, y: f32, color: Vec4, text: &str) -> HudItem {
+    HudItem::Text {
+        at: Vec2::new(x, y),
+        scale: 2.0,
+        color,
+        text: text.to_owned(),
+    }
+}
+
+fn icon(tag: &'static str, x: f32, y: f32, color: Vec4) -> HudItem {
+    HudItem::Image {
+        sheet: "assets/art/souls_hud.json",
+        tag,
+        at: Vec2::new(x, y),
+        scale: 2.0,
+        color,
+    }
+}
+
+/// The flask icon and count at the bottom left and the soul icon and count
+/// at the bottom right of a screen `width` wide, the flask full-colored.
+fn counts(width: f32, flask: &str, souls: &str) -> Vec<HudItem> {
+    let count = Vec4::new(0.95, 0.92, 0.85, 1.0);
+    // The count's right end is 40 from the right edge; 12 units a
+    // character, less the last one's blank column.
+    let text_x = width - 40.0 - (12.0 * souls.len() as f32 - 2.0);
+    vec![
+        icon("flask", 40.0, 648.0, Vec4::ONE),
+        text(80.0, 657.0, count, flask),
+        icon("soul", text_x - 8.0 - 32.0, 648.0, Vec4::ONE),
+        text(text_x, 657.0, count, souls),
+    ]
+}
+
+/// `a` then `b`.
+fn cat(a: Vec<HudItem>, b: Vec<HudItem>) -> Vec<HudItem> {
+    a.into_iter().chain(b).collect()
+}
+
 // ---------------------------------------------------------------- the bars
 
 #[test]
 fn full_health_and_stamina_draw_the_two_bars_full() {
     let run = Run::new("", "");
-    assert_eq!(run.hud(&view()), bars(300.0, 300.0, 300.0));
+    assert_eq!(
+        run.hud(&view()),
+        cat(bars(300.0, 300.0, 300.0), counts(1280.0, "3", "0"))
+    );
     assert_eq!(BAR_BACK, Vec4::new(0.02, 0.02, 0.02, 0.75));
     assert_eq!(BAR_TRAIL, Vec4::new(0.85, 0.7, 0.35, 1.0));
     assert_eq!(BAR_HP, Vec4::new(0.6, 0.05, 0.05, 1.0));
@@ -147,7 +195,10 @@ fn bar_layers_are_as_long_as_the_trail_the_health_and_the_stamina() {
     p.health.hp = 70.0;
     p.hp_trail = 90.0;
     p.stamina = 25.0;
-    assert_eq!(run.hud(&view()), bars(270.0, 210.0, 75.0));
+    assert_eq!(
+        run.hud(&view()),
+        cat(bars(270.0, 210.0, 75.0), counts(1280.0, "3", "0"))
+    );
 }
 
 #[test]
@@ -165,8 +216,11 @@ fn empty_layers_are_left_out() {
     p.health.hp = 0.0;
     p.hp_trail = 0.0;
     p.stamina = 0.0;
-    assert_eq!(run.hud(&view()), bars(0.0, 0.0, 0.0));
-    assert_eq!(run.hud(&view()).len(), 2);
+    assert_eq!(
+        run.hud(&view()),
+        cat(bars(0.0, 0.0, 0.0), counts(1280.0, "3", "0"))
+    );
+    assert_eq!(run.hud(&view()).len(), 6);
 }
 
 #[test]
@@ -310,15 +364,15 @@ fn boss_bar(y: f32, hp: f32) -> Vec<HudItem> {
 fn boss_bar_shows_while_the_character_is_within_its_aggro_range() {
     // 5 m away, an aggro range of 5.
     let mut run = Run::new("", &enemy("b", 0.0, -5.0, true));
-    assert_eq!(run.hud(&view())[5..], boss_bar(660.0, 200.0));
+    assert_eq!(run.hud(&view())[5..7], boss_bar(660.0, 200.0));
     run.game.hurtboxes[0]
         .health
         .as_mut()
         .unwrap()
         .take(50.0, 0.0, 0.0);
-    assert_eq!(run.hud(&view())[5..], boss_bar(660.0, 150.0));
+    assert_eq!(run.hud(&view())[5..7], boss_bar(660.0, 150.0));
     run.game.state.player.position = Vec3::new(0.0, 0.0, 0.01);
-    assert_eq!(run.hud(&view()).len(), 5);
+    assert_eq!(run.hud(&view())[5..], counts(1280.0, "3", "0"));
 }
 
 #[test]
@@ -337,19 +391,22 @@ fn boss_bar_hides_when_the_boss_or_the_character_is_dead() {
         .as_mut()
         .unwrap()
         .take(1000.0, 0.0, 0.0);
-    assert_eq!(run.hud(&view()).len(), 5);
+    assert_eq!(run.hud(&view())[5..], counts(1280.0, "3", "0"));
 
     let mut run = Run::new("", &enemy("b", 0.0, -3.0, true));
     run.game.health.take(1000.0, 0.0, 0.0);
     run.game.state.player.health = run.game.health.now;
     run.game.state.player.hp_trail = 0.0;
-    assert_eq!(run.hud(&view()), bars(0.0, 0.0, 300.0));
+    assert_eq!(
+        run.hud(&view()),
+        cat(bars(0.0, 0.0, 300.0), counts(1280.0, "3", "0"))
+    );
 }
 
 #[test]
 fn enemy_without_boss_bar_has_no_bar() {
     let run = Run::new("", &enemy("b", 0.0, -3.0, false));
-    assert_eq!(run.hud(&view()).len(), 5);
+    assert_eq!(run.hud(&view())[5..], counts(1280.0, "3", "0"));
 }
 
 #[test]
@@ -367,8 +424,131 @@ fn two_boss_bars_stack_upwards_in_pre_order() {
         .unwrap()
         .take(100.0, 0.0, 0.0);
     let mut want = boss_bar(660.0, 200.0);
-    want.extend(boss_bar(630.0, 100.0));
+    want.extend(boss_bar(620.0, 100.0));
+    assert_eq!(run.hud(&view())[5..9], want);
+    assert_eq!(BOSS_BAR_STEP, 40.0);
+}
+
+// ---------------------------------------------------- boss names and counts
+
+const NAME: Vec4 = Vec4::new(0.9, 0.88, 0.8, 1.0);
+
+#[test]
+fn boss_names_are_drawn_20_above_their_bars_each_after_its_bar() {
+    let nodes = format!(
+        "{}{}",
+        named_enemy("a", Some("Iudex Gundyr"), 2.0, -3.0, true),
+        named_enemy("b", Some("B"), -2.0, -3.0, true)
+    );
+    let run = Run::new("", &nodes);
+    let want = [
+        boss_bar(660.0, 200.0),
+        vec![text(290.0, 640.0, NAME, "Iudex Gundyr")],
+        boss_bar(620.0, 200.0),
+        vec![text(290.0, 600.0, NAME, "B")],
+        counts(1280.0, "3", "0"),
+    ]
+    .concat();
     assert_eq!(run.hud(&view())[5..], want);
+    // Centered with its bar on a wider screen.
+    let wide = HudView::new(1920, 720, Mat4::IDENTITY);
+    assert_eq!(run.hud(&wide)[7], text(610.0, 640.0, NAME, "Iudex Gundyr"));
+}
+
+#[test]
+fn boss_without_a_display_name_has_only_its_bar() {
+    let run = Run::new("", &enemy("b", 0.0, -3.0, true));
+    assert_eq!(
+        run.hud(&view())[5..],
+        cat(boss_bar(660.0, 200.0), counts(1280.0, "3", "0"))
+    );
+}
+
+#[test]
+fn display_name_of_an_enemy_without_boss_bar_is_not_drawn() {
+    let run = Run::new("", &named_enemy("b", Some("Guard"), 0.0, -3.0, false));
+    assert_eq!(run.hud(&view())[5..], counts(1280.0, "3", "0"));
+}
+
+#[test]
+fn flask_and_souls_sit_at_the_bottom_corners_of_any_width() {
+    let mut run = Run::new("", "");
+    run.game.state.player.souls = 50;
+    let count = Vec4::new(0.95, 0.92, 0.85, 1.0);
+    let want = |souls_x: f32| {
+        vec![
+            icon("flask", 40.0, 648.0, Vec4::ONE),
+            text(80.0, 657.0, count, "3"),
+            icon("soul", souls_x - 40.0, 648.0, Vec4::ONE),
+            text(souls_x, 657.0, count, "50"),
+        ]
+    };
+    // "50" is 22 wide: it ends 40 from the right edge.
+    assert_eq!(run.hud(&view())[5..], want(1218.0));
+    let wide = HudView::new(1920, 720, Mat4::IDENTITY);
+    assert_eq!(run.hud(&wide)[5..], want(1858.0));
+}
+
+#[test]
+fn flask_icon_turns_grey_with_no_drink_left() {
+    let mut run = Run::new("", "");
+    run.game.state.player.flask = 1;
+    assert_eq!(run.hud(&view())[5], icon("flask", 40.0, 648.0, Vec4::ONE));
+    run.game.state.player.flask = 0;
+    let items = run.hud(&view());
+    assert_eq!(
+        items[5],
+        icon("flask", 40.0, 648.0, Vec4::new(0.35, 0.35, 0.35, 1.0))
+    );
+    assert_eq!(
+        items[6],
+        text(80.0, 657.0, Vec4::new(0.95, 0.92, 0.85, 1.0), "0")
+    );
+}
+
+#[test]
+fn souls_count_is_right_aligned_whatever_its_digits() {
+    let mut run = Run::new("", "");
+    for (souls, x) in [(7, 1230.0), (1234, 1194.0)] {
+        run.game.state.player.souls = souls;
+        let items = run.hud(&view());
+        let HudItem::Text { at, text, .. } = &items[8] else {
+            panic!("the souls count is a text: {:?}", items[8]);
+        };
+        assert_eq!((at.x, text.as_str()), (x, souls.to_string().as_str()));
+        assert_eq!(at.x + loom_core::hud::text_width(text, 2.0), 1240.0);
+        assert_eq!(items[7], icon("soul", x - 40.0, 648.0, Vec4::ONE));
+    }
+}
+
+#[test]
+fn hud_draws_bars_bosses_counts_then_the_lock_dot() {
+    let mut run = Run::new("", &named_enemy("b", Some("B"), 0.0, -3.0, true));
+    run.hold(&[LOCK]);
+    assert!(run.game.lock.is_some());
+    let kinds: Vec<&str> = run
+        .hud(&HudView::new(
+            1280,
+            720,
+            glam::camera::rh::proj::directx::perspective(1.0, 16.0 / 9.0, 0.1, 100.0),
+        ))
+        .iter()
+        .map(|item| match item {
+            HudItem::Rect { .. } => "rect",
+            HudItem::Disc { .. } => "disc",
+            HudItem::Text { .. } => "text",
+            HudItem::Image { .. } => "image",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "rect", "rect", "rect", "rect", "rect", // the two bars
+            "rect", "rect", "text", // the boss bar and name
+            "image", "text", "image", "text", // flask, souls
+            "disc",
+        ]
+    );
 }
 
 // ------------------------------------------------------------ the lock dot
@@ -381,13 +561,13 @@ fn lock_dot_is_drawn_at_the_projected_lock_point_while_locked_on() {
         720,
         glam::camera::rh::proj::directx::perspective(1.0, 16.0 / 9.0, 0.1, 100.0),
     );
-    assert_eq!(run.hud(&view).len(), 5);
+    assert_eq!(run.hud(&view).len(), 9);
     run.hold(&[LOCK]);
     assert!(run.game.lock.is_some());
     let at = run.game.scene().transform(run.game.enemies[0].id).position;
     let center = view.project(at + Vec3::new(0.0, 1.5, 0.0)).unwrap();
     assert_eq!(
-        run.hud(&view)[5..],
+        run.hud(&view)[9..],
         [HudItem::Disc {
             center,
             radius: 5.0,
@@ -404,7 +584,7 @@ fn lock_dot_behind_the_camera_is_not_drawn() {
     // A view looking along +Z: the target is behind it.
     let behind = glam::camera::rh::proj::directx::perspective(1.0, 16.0 / 9.0, 0.1, 100.0)
         * Mat4::from_rotation_y(std::f32::consts::PI);
-    assert_eq!(run.hud(&HudView::new(1280, 720, behind)).len(), 5);
+    assert_eq!(run.hud(&HudView::new(1280, 720, behind)).len(), 9);
 }
 
 // ---------------------------------------------------------------- validation
@@ -437,4 +617,25 @@ fn boss_bar_prop_is_checked_with_exact_messages() {
         "the node \"t\": prop \"spin_weight\" needs enemy_speed"
     );
     assert!(Game::from_source(&scene("", &enemy("b", 0.0, -3.0, true))).is_ok());
+}
+
+#[test]
+fn boss_display_name_the_font_cannot_draw_is_rejected_with_its_character() {
+    let error_of = |nodes: &str| match Game::from_source(&scene("", nodes)) {
+        Ok(_) => panic!("the scene should be rejected: {nodes}"),
+        Err(e) => e.to_string(),
+    };
+    assert_eq!(
+        error_of(&named_enemy("b", Some("Gündyr"), 0.0, -3.0, true)),
+        "the node \"b\": display_name has a character the HUD font lacks: 'ü'"
+    );
+    assert_eq!(
+        error_of(&named_enemy("b", Some("a\tb"), 0.0, -3.0, true)),
+        "the node \"b\": display_name has a character the HUD font lacks: '\\t'"
+    );
+    // Only a boss's name is drawn, so only a boss's is checked.
+    let guard = named_enemy("b", Some("Gündyr"), 0.0, -3.0, false);
+    assert!(Game::from_source(&scene("", &guard)).is_ok());
+    let edges = named_enemy("b", Some(" ~"), 0.0, -3.0, true);
+    assert!(Game::from_source(&scene("", &edges)).is_ok());
 }

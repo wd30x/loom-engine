@@ -732,6 +732,8 @@ pub enum GameError {
     EnemyCollider(String),
     #[error("the bloodstain marker {0:?} needs a mesh, and no props or children")]
     BloodstainMarker(String),
+    #[error("the node {node:?}: display_name has a character the HUD font lacks: {c:?}")]
+    BossNameChar { node: String, c: char },
 }
 
 /// The game state in the state dump (`game`).
@@ -3237,7 +3239,7 @@ pub(crate) const NODE_REQUIRES: [&str; 6] = [
 ];
 
 /// The other rules [`roles`] checks on a node's props.
-pub(crate) const NODE_CONSTRAINTS: [&str; 12] = [
+pub(crate) const NODE_CONSTRAINTS: [&str; 13] = [
     "a swinger: swing_low < swing_high",
     "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
     "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
@@ -3253,6 +3255,7 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 12] = [
     "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a \
      lock target, hurtbox, swinger or enemy",
     "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children",
+    "an enemy with boss_bar 1: its display_name has only the characters 32 to 126",
 ];
 
 /// Every lock-on target, hurtbox, swinger and enemy of `scene`, in
@@ -3660,6 +3663,14 @@ fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Roles, GameErr
                 struck: 0,
                 boss_bar: value("boss_bar") == 1.0,
             });
+        }
+        // Last: a boss's name is drawn with the HUD font.
+        if enemy_speed.is_some()
+            && value("boss_bar") == 1.0
+            && let Some(name) = &node.display_name
+            && let Some(c) = name.chars().find(|&c| !(' '..='~').contains(&c))
+        {
+            return Err(GameError::BossNameChar { node: path(), c });
         }
         hurtboxes.extend(hurtbox);
     }

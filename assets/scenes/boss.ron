@@ -90,7 +90,7 @@
                 color: (0.6, 0.58, 0.52), collider: Box),
         ]),
         // Faces +Z, looking at the character.
-        (name: "boss", position: (0.0, 0.0, -4.0), rotation: (0.0, 180.0, 0.0),
+        (name: "boss", display_name: "Iudex Gundyr", position: (0.0, 0.0, -4.0), rotation: (0.0, 180.0, 0.0),
             props: [
                 ("lock_height", 2.0),            // meters above the feet: the lock point
                 ("hurt_radius", 0.7),            // meters: the hurtbox, also what it collides with

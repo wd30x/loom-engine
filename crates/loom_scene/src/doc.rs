@@ -24,7 +24,8 @@ fn fail<T>(message: impl Into<String>) -> Result<T, EditError> {
 }
 
 /// The optional fields of a node, in canonical order: what `unset` takes.
-const OPTIONAL_FIELDS: [&str; 13] = [
+const OPTIONAL_FIELDS: [&str; 14] = [
+    "display_name",
     "position",
     "rotation",
     "look_at",
@@ -278,6 +279,7 @@ impl SceneDoc {
 fn patch_has(p: &NodePatch, field: &str) -> bool {
     match field {
         "name" => p.name.is_some(),
+        "display_name" => p.display_name.is_some(),
         "position" => p.position.is_some(),
         "rotation" => p.rotation.is_some(),
         "look_at" => p.look_at.is_some(),
@@ -312,6 +314,7 @@ fn apply(node: &mut NodeDesc, p: NodePatch) {
         };
     }
     set!(
+        display_name,
         position,
         rotation,
         look_at,
@@ -331,6 +334,7 @@ fn apply(node: &mut NodeDesc, p: NodePatch) {
 /// Removes the optional field `field` (one of [`OPTIONAL_FIELDS`]).
 fn clear(node: &mut NodeDesc, field: &str) {
     match field {
+        "display_name" => node.display_name = None,
         "position" => node.position = None,
         "rotation" => node.rotation = None,
         "look_at" => node.look_at = None,

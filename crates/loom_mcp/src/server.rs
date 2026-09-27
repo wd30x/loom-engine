@@ -26,7 +26,7 @@ same calls always give the same results. `record` writes the input so far as a s
 same state, which makes a regression test. `step` also returns the events of the ticks it \
 ran (hits, dropped presses, actions starting and ending, ...); `trace` writes every tick's events \
 and full state to a JSONL file; `screenshot` can overlay debug wireframes (`debug_draw`: hit \
-shapes, attack sectors, colliders, lock-on). `scene` and `node` show the scene file; \
+shapes, attack sectors, colliders, lock-on) and leave out the game's HUD (`hud: false`). `scene` and `node` show the scene file; \
 `edit_node`, `add_node`, `remove_node` and `edit_scene` change it, and after each edit the \
 session runs again from tick 0 to the current tick on the recorded input; `save_scene` writes \
 the edited scene, which with `record`'s script replays to the same state. `schema` describes \
@@ -91,6 +91,10 @@ pub struct ScreenshotArgs {
     /// "hurtboxes", "swings", "colliders", "lock").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug_draw: Option<DebugDrawArg>,
+    /// Whether to draw the game's HUD (souls: health and stamina bars, boss bars and names,
+    /// flask and souls counts, lock-on dot). Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hud: Option<bool>,
 }
 
 /// `true`, `false`, or category names.
@@ -435,5 +439,28 @@ fn with_note(new_session: bool, text: String) -> String {
         format!("{NEW_SESSION_NOTE}\n{text}")
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screenshot_params_forward_hud_only_when_given() {
+        let args = |hud| ScreenshotArgs {
+            path: Some("out/a.png".to_owned()),
+            size: None,
+            debug_draw: None,
+            hud,
+        };
+        assert_eq!(
+            Value::Object(to_params(&args(Some(false)))),
+            serde_json::json!({"path": "out/a.png", "hud": false})
+        );
+        assert_eq!(
+            Value::Object(to_params(&args(None))),
+            serde_json::json!({"path": "out/a.png"})
+        );
     }
 }

@@ -70,6 +70,15 @@ pub enum RenderError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureId(u32);
 
+impl TextureId {
+    /// A handle by index, for tests of code that builds frames without a
+    /// GPU. [`Renderer::render`] rejects one its renderer did not create.
+    #[doc(hidden)]
+    pub fn from_index(index: u32) -> Self {
+        Self(index)
+    }
+}
+
 /// GPU adapter description, for `loom info` and run reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterSummary {
@@ -505,7 +514,8 @@ pub struct Renderer {
     /// Binds only the globals, for the line pipeline.
     line_bind_group: wgpu::BindGroup,
     lines: VertexBuffer,
-    hud_pipeline: wgpu::RenderPipeline,
+    hud_solid_pipeline: wgpu::RenderPipeline,
+    hud_textured_pipeline: wgpu::RenderPipeline,
     hud: VertexBuffer,
     /// Bind groups of the textures, each binding one as group 1 of the
     /// sprite pipeline; indexed by [`TextureId`], never removed.
@@ -790,46 +800,52 @@ impl Renderer {
         // HUD: NDC vertices, no bindings, alpha blending, no depth test and
         // no depth writes, drawn between the sprites and the debug lines.
         let hud_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/hud.wgsl"));
-        let hud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("hud"),
-            bind_group_layouts: &[],
-            immediate_size: 0,
-        });
-        let hud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("hud"),
-            layout: Some(&hud_layout),
-            vertex: wgpu::VertexState {
-                module: &hud_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(HudVertex::layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &hud_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: COLOR_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Text and images bind a sprite texture as group 0.
+        let hud_pipeline = |label: &str, layouts: &[Option<&wgpu::BindGroupLayout>], fs: &str| {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: layouts,
+                immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &hud_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(HudVertex::layout())],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &hud_shader,
+                    entry_point: Some(fs),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: COLOR_FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let hud_solid_pipeline = hud_pipeline("hud", &[], "fs_solid");
+        let hud_textured_pipeline =
+            hud_pipeline("hud textured", &[Some(&texture_layout)], "fs_textured");
         let hud = VertexBuffer::new(
             &device,
             "hud",
@@ -860,7 +876,8 @@ impl Renderer {
             line_pipeline,
             line_bind_group,
             lines,
-            hud_pipeline,
+            hud_solid_pipeline,
+            hud_textured_pipeline,
             hud,
             textures: Vec::new(),
             meshes,
@@ -893,7 +910,8 @@ impl Renderer {
             line_pipeline,
             line_bind_group,
             lines,
-            hud_pipeline,
+            hud_solid_pipeline,
+            hud_textured_pipeline,
             hud,
             textures,
             meshes,
@@ -908,7 +926,7 @@ impl Renderer {
                 draws,
                 sprites,
                 (lines, line_bind_group, line_pipeline),
-                (hud, hud_pipeline),
+                (hud, hud_solid_pipeline, hud_textured_pipeline),
                 textures,
                 meshes,
                 pipeline,
@@ -1021,8 +1039,12 @@ impl Renderer {
         if self.offscreen.is_none() {
             return Ok(false);
         }
-        for sprite in frame.sprites {
-            let TextureId(id) = sprite.texture;
+        let hud_textures = frame.hud.iter().filter_map(|item| match item {
+            HudDraw::Image { texture, .. } => Some(*texture),
+            HudDraw::Rect { .. } | HudDraw::Disc { .. } => None,
+        });
+        for texture in frame.sprites.iter().map(|s| s.texture).chain(hud_textures) {
+            let TextureId(id) = texture;
             if self.textures.get(id as usize).is_none() {
                 return Err(RenderError::UnknownTexture(id));
             }
@@ -1063,7 +1085,7 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.sprites.buffer, 0, bytemuck::cast_slice(&sprites));
         }
-        let hud_vertices = hud_vertices(frame.hud, offscreen.width, offscreen.height);
+        let (hud_vertices, hud_runs) = hud_vertices(frame.hud, offscreen.width, offscreen.height);
         if !hud_vertices.is_empty() {
             self.hud.reserve(&self.device, hud_vertices.len());
             self.queue
@@ -1139,11 +1161,18 @@ impl Renderer {
                 }
             }
             if !hud_vertices.is_empty() {
-                pass.set_pipeline(&self.hud_pipeline);
                 pass.set_vertex_buffer(0, self.hud.buffer.slice(..));
-                let count =
-                    u32::try_from(hud_vertices.len()).expect("hud vertex count fits in u32");
-                pass.draw(0..count, 0..1);
+                // Run by run, in order: the list's order is kept.
+                for (texture, range) in hud_runs {
+                    match texture {
+                        None => pass.set_pipeline(&self.hud_solid_pipeline),
+                        Some(TextureId(id)) => {
+                            pass.set_pipeline(&self.hud_textured_pipeline);
+                            pass.set_bind_group(0, &self.textures[id as usize], &[]);
+                        }
+                    }
+                    pass.draw(range, 0..1);
+                }
             }
             if !line_vertices.is_empty() {
                 pass.set_pipeline(&self.line_pipeline);
