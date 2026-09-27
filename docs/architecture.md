@@ -133,6 +133,7 @@ loom run [OPTIONS]
     --dump-state <PATH>    退出前把模拟状态写成 JSON（见下文「状态导出」），会自动创建父目录
     --input <PATH>         回放输入脚本（第 9 节）；这时键盘不再驱动动作，Esc 仍然可以退出
     --record <PATH>        退出前把这次运行每个 tick 的动作变化写成输入脚本（第 9 节），会自动创建父目录
+    --trace <PATH>         边跑边把每个 tick 的事件和状态写成 JSONL（E5.1 起，见下文「轨迹」），会自动创建父目录
     --scene <PATH>         加载场景文件（第 10 节），按它顶层的 game 选游戏；不给时用 souls 内置的演示场景。窗口模式下文件变化会热重载
     --no-capture           窗口模式下不抓鼠标（不锁定、不隐藏指针），也不读鼠标移动（轴只来自按键）。
                            smoke 测试用它：不占用桌面鼠标，有人动鼠标也不会污染录制。和 --headless 同时给是参数错误
@@ -162,6 +163,7 @@ loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
 - `screenshot`：没有截图时为 `null`
 - `state`：没有导出状态时为 `null`，否则是 `--dump-state` 给的路径
 - `record`：没有录制时为 `null`，否则是 `--record` 给的路径
+- `trace`（E5.1 起，紧跟在 `record` 后面）：没有 `--trace` 时为 `null`，否则是 `{"path":…,"lines":写了几行,"events":一共几个事件}`，都只算最后一次热重载之后的部分
 - `input`：没有回放时为 `null`，否则是 `{"path":…,"events":脚本里的事件数,"applied":实际生效的事件数}`。脚本比运行长时 `applied < events`
 - `adapter`：没有创建 GPU 设备时为 `null`（无头模式且没有 `--screenshot`）
 - `renderer_init_ms`（G1.4 起）：从进程启动到渲染器创建完成（设备、管线都建好，窗口模式还包括 surface）的毫秒数，整数；没有创建渲染器时为 `null`。用来区分「启动慢」和「运行中出错」。它是墙钟时间，只用于诊断，不进状态导出
@@ -208,6 +210,35 @@ loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
 - `actions` 是最后一个 tick 生效的动作集合（按名字排序），见第 9 节。
 - `nodes`：场景里**每个节点**的**局部**变换，键是节点路径（第 10 节），按路径排序。旋转是四元数 `[x, y, z, w]`。
 - `game` 的字段见第 11 节（`souls`）和第 15 节（`rogue`）。角度都是弧度。
+
+### 轨迹 `--trace`（E5.1 起）
+
+用户决定（2026-09-27）：
+- 每个 tick 写**完整的状态导出**，和 `--dump-state`、serve 的 `state` 是同一份内容。
+- 游戏发出的**事件和状态写在同一行**。
+- serve 的 `step` 回复直接带事件，另有 `trace` 方法把轨迹写进文件（第 13 节）。
+
+**格式**：JSONL，一行一个 tick，`
+` 结尾（不写 `
+`）：
+
+```json
+{"tick":57,"events":[{"type":"hit","by":"player",…}],"state":{"tick":57,"sim_time":0.95,…}}
+```
+
+- 字段顺序固定：`tick`、`events`、`state`。
+- `state`：这个 tick 跑完之后的状态导出，紧凑格式（没有空格和换行）。它的原文**逐字节等于**同一时刻 serve `state` 回复的 `result`，也就是 `--dump-state` 文件去掉所有空白之后的内容。
+- `events`：这个 tick 里游戏发出的事件，按发生的先后排列；没有就是 `[]`。每个事件是一个 JSON 对象，第一个字段是 `type`，其余字段由游戏定义：`souls` 见第 11 节「事件」，`rogue` 见第 15 节「事件」。
+- **第一行是 tick 0**：开始运行时、跑第 1 个 tick 之前的状态，`events` 是 `[]`。所以 `--frames N` 写 N + 1 行。
+- 边跑边写（带缓冲），不在内存里攒着；进程正常结束时写完并关闭。写失败按运行时错误报出，退出码 1。
+- 窗口模式也能用。**热重载时文件清空，从新的 tick 0 重新写**，和录制、状态导出一样只覆盖最后一段。
+- 只看事件：`jq -c 'select(.events != []) | {tick, events}' trace.jsonl`。
+
+**保证**：
+- 同样的输入写出逐字节相同的文件（第 4 节）。
+- 第 t 行（从 0 数）的 `state` 等于 `--frames t --dump-state` 去掉空白之后的内容（t ≥ 1）。
+- 事件是模拟状态的一部分：同一个 tick 的事件只由这个 tick 之前的状态和输入决定，不读墙钟，顺序固定。事件不进 `--dump-state`。
+- 加事件不改变任何状态：打开或不打开 `--trace`，`--dump-state` 逐字节相同。
 
 ## 7. 错误处理
 
@@ -1344,6 +1375,56 @@ player_hit(s):
 - `respawn_ticks` 小于闪白时长（8）时，角色复活后可能还白几个 tick，同 G3.3 的 `revive_ticks`。
 - 复活不清空挥砍者的 `struck`：`respawn_ticks` 比一轮短时，把角色打死的那一轮不会再打中复活后的角色。符合「一轮最多打中一次」，不改（G3.4 实现者指出）。
 
+### 事件（E5.1 起）
+
+事件进轨迹和 serve 的 `step` 回复（第 6 节「轨迹」、第 13 节）。用户决定（2026-09-27）：
+- **状态里看不出来的都要**：命中、无敌帧躲掉的挥砍、被丢掉的按键、被覆盖的预输入。它们要么一闪而过，要么说的是「为什么」，比较前后两个 tick 的状态还原不出来。
+- **状态变化只要时间轴上的大事**：动作开始和结束、锁定变化、复活。攻击阶段切换、木桩每一轮的节奏不发事件，从 `action_tick`、`swing_tick` 就能算出来。
+- 硬直、死亡不单独发事件，写在 `hit` 的 `result` 里。挥砍者被打出硬直或打死时这一轮作废，也看这个 `result`。
+
+路径都是节点路径（角色节点通常是 `player`）。字段按表里的顺序，`type` 在最前面。
+
+| `type` | 字段 | 什么时候发 |
+|---|---|---|
+| `hit` | `by`、`target`、`attack`、`combo`、`damage`、`hp`、`result` | 一次命中：角色打中受击判定（「命中判定」），或者挥砍者打中角色（第 5c 步） |
+| `dodged` | `by`、`action`、`action_tick` | 挥砍者出招的这一段扫到了角色，但角色在无敌帧里，没算命中 |
+| `input_dropped` | `input`、`reason`、`buffered` | 一次按键没有产生任何效果，见下 |
+| `buffer_replaced` | `old`、`new` | 已有的预输入被后来的按键覆盖 |
+| `action_start` | `action`、`combo`、`buffered` | 角色开始翻滚、后撤步、攻击、重攻击、冲刺 |
+| `action_end` | `action`、`reason` | 上面这些动作结束 |
+| `lock` | `target`、`reason` | 锁定目标变了（锁上、解开、换目标） |
+| `revive` | `node` | 受伤方复活（第 0b 步） |
+| `respawn` | `position` | 角色在出生点复活（第 0b 步），`position` 是 `[x, y, z]` |
+
+- `hit`：
+  - `by`：角色节点的路径，或者挥砍者的路径。`target`：受击判定的路径，或者角色节点的路径。
+  - `attack`：`"attack"`、`"heavy"`，挥砍者是 `"swing"`。`combo`：轻攻击的第几刀，其余是 0。
+  - `damage`：这一招的伤害值；`hp`：命中之后目标剩下的血量。目标不是受伤方时两者都是 `null`。
+  - `result`：`"hit"`、`"stagger"`（这一下打出了硬直，包括硬直中再次打出）、`"death"`。目标不是受伤方时是 `"hit"`。
+- `dodged`：`action` 是 `"roll"` 或 `"backstep"`，`action_tick` 是它的第几个 tick。这一轮后面的 tick 可能再发 `dodged`，也可能打中。
+- `input_dropped`：`input` 是 `"attack"`、`"heavy"`、`"roll"`（翻滚键的点按）或 `"lock"`。`reason`：
+  - `"no_stamina"`：耐力为 0，要开始的动作被丢掉（`next_action` 的最后一行）。执行预输入时丢掉的，`buffered` 为 true，`input` 是那个预输入。
+  - `"outranked"`：同一个 tick 按了优先级更高的键（重攻击 > 轻攻击 > 翻滚），这个被挤掉。开始动作和记预输入时都适用。
+  - `"rolling"`：翻滚或后撤步中。
+  - `"startup"`：攻击的前摇中。
+  - `"staggered"`、`"dead"`：角色硬直或死亡中（锁定键只有 `"dead"`）。
+  - `"no_target"`：按锁定键时范围内没有能锁的目标（`input` 是 `"lock"`）。
+  - 除了 `no_stamina` 的那种情况，`buffered` 都是 false。
+  - 同时符合几条时，按这个顺序取第一条：`dead`、`staggered`、`rolling`、`startup`、`outranked`、`no_stamina`。所以前摇里同时按轻重攻击，两个都是 `startup`。`outranked` 只用于这个 tick 本来会有一个键生效（开始动作或记下预输入）时被挤掉的那些。
+  - 一个 tick 里同一个 `input` 最多发一次。按的是 tick 采样之后的动作（`just_pressed`，翻滚键是点按），两次采样之间的连按只算一次。
+- `buffer_replaced`：`old`、`new` 都是 `"attack"`、`"heavy"`、`"roll"`。第一次记下预输入（原来是 `null`）不发事件，看状态里的 `buffered`。
+- `action_start`：`action` 是 `"roll"`、`"backstep"`、`"attack"`、`"heavy"`、`"sprint"`；`combo` 同 `hit`；`buffered`：是不是从预输入开始的。
+- `action_end`：`reason` 是 `"finished"`（跑完了自己的 tick 数，或者冲刺停下）或 `"interrupted"`（被打出硬直或打死，第 5c 步）。
+  - 一个 tick 里先结束、后开始：冲刺中按攻击，先发冲刺的 `action_end`，再发攻击的 `action_start`。
+  - 只有 1 个 tick 的动作，同一个 tick 里先发 `action_start` 再发 `action_end`。
+- `lock`：`target` 是新目标的路径，解锁时是 `null`。`reason`：
+  - `"pressed"`：按锁定键锁上或解开；
+  - `"switched"`：横甩换目标；
+  - `"out_of_range"`：超过 `lock_break_range` 自动解锁；
+  - `"target_died"`：锁定的目标被打死；
+  - `"died"`：角色死了。
+- 发事件不改变任何状态，状态导出和 E5.1 之前逐位相同。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
@@ -1520,10 +1601,11 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 | `load_scene` | `{"path":"..."}` 或 `{"source":"RON 文本"}`，都不给就是内置演示场景 | `{"tick":0,"game":…,"scene":路径或null}`。成功后从 tick 0 重新开始，清空保持的输入和录制。场景可以换成另一个游戏的，键位表跟着换（E4.3 起）。失败时保留原来的场景和状态（和热重载一样） |
 | `reset` | 无 | `{"tick":0}`。当前场景回到 tick 0，清空保持的输入和录制 |
 | `input` | `{"actions":{"名字":true/false},"axes":{"名字":数值}}`，两项都可以省略 | 设置**保持的输入**（电平语义，和输入脚本一样），从下一个 tick 起生效，直到再次修改。没提到的动作和轴不变。轴的值按 `canonical_axis_value` 规范化（`-0.0` 变成 `0.0`）。result 是修改后的完整输入：`{"actions":[按下的动作，排序],"axes":{非零的轴}}` |
-| `step` | `{"ticks":N}`，N ≥ 1，省略为 1 | 用保持的输入跑 N 个 tick。`{"tick":跑完之后的tick}` |
+| `step` | `{"ticks":N}`，N ≥ 1，省略为 1 | 用保持的输入跑 N 个 tick。`{"tick":跑完之后的tick,"events":[...]}`。`events`（E5.1 起）是这 N 个 tick 里发出的全部事件，按先后排列，每个事件在 `type` 前面多一个 `tick` 字段：`{"tick":57,"type":"hit",…}` |
 | `state` | 无 | 状态导出的内容（第 6 节），作为 JSON 值，不是字符串 |
 | `screenshot` | `{"path":"...","size":[W,H]}`，`size` 可以省略 | 把**当前状态**渲染成 PNG（自动创建父目录）。`{"path":...,"size":[W,H],"adapter":{...},"render_ms":毫秒}` |
 | `record` | `{"path":"..."}` | 把从上次 `load_scene`/`reset`（或启动）以来的输入写成输入脚本，规范形式和 `--record` 相同。`{"path":...,"ticks":当前tick}` |
+| `trace` | `{"path":"..."}` 开始，`{}` 停止（E5.1 起） | 开始：把轨迹（第 6 节「轨迹」）写进 `path`（自动创建父目录，已有的文件清空），立刻写一行当前 tick，这一行的 `events` 是当前 tick 发出的事件（tick 0 是 `[]`）；之后每跑一个 tick 写一行。已经在写别的文件时，先停掉那个。result `{"path":…,"tick":当前tick}`。停止：写完并关闭，result `{"path":停掉的路径或null,"lines":写了几行}`。`load_scene`、`reset` 时文件清空，从新的 tick 0 重新写；`quit` 和适配程序退出时写完关闭 |
 | `quit` | 无 | `{}`，然后退出 |
 
 ### 保证
@@ -1531,6 +1613,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 - **确定性**：模拟不读墙钟。同样的启动参数和同样的请求序列，回复逐字节相同，只有 `render_ms` 和 `adapter` 除外。
 - **`state` 和 `--dump-state` 是同一份内容**：字段顺序和每个数值的文本都相同，只是 `state` 用紧凑格式（没有空格和换行）。所以把 `--dump-state` 文件的空白全部去掉，就等于 `state` 回复里 `result` 的原文。
   - 实现上，回复要从带类型的结构体直接序列化，**不能经过 `serde_json::Value`**：`Value` 会把对象的键按字母排序，还会把 f32 转成 f64，写出 `0.2617993950843811` 这样更长的数字，逐位比较就对不上了。
+- **轨迹一致**（E5.1 起）：同一个会话里 `trace` 写出的文件，和用 `record` 的脚本回放时 `loom run --trace` 写出的文件，从 `trace` 开始的那个 tick 起逐行相同。
 - **能回放**：`record` 写出的脚本，用 `loom run --headless --frames <tick> --input <脚本> [--scene 同一个场景] --dump-state` 回放，得到的状态导出去掉空白后，和回放前 `state` 的 `result` 原文相同。
 - **截图和 `loom run` 一致**：同一个状态，`screenshot` 和 `loom run --headless --screenshot` 的 PNG 逐字节相同。
 - **渲染器只建一次**：第一次 `screenshot` 时创建，之后反复使用，尺寸变了就 resize。不截图的会话完全不碰 GPU，和第 2 节的无头模式一样。
@@ -1552,7 +1635,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
   - 子进程的 stderr 直接继承，日志进 Claude Code 的 MCP 日志。
 - **找 `loom`**：默认用 `loom-mcp` 所在目录里的 `loom.exe`，`--loom <PATH>` 可以覆盖。
 - **工具**：每个 serve 方法对应一个 MCP 工具，名字和方法相同。
-  - `describe`、`load_scene`、`reset`、`input`、`step`、`state`、`screenshot`、`record`。
+  - `describe`、`load_scene`、`reset`、`input`、`step`、`state`、`screenshot`、`record`，E5.1 起加 `trace`（参数 `path` 可以省略，省略就是停止）。
   - **没有 `quit`**：子进程的生命周期由适配程序管理。
   - 工具的参数和 serve 方法的 params 一一对应；参数的 JSON Schema 由 rmcp 按参数结构体生成。
 - **结果**：
@@ -1764,3 +1847,16 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 - `zombies`：按先序排列，死了的也留着（`hp` 为 0，格子就是尸体所在的格子）。`name` 是节点名。
 - `messages`：开局以来的全部消息，按产生的顺序；`turn` 是产生这条消息的那个回合（已经加过 1 之后的值）。E4.4 不限条数，以后游戏变长了再截断。
 - 消息文案固定是英文：`You hit <名字>.`、`You kill <名字>.`、`<名字> bites you.`、`You die.`。
+
+### 事件（E5.1 起）
+
+和 `souls` 一样进轨迹和 serve 的 `step` 回复（第 6 节「轨迹」）。规划者决定：只发和消息对应的一种事件，字段尽量和 `souls` 的 `hit` 相同。
+
+| `type` | 字段 | 什么时候发 |
+|---|---|---|
+| `hit` | `by`、`target`、`damage`、`hp`、`result` | 玩家撞击僵尸，或者僵尸咬玩家；和那条消息在同一处发 |
+
+- `by`、`target`：节点路径。
+- `damage`：攻击力（整数，玩家是 `player_attack`，僵尸是它的 `attack`）；`hp`：之后剩下的血量（整数）。
+- `result`：`"hit"` 或 `"death"`（打到 0）。
+- 一条 `hit` 对应一条或两条消息（`You kill`、`bites you` 加 `You die`）。其余情况（撞墙、走路、僵尸走一步）不发事件，状态里看得出来。
