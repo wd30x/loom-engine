@@ -2013,6 +2013,99 @@ if input.just_pressed("interact"):
 - 喝没有动画，只有瓶子显示出来。
 - 画面上看不到剩下几瓶（没有 HUD），看状态导出。
 
+### 魂（G5.3 起）
+
+用户决定（2026-09-27）：
+- **有血的都给魂，数量是 prop**：假人、木桩、敌人、Boss 都可以在场景里写 `souls`，不写就不给。每次被角色打死都给，复活后再打死还给。
+- **黑魂规则**：
+  - 角色死了，身上的魂全部掉在死的地方，留下一个血痕；
+  - 再死一次之前没捡回，这些魂就永久消失，新的血痕取代旧的。
+- **靠近按 E 捡回**：和坐篝火共用 `interact` 键。
+- **只计数**：这一项只做获得、掉落、捡回。魂的数量在状态导出里看，花魂（升级）以后有需要再加。
+
+**参数**：
+- 节点 props（非角色节点）多 1 个，接在最后（变成 97 个）：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `souls` | 0 | 整数 ≥ 0。被角色打死时给多少魂 |
+
+  - 必须和 `hp` 一起写，用已有的文案 `the node "<路径>": prop "souls" needs hp`；
+  - 这条检查接在已有的 `needs hp` 名单最后，`requires` 的文字变成 `"poise, stagger_ticks, poise_reset_ticks, revive_ticks, souls: need hp"`。
+- 角色 props 多 1 个，接在 G5.2 的 5 个之后（变成 56 个）：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `bloodstain_range` | 1.5 | 米，> 0。角色到血痕的水平距离不超过它才能捡回 |
+
+**获得**：在「命中」里，角色打中受伤方、这一下打死了它（`hit` 的 `result` 是 `death`）：
+- `souls += 它的 souls`；
+- `souls` 大于 0 时发 `souls` 事件，紧跟在这一下的 `hit` 事件之后。
+- 只有角色能打死受伤方（挥砍者、敌人、冲击波只打角色），所以不用区分是谁打死的。
+
+**掉落**：角色被打死时（第 5c 步，`player_hit` 里 `hp` 变成 0）：
+1. 旧血痕（如果有）消失，里面的魂记为 `lost`；
+2. 身上的 `souls > 0` 时，在角色现在的位置留下新血痕，里面是全部的 `souls`；
+3. `souls = 0`；
+4. `amount > 0` 或 `lost > 0` 时发 `souls_dropped` 事件，排在这一下的 `hit`、`action_end`（`interrupted`）、`lock`（`died`）之后。
+
+- 血痕不受世界重置影响：坐篝火、角色复活都不动它。
+- 身上没有魂时死了，旧血痕照样消失，也不留新血痕。
+
+**捡回**：在「篝火」的 `interact` 判定里加一支，放在 `busy` 之后、`no_bonfire` 之前：
+
+```text
+if input.just_pressed("interact"):
+    if action == sit: 站起来
+    else if 角色死了: 丢掉（dead）
+    else if 硬直: 丢掉（staggered）
+    else if action == drink: 丢掉（drinking）
+    else if action 不是 idle 或 sprint: 丢掉（busy）
+    else if 有血痕，且它到角色的水平距离 <= bloodstain_range: 捡回
+    else if 没有篝火的水平距离 <= bonfire_range: 丢掉（no_bonfire）
+    else if 有活着的敌人在仇恨范围内: 丢掉（enemy_near）
+    else: 坐下
+```
+
+- **捡回**：
+  - `souls += 血痕里的魂`，血痕消失，发 `souls_recovered` 事件；
+  - 是瞬间的，`action` 不变，冲刺中捡回也继续冲刺；
+  - 敌人在附近也能捡，不查 `enemy_near`。
+- 血痕和篝火都在范围内时，按一次 E 只捡回；再按一次才坐下。
+
+**状态导出**：
+- `player` 的最后追加 `souls`：身上的魂，加载时是 0。
+- `game` 在 `respawn` 后面加 `bloodstain`：`{ "position": [x, y, z], "souls": n }`，没有血痕时是 `null`，加载时是 `null`。
+
+**事件**：
+- 新增：
+  - `souls`：字段 `from`（被打死的节点路径）、`amount`、`total`（加完之后身上的魂）；
+  - `souls_dropped`：字段 `position`（`[x, y, z]`）、`amount`（新血痕里的魂，没有留下血痕时是 0）、`lost`（旧血痕消失的魂，没有旧血痕时是 0）；
+  - `souls_recovered`：字段 `amount`、`total`。
+- `interact` 的丢弃原因不变。
+
+**表现**：
+- **血痕标记**：名叫 `bloodstain` 的**根节点**。
+  - 它必须带 `mesh`，不能带 props，不能有子节点；
+  - 报错 `the bloodstain marker "<路径>" needs a mesh, and no props or children`，检查接在篝火的检查之后；
+  - 可以没有，那样血痕只在状态导出里。
+- 有血痕时显示，节点位置是「血痕位置 + 场景里写的位置」（场景里写的是离地的偏移）；没有血痕时隐藏。
+- 加载时就隐藏（同 G5.2 的瓶子）。每个 tick 在第 6 步设一次位置和可见性。
+- 演示场景和 Boss 场景各加一个：`(name: "bloodstain", position: (0.0, 0.05, 0.0), scale: (0.4, 0.1, 0.4), mesh: Cube, color: (0.3, 0.9, 0.5))`。
+
+**调试绘制**：新类别 `bloodstain`，排在 `bonfires` 之后。有血痕时，在血痕位置画 `bloodstain_range` 的圆，颜色 `(0.3, 0.9, 0.5)`。
+
+**场景**：
+- 演示场景：三个假人各写 `souls` 50，木桩写 100；
+- Boss 场景：Boss 写 2000。
+- 角色写出 `bloodstain_range` 1.5，带英文注释。
+
+**已知限制**（G5.3）：
+- 画面上看不到身上有多少魂（没有 HUD），看状态导出。
+- 魂没有用处，只计数。
+- 血痕留在死的地方，不像黑魂那样退回到最后站稳的位置。这里没有坑和摔死，所以死的地方总是能走到的。
+- 角色的 `hits`、`last_hit` 不因死亡清零，同 G5.1。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
