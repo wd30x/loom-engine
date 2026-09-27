@@ -1043,3 +1043,59 @@ fn set_sprite_tag_on_a_node_without_a_sprite_is_an_error() {
         Err(SpriteTagError::NoSprite("a".to_owned()))
     );
 }
+
+/// A scene with a mesh node `g/box` (color 0.2, 0.4, 0.6) under a group `g`
+/// that has no mesh.
+fn colored_box() -> Scene {
+    Scene::parse(&scene_with(
+        r#"(name: "g", children: [(name: "box", mesh: Cube, color: (0.2, 0.4, 0.6))])"#,
+    ))
+    .unwrap()
+}
+
+#[test]
+fn set_mesh_color_changes_the_color_the_mesh_is_drawn_with() {
+    let mut scene = colored_box();
+    let b = scene.find("g/box").unwrap();
+    scene.set_mesh_color(b, Vec3::new(1.0, 0.5, 0.0)).unwrap();
+    assert_eq!(scene.node(b).mesh.unwrap().color, Vec3::new(1.0, 0.5, 0.0));
+    // Both ends of the range are allowed.
+    scene.set_mesh_color(b, Vec3::ZERO).unwrap();
+    scene.set_mesh_color(b, Vec3::ONE).unwrap();
+    assert_eq!(scene.node(b).mesh.unwrap().color, Vec3::ONE);
+}
+
+#[test]
+fn set_mesh_color_on_a_node_without_a_mesh_is_an_error() {
+    let mut scene = colored_box();
+    let g = scene.find("g").unwrap();
+    let err = scene.set_mesh_color(g, Vec3::ONE).unwrap_err();
+    assert_eq!(err, MeshColorError::NoMesh("g".to_owned()));
+    assert_eq!(err.to_string(), "the node \"g\" has no mesh");
+    assert!(scene.node(g).mesh.is_none());
+}
+
+#[test]
+fn set_mesh_color_outside_zero_to_one_is_an_error_and_changes_nothing() {
+    let mut scene = colored_box();
+    let b = scene.find("g/box").unwrap();
+    let before = scene.node(b).mesh.unwrap().color;
+    for (color, text) in [
+        (Vec3::new(1.5, 0.0, 0.0), "[1.5, 0, 0]"),
+        (Vec3::new(0.0, -0.1, 0.0), "[0, -0.1, 0]"),
+        (Vec3::new(0.0, 0.0, f32::NAN), "[0, 0, NaN]"),
+    ] {
+        let err = scene.set_mesh_color(b, color).unwrap_err();
+        assert!(
+            matches!(&err, MeshColorError::OutOfRange { path, .. } if path == "g/box"),
+            "{err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "the node \"g/box\": mesh color components must be between 0 and 1, got {text}"
+            )
+        );
+        assert_eq!(scene.node(b).mesh.unwrap().color, before);
+    }
+}

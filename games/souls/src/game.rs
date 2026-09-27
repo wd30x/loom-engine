@@ -11,7 +11,7 @@ use loom_core::input::ActionState;
 use loom_scene::{MeshKind, NodeId, Scene, SceneError};
 use serde::Serialize;
 
-use crate::moves::{Action, AttackPhase, Buffered, Params};
+use crate::moves::{Action, Attack, AttackPhase, Buffered, Params};
 
 /// Sideways movement in `[-1, 1]`; positive is to the camera's right.
 pub const MOVE_X: &str = "move_x";
@@ -31,9 +31,17 @@ pub const HEAVY: &str = "heavy";
 /// Locks on to a target, or lets go of it, on the tick it is pressed.
 pub const LOCK: &str = "lock";
 
-/// The one prop a node other than the character may have: it makes the
-/// node a lock-on target, locked on this many meters above its position.
-const LOCK_HEIGHT: &str = "lock_height";
+/// The props a node other than the character may have, in the order they
+/// are checked: `lock_height` makes it a lock-on target (locked on this
+/// many meters above its position); `hurt_radius` and `hurt_height`
+/// together make it a hurtbox.
+const NODE_PROPS: [&str; 3] = ["lock_height", "hurt_radius", "hurt_height"];
+
+/// How long a hurtbox flashes after a hit, in ticks, counting the tick of
+/// the hit. A stand-in for real hit feedback until G3.3 (hit stun).
+const FLASH_TICKS: u64 = 8;
+/// The color a hurtbox's meshes flash in; a stand-in like [`FLASH_TICKS`].
+const FLASH_COLOR: Vec3 = Vec3::ONE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GameError {
@@ -86,6 +94,21 @@ pub enum GameError {
         value: f64,
     },
     #[error(
+        "the character {character:?}: prop {prop:?} must be greater than 0 and at most 360, \
+         got {value}"
+    )]
+    NotAnArc {
+        character: String,
+        prop: &'static str,
+        value: f64,
+    },
+    #[error("the character {character:?}: prop {prop:?} must be at least 0, got {value}")]
+    Negative {
+        character: String,
+        prop: &'static str,
+        value: f64,
+    },
+    #[error(
         "the character {character:?}: needs 1 <= {action}_invuln_from <= {action}_invuln_to \
          <= {action}_ticks"
     )]
@@ -95,6 +118,8 @@ pub enum GameError {
     },
     #[error("the character {character:?}: needs lock_range <= lock_break_range")]
     LockRanges { character: String },
+    #[error("the character {character:?}: needs swing_low < swing_high")]
+    SwingBand { character: String },
     #[error(
         "the character {character:?}: {action} moves {step} m per tick, which must be less than \
          the capsule radius {radius}"
@@ -105,12 +130,22 @@ pub enum GameError {
         step: f32,
         radius: f32,
     },
-    #[error("the node {node:?}: unknown prop {prop:?} (known: lock_height)")]
+    #[error(
+        "the node {node:?}: unknown prop {prop:?} (known: lock_height, hurt_radius, hurt_height)"
+    )]
     UnknownNodeProp { node: String, prop: String },
-    #[error("the node {node:?}: prop \"lock_height\" must be greater than 0, got {value}")]
-    LockHeightNotPositive { node: String, value: f64 },
+    #[error("the node {node:?}: prop {prop:?} must be greater than 0, got {value}")]
+    NodePropNotPositive {
+        node: String,
+        prop: &'static str,
+        value: f64,
+    },
+    #[error("the node {0:?}: needs both hurt_radius and hurt_height, or neither")]
+    HurtPropsUnpaired(String),
     #[error("the lock target {0:?} must be a root node, and not the camera")]
     LockTargetNotRoot(String),
+    #[error("the hurtbox {0:?} must be a root node, and not the camera")]
+    HurtboxNotRoot(String),
 }
 
 /// The game state in the state dump (`game`).
@@ -120,6 +155,8 @@ pub struct GameState {
     pub camera: CameraState,
     /// The path of the locked-on target; `None` when not locked on.
     pub lock: Option<String>,
+    /// Every hurtbox, in pre-order.
+    pub hurtboxes: Vec<HurtboxState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -191,8 +228,8 @@ impl BoxCollider {
     }
 }
 
-/// [`GameState`] but the lock, which [`Game::state`] adds as a path: kept
-/// out of [`Game`] so it stays small (the engine keeps a game by value).
+/// [`GameState`] but the lock and the hurtboxes, which [`Game::state`] adds:
+/// the lock as a path, the hurtboxes from [`Game`]'s own list.
 #[derive(Debug, Clone, Copy)]
 struct Motion {
     player: PlayerState,
@@ -207,6 +244,44 @@ struct Target {
     path: String,
     /// The lock point is this far above the node's position.
     height: f32,
+}
+
+/// A node with `hurt_radius` and `hurt_height`: something attacks hit. A
+/// vertical cylinder standing on the node's position.
+#[derive(Debug, Clone)]
+struct Hurtbox {
+    id: NodeId,
+    /// The path, for the state dump.
+    path: String,
+    radius: f32,
+    height: f32,
+    /// Every node with a mesh in the subtree (the node itself included), in
+    /// pre-order, with its color in the scene file: what flashes.
+    meshes: Vec<(NodeId, Vec3)>,
+    hits: u32,
+    last_hit: Option<LastHit>,
+}
+
+/// A hurtbox in the state dump (`game.hurtboxes`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HurtboxState {
+    /// The node's path.
+    pub node: String,
+    /// Times hit since loading.
+    pub hits: u32,
+    /// The latest hit; `None` before the first.
+    pub last_hit: Option<LastHit>,
+}
+
+/// One hit on a hurtbox.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct LastHit {
+    /// The tick it happened on, as in the state dump's `tick`.
+    pub tick: u64,
+    /// `Attack` or `Heavy`.
+    pub attack: Action,
+    /// The attack's `combo` (0 for a heavy attack).
+    pub combo: u32,
 }
 
 #[derive(Debug)]
@@ -252,6 +327,10 @@ pub struct Game {
     flick: f32,
     /// Ticks left before the target can be switched again.
     switch_wait: u32,
+    /// Every hurtbox, in pre-order, with its hits.
+    hurtboxes: Vec<Hurtbox>,
+    /// The indices in `hurtboxes` the running attack has already hit.
+    struck: Vec<usize>,
 }
 
 /// This tick's input as step 4 uses it.
@@ -317,7 +396,7 @@ impl Game {
             }
         }
         let params = Params::new(&scene, player, radius)?;
-        let targets = targets(&scene, player, camera)?;
+        let (targets, hurtboxes) = targets(&scene, player, camera)?;
         let boxes = scene
             .colliders()
             .iter()
@@ -372,6 +451,8 @@ impl Game {
             lock: None,
             flick: 0.0,
             switch_wait: 0,
+            hurtboxes,
+            struck: Vec::new(),
         };
         game.place_camera(true);
         Ok(game)
@@ -565,6 +646,7 @@ impl Game {
         transform.position = player.position;
         transform.rotation = Quat::from_rotation_y(player.facing);
         self.place_camera(false);
+        self.flash();
     }
 
     /// Starts a roll the way the input points, or a backstep without a
@@ -623,12 +705,14 @@ impl Game {
         let a = self.params.attack_of(action);
         player.stamina = f32::max(player.stamina - a.cost, 0.0);
         player.stamina_wait = self.params.delay_ticks;
+        // Each attack hits each hurtbox at most once.
+        self.struck.clear();
         self.attack_tick(player, intent);
     }
 
     /// Tick `action_tick` of the running attack: turning during startup,
-    /// sliding forward while active, and from then on buffering the next
-    /// action. The last tick ends the attack.
+    /// sliding forward and hitting while active, and from then on buffering
+    /// the next action. The last tick ends the attack.
     fn attack_tick(&mut self, player: &mut PlayerState, intent: &Intent) {
         let a = self.params.attack_of(player.action);
         let phase = if player.action_tick <= a.startup {
@@ -652,6 +736,7 @@ impl Game {
                 self.height,
                 player.position + forward * a.step,
             );
+            self.hit(player, a);
             AttackPhase::Active
         } else {
             AttackPhase::Recovery
@@ -674,6 +759,53 @@ impl Game {
             player.action_tick = 0;
             player.attack_phase = None;
             player.combo = 0;
+        }
+    }
+
+    /// The hit check of active tick `action_tick - startup` of the attack
+    /// `a`, after the slide: the tick sweeps its slice of the sector, right
+    /// to left, and hits every hurtbox it touches that this attack has not
+    /// hit yet.
+    fn hit(&mut self, player: &PlayerState, a: Attack) {
+        let k = player.action_tick - a.startup;
+        let half = a.arc * 0.5;
+        let sweep = Sweep {
+            p: player.position,
+            facing: player.facing,
+            reach: a.reach,
+            lo: -half + (k - 1) as f32 * a.slice,
+            hi: -half + k as f32 * a.slice,
+            low: self.params.swing_low,
+            high: self.params.swing_high,
+        };
+        let tick = self.clock.tick();
+        for (i, h) in self.hurtboxes.iter_mut().enumerate() {
+            // Hurtboxes are root nodes: the local position is the world one.
+            let at = self.scene.transform(h.id).position;
+            if !self.struck.contains(&i) && sweep.touches(at, h.radius, h.height) {
+                h.hits += 1;
+                h.last_hit = Some(LastHit {
+                    tick,
+                    attack: player.action,
+                    combo: player.combo,
+                });
+                self.struck.push(i);
+            }
+        }
+    }
+
+    /// After step 6: every hurtbox hit within the last [`FLASH_TICKS`]
+    /// ticks (this one included) shows its meshes in [`FLASH_COLOR`], every
+    /// other one in the scene file's colors. Set every tick, flashing or not.
+    fn flash(&mut self) {
+        let tick = self.clock.tick();
+        for h in &self.hurtboxes {
+            let flashing = h.last_hit.is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
+            for &(id, color) in &h.meshes {
+                self.scene
+                    .set_mesh_color(id, if flashing { FLASH_COLOR } else { color })
+                    .expect("meshes were picked for having a mesh, and both colors are valid");
+            }
         }
     }
 
@@ -752,6 +884,15 @@ impl Game {
             player: self.state.player,
             camera: self.state.camera,
             lock: self.lock.map(|t| self.targets[t].path.clone()),
+            hurtboxes: self
+                .hurtboxes
+                .iter()
+                .map(|h| HurtboxState {
+                    node: h.path.clone(),
+                    hits: h.hits,
+                    last_hit: h.last_hit,
+                })
+                .collect(),
         }
     }
 
@@ -818,38 +959,135 @@ impl Game {
     }
 }
 
-/// Every lock-on target of `scene`, in pre-order, checked node by node:
-/// no props other than `lock_height` (outside the character), a positive
-/// `lock_height`, and only on root nodes other than the camera.
-fn targets(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Vec<Target>, GameError> {
+/// Every lock-on target and every hurtbox of `scene`, in pre-order, checked
+/// node by node (every node but the character): no props but
+/// `lock_height`, `hurt_radius` and `hurt_height`; each of those positive;
+/// the two hurt props together or not at all; and only on root nodes other
+/// than the camera.
+fn targets(
+    scene: &Scene,
+    player: NodeId,
+    camera: NodeId,
+) -> Result<(Vec<Target>, Vec<Hurtbox>), GameError> {
     let mut targets = Vec::new();
+    let mut hurtboxes = Vec::new();
     for id in scene.ids().filter(|&id| id != player) {
         let node = scene.node(id);
-        if let Some((prop, _)) = node.props().find(|&(p, _)| p != LOCK_HEIGHT) {
+        if let Some((prop, _)) = node.props().find(|&(p, _)| !NODE_PROPS.contains(&p)) {
             return Err(GameError::UnknownNodeProp {
                 node: scene.path(id),
                 prop: prop.to_owned(),
             });
         }
-        let Some(height) = node.prop(LOCK_HEIGHT) else {
-            continue;
+        let [lock_height, hurt_radius, hurt_height] = NODE_PROPS.map(|prop| node.prop(prop));
+        for (prop, value) in NODE_PROPS
+            .into_iter()
+            .zip([lock_height, hurt_radius, hurt_height])
+        {
+            if let Some(value) = value
+                && value <= 0.0
+            {
+                return Err(GameError::NodePropNotPositive {
+                    node: scene.path(id),
+                    prop,
+                    value,
+                });
+            }
+        }
+        let hurt = match (hurt_radius, hurt_height) {
+            (Some(radius), Some(height)) => Some((radius as f32, height as f32)),
+            (None, None) => None,
+            _ => return Err(GameError::HurtPropsUnpaired(scene.path(id))),
         };
-        if height <= 0.0 {
-            return Err(GameError::LockHeightNotPositive {
-                node: scene.path(id),
-                value: height,
+        if (lock_height.is_some() || hurt.is_some()) && (node.parent.is_some() || id == camera) {
+            return Err(if lock_height.is_some() {
+                GameError::LockTargetNotRoot(scene.path(id))
+            } else {
+                GameError::HurtboxNotRoot(scene.path(id))
             });
         }
-        if node.parent.is_some() || id == camera {
-            return Err(GameError::LockTargetNotRoot(scene.path(id)));
+        if let Some(height) = lock_height {
+            targets.push(Target {
+                id,
+                path: scene.path(id),
+                height: height as f32,
+            });
         }
-        targets.push(Target {
-            id,
-            path: scene.path(id),
-            height: height as f32,
-        });
+        if let Some((radius, height)) = hurt {
+            hurtboxes.push(Hurtbox {
+                id,
+                path: scene.path(id),
+                radius,
+                height,
+                meshes: scene
+                    .ids()
+                    .filter(|&n| is_in_subtree(scene, n, id))
+                    .filter_map(|n| scene.node(n).mesh.map(|m| (n, m.color)))
+                    .collect(),
+                hits: 0,
+                last_hit: None,
+            });
+        }
     }
-    Ok(targets)
+    Ok((targets, hurtboxes))
+}
+
+/// Whether `node` is `root` or one of its descendants.
+fn is_in_subtree(scene: &Scene, node: NodeId, root: NodeId) -> bool {
+    let mut at = Some(node);
+    while let Some(n) = at {
+        if n == root {
+            return true;
+        }
+        at = scene.node(n).parent;
+    }
+    false
+}
+
+/// What one active tick of an attack sweeps: the part `[lo, hi]` (radians
+/// relative to `facing`, positive to the left) of a sector of radius
+/// `reach` around the feet `p`, over the heights `low..=high` above them.
+struct Sweep {
+    p: Vec3,
+    facing: f32,
+    reach: f32,
+    lo: f32,
+    hi: f32,
+    low: f32,
+    high: f32,
+}
+
+impl Sweep {
+    /// `swept()` of `docs/architecture.md` section 11 (命中判定): whether
+    /// the hurtbox standing at `at` with `radius` and `height` is touched.
+    /// Its height range must overlap the band (both closed), and its
+    /// circle be within `radius` of the sector part.
+    fn touches(&self, at: Vec3, radius: f32, height: f32) -> bool {
+        let p = self.p;
+        if at.y > p.y + self.high || p.y + self.low > at.y + height {
+            return false;
+        }
+        let d = Vec2::new(at.x - p.x, at.z - p.z);
+        let rel = wrap(bearing(p, at) - self.facing);
+        let dist = if self.lo <= rel && rel <= self.hi {
+            // Within the angles: only the radius matters.
+            f32::max(d.length() - self.reach, 0.0)
+        } else {
+            f32::min(self.ray(d, self.lo), self.ray(d, self.hi))
+        };
+        dist <= radius
+    }
+
+    /// `ray(θ)`: the distance from `d` (relative to `p`) to the edge of
+    /// length `reach` at angle `theta`.
+    fn ray(&self, d: Vec2, theta: f32) -> f32 {
+        let u = Vec2::new(
+            -libm::sinf(self.facing + theta),
+            -libm::cosf(self.facing + theta),
+        );
+        let t = d.dot(u).clamp(0.0, self.reach);
+        (d - u * t).length()
+    }
 }
 
 /// The horizontal direction from `from` to `to`, as an angle like `facing`
@@ -1408,6 +1646,104 @@ mod tests {
         assert_eq!(max_combo, 3);
         assert!(buffered > 0);
         assert_eq!(hash, 12_318_382_315_914_199_701);
+    }
+
+    /// The input of [`hits_leave_player_camera_and_lock_as_in_g3_1`] at
+    /// `tick`: the actions held, and the axes. Locks on to dummy_b, walks
+    /// up to it, a buffered three-hit light combo and a buffered heavy
+    /// attack; then flicks over to dummy_c, walks up to it, and a light and
+    /// a heavy attack on it.
+    fn g3_1_reference_input(tick: u32) -> (Vec<&'static str>, Axes) {
+        let mut actions = Vec::new();
+        if tick == 1 {
+            actions.push(LOCK);
+        }
+        if matches!(tick, 100 | 115 | 145 | 340) {
+            actions.push(ATTACK);
+        }
+        if matches!(tick, 175 | 380) {
+            actions.push(HEAVY);
+        }
+        let axes = match tick {
+            2..=95 | 260..=330 => vec![(MOVE_Y, 1.0)],
+            250 => vec![(LOOK_X, 0.12)],
+            _ => vec![],
+        };
+        (actions, axes)
+    }
+
+    /// FNV-1a over the bits of every `player` and `camera` field and the
+    /// `lock` path.
+    fn g3_1_fingerprint(hash: &mut u64, s: &GameState) {
+        let p = s.player;
+        let words = [
+            p.position.x.to_bits(),
+            p.position.y.to_bits(),
+            p.position.z.to_bits(),
+            p.facing.to_bits(),
+            p.stamina.to_bits(),
+            p.stamina_wait,
+            p.action as u32,
+            p.action_tick,
+            u32::from(p.invulnerable),
+            p.attack_phase.map_or(0, |a| a as u32 + 1),
+            p.combo,
+            p.buffered.map_or(0, |b| b as u32 + 1),
+            s.camera.yaw.to_bits(),
+            s.camera.pitch.to_bits(),
+            s.camera.distance.to_bits(),
+        ];
+        let lock = match &s.lock {
+            Some(path) => path.as_bytes(),
+            None => &[0xfe],
+        };
+        let bytes = words.iter().flat_map(|w| w.to_le_bytes());
+        for byte in bytes.chain(lock.iter().copied()).chain([0xff]) {
+            *hash = (*hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    #[test]
+    fn hits_leave_player_camera_and_lock_as_in_g3_1() {
+        // The expected hash was computed by this same test on the G3.1 code
+        // (commit 2c5cfc0), before hits existed, on the demo scene with its
+        // dummies: it covers every tick of attacks that hit two of them.
+        let mut game = Game::new(demo_scene()).unwrap();
+        let mut input = ActionState::new();
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut locks = Vec::new();
+        let mut max_combo = 0;
+        for t in 1..=450 {
+            let (actions, axes) = g3_1_reference_input(t);
+            input.advance(TickInput {
+                actions: actions.into_iter().map(str::to_owned).collect(),
+                axes: axes.into_iter().map(|(a, v)| (a.to_owned(), v)).collect(),
+            });
+            game.tick(&input);
+            let s = game.state();
+            g3_1_fingerprint(&mut hash, &s);
+            if locks.last() != Some(&s.lock) {
+                locks.push(s.lock.clone());
+            }
+            max_combo = max_combo.max(s.player.combo);
+        }
+        assert_eq!(
+            locks,
+            [Some("dummy_b".to_owned()), Some("dummy_c".to_owned())]
+        );
+        assert_eq!(max_combo, 3);
+        assert_eq!(game.state().player.action, Action::Idle);
+        // The attacks did hit: dummy_b and dummy_c, never dummy_a.
+        let hits: Vec<_> = game
+            .state()
+            .hurtboxes
+            .iter()
+            .map(|h| (h.node.clone(), h.hits))
+            .collect();
+        assert_eq!(hits[0], ("dummy_a".to_owned(), 0));
+        assert!(hits[1].0 == "dummy_b" && hits[1].1 > 0, "{hits:?}");
+        assert!(hits[2].0 == "dummy_c" && hits[2].1 > 0, "{hits:?}");
+        assert_eq!(hash, 4_107_292_735_894_931_732);
     }
 
     /// The demo scene as it was in G2.3, before the lock-on dummies:

@@ -79,4 +79,19 @@ mod tests {
         let game = Game::new(demo_scene()).unwrap();
         assert_eq!(game.target_paths(), ["dummy_a", "dummy_b", "dummy_c"]);
     }
+
+    #[test]
+    fn built_in_scene_hurtboxes_are_the_three_dummies_unhit() {
+        let game = Game::new(demo_scene()).unwrap();
+        let hurtboxes: Vec<_> = game
+            .state()
+            .hurtboxes
+            .iter()
+            .map(|h| (h.node.clone(), h.hits, h.last_hit))
+            .collect();
+        assert_eq!(
+            hurtboxes,
+            ["dummy_a", "dummy_b", "dummy_c"].map(|n| (n.to_owned(), 0, None))
+        );
+    }
 }

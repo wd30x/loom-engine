@@ -47,6 +47,12 @@
                 ("lock_pitch_down", 15),         // degrees below the lock point the camera looks
                 ("switch_threshold", 0.1),       // look_x (radians) flicked to switch targets
                 ("switch_cooldown_ticks", 20),   // ticks after a switch before the next one
+                ("attack_reach", 2),             // meters: radius of the light attack's sweep
+                ("attack_arc", 120),             // degrees swept, right to left, centered on facing
+                ("heavy_reach", 2.4),            // heavy attack: as for the light one
+                ("heavy_arc", 90),
+                ("swing_low", 0.3),              // meters above the feet: the band the swing sweeps
+                ("swing_high", 1.6),
             ],
             children: [
                 // 面朝方向的标记：胶囊体本身是旋转对称的，看不出朝向
@@ -63,20 +69,27 @@
         ]),
         (name: "wall", position: (-3.0, 1.0, 3.0), rotation: (0.0, 30.0, 0.0), scale: (4.0, 2.0, 0.5),
             mesh: Cube, color: (0.55, 0.5, 0.45), collider: Box),
-        // Lock-on targets: locked on 1.2 m above the feet. The body is only
-        // drawn; the block, not drawn, is what the character bumps into.
-        (name: "dummy_a", position: (-5.0, 0.0, -6.0), props: [("lock_height", 1.2)], children: [
-            (name: "body", mesh: Capsule(radius: 0.4, height: 1.8), color: (0.45, 0.5, 0.6)),
-            (name: "block", position: (0.0, 0.9, 0.0), scale: (0.8, 1.8, 0.8), collider: Box),
-        ]),
-        (name: "dummy_b", position: (0.0, 0.0, -6.5), props: [("lock_height", 1.2)], children: [
-            (name: "body", mesh: Capsule(radius: 0.4, height: 1.8), color: (0.45, 0.5, 0.6)),
-            (name: "block", position: (0.0, 0.9, 0.0), scale: (0.8, 1.8, 0.8), collider: Box),
-        ]),
-        (name: "dummy_c", position: (5.0, 0.0, -6.0), props: [("lock_height", 1.2)], children: [
-            (name: "body", mesh: Capsule(radius: 0.4, height: 1.8), color: (0.45, 0.5, 0.6)),
-            (name: "block", position: (0.0, 0.9, 0.0), scale: (0.8, 1.8, 0.8), collider: Box),
-        ]),
+        // Lock-on targets, locked on 1.2 m above the feet, and hurtboxes the
+        // size of the body. The body is only drawn; the block, not drawn, is
+        // what the character bumps into.
+        (name: "dummy_a", position: (-5.0, 0.0, -6.0),
+            props: [("lock_height", 1.2), ("hurt_radius", 0.4), ("hurt_height", 1.8)],
+            children: [
+                (name: "body", mesh: Capsule(radius: 0.4, height: 1.8), color: (0.45, 0.5, 0.6)),
+                (name: "block", position: (0.0, 0.9, 0.0), scale: (0.8, 1.8, 0.8), collider: Box),
+            ]),
+        (name: "dummy_b", position: (0.0, 0.0, -6.5),
+            props: [("lock_height", 1.2), ("hurt_radius", 0.4), ("hurt_height", 1.8)],
+            children: [
+                (name: "body", mesh: Capsule(radius: 0.4, height: 1.8), color: (0.45, 0.5, 0.6)),
+                (name: "block", position: (0.0, 0.9, 0.0), scale: (0.8, 1.8, 0.8), collider: Box),
+            ]),
+        (name: "dummy_c", position: (5.0, 0.0, -6.0),
+            props: [("lock_height", 1.2), ("hurt_radius", 0.4), ("hurt_height", 1.8)],
+            children: [
+                (name: "body", mesh: Capsule(radius: 0.4, height: 1.8), color: (0.45, 0.5, 0.6)),
+                (name: "block", position: (0.0, 0.9, 0.0), scale: (0.8, 1.8, 0.8), collider: Box),
+            ]),
         (name: "sun", position: (4.0, 8.0, 3.0), look_at: (0.0, 0.0, 0.0),
             light: (color: (1.0, 0.95, 0.9), intensity: 1.0)),
         (name: "main_cam", camera: (fov_y: 60.0, near: 0.1, far: 200.0),

@@ -1,4 +1,4 @@
-//! Stamina, roll, sprint, backstep, attacks and lock-on: the parameters,
+//! Stamina, roll, sprint, backstep, attacks, lock-on and hits: the parameters,
 //! read from the character node's props with defaults, and the action state
 //! (`docs/architecture.md` section 11, "耐力、翻滚、冲刺", "攻击" and "锁定").
 
@@ -50,12 +50,18 @@ enum Rule {
     AtLeast(u32),
     /// An angle in degrees, at least 0 and less than 90.
     Below90,
+    /// An angle in degrees, greater than 0 and at most 360.
+    Arc,
+    /// At least 0.
+    NotNegative,
+    /// Any value: checked only against another prop.
+    Any,
 }
 
 /// Every prop the character understands, with its default and rule, in
 /// the order they are checked. Reading, checking and rejecting unknown
 /// names all go through this one table.
-const PARAMS: [(&str, f64, Rule); 35] = [
+const PARAMS: [(&str, f64, Rule); 41] = [
     ("stamina_max", 100.0, Rule::Positive),
     ("stamina_regen", 45.0, Rule::Positive),
     ("stamina_delay_ticks", 30.0, Rule::AtLeast(0)),
@@ -91,6 +97,12 @@ const PARAMS: [(&str, f64, Rule); 35] = [
     ("lock_pitch_down", 15.0, Rule::Below90),
     ("switch_threshold", 0.1, Rule::Positive),
     ("switch_cooldown_ticks", 20.0, Rule::AtLeast(0)),
+    ("attack_reach", 2.0, Rule::Positive),
+    ("attack_arc", 120.0, Rule::Arc),
+    ("heavy_reach", 2.4, Rule::Positive),
+    ("heavy_arc", 90.0, Rule::Arc),
+    ("swing_low", 0.3, Rule::NotNegative),
+    ("swing_high", 1.6, Rule::Any),
 ];
 
 /// A roll or a backstep, in per-tick units.
@@ -114,6 +126,12 @@ pub(crate) struct Attack {
     pub recovery: u32,
     /// Meters per active tick: `distance / active`.
     pub step: f32,
+    /// Meters: the radius of the swept sector.
+    pub reach: f32,
+    /// Radians: the whole angle of the sector, centered on `facing`.
+    pub arc: f32,
+    /// Radians swept per active tick: `arc / active`.
+    pub slice: f32,
 }
 
 /// The parameters in per-tick units.
@@ -136,6 +154,10 @@ pub(crate) struct Params {
     pub attack_turn_step: f32,
     pub combo_max: u32,
     pub lock: Lock,
+    /// Meters above the feet: the height band an attack sweeps, shared by
+    /// light and heavy attacks.
+    pub swing_low: f32,
+    pub swing_high: f32,
 }
 
 /// Lock-on, in per-tick units and radians.
@@ -161,8 +183,8 @@ impl Params {
     /// Reads and checks the props of the character `id`, whose capsule has
     /// `radius`: unknown names (in file order), then each value (in table
     /// order), then the invulnerability windows (roll, backstep), then
-    /// `lock_range <= lock_break_range`, then the per-tick distances
-    /// (sprint, roll, backstep, attack, heavy).
+    /// `lock_range <= lock_break_range`, then `swing_low < swing_high`,
+    /// then the per-tick distances (sprint, roll, backstep, attack, heavy).
     pub fn new(scene: &Scene, id: NodeId, radius: f32) -> Result<Self, GameError> {
         let node = scene.node(id);
         let character = scene.path(id);
@@ -201,6 +223,20 @@ impl Params {
                         value: v,
                     });
                 }
+                Rule::Arc if !(v > 0.0 && v <= 360.0) => {
+                    return Err(GameError::NotAnArc {
+                        character,
+                        prop,
+                        value: v,
+                    });
+                }
+                Rule::NotNegative if v < 0.0 => {
+                    return Err(GameError::Negative {
+                        character,
+                        prop,
+                        value: v,
+                    });
+                }
                 _ => *value = v,
             }
         }
@@ -225,12 +261,16 @@ impl Params {
         };
         let attack = |action: &str| {
             let active = ticks(&format!("{action}_active_ticks"));
+            let arc = (get(&format!("{action}_arc")) as f32).to_radians();
             Attack {
                 cost: get(&format!("{action}_cost")) as f32,
                 startup: ticks(&format!("{action}_startup_ticks")),
                 active,
                 recovery: ticks(&format!("{action}_recovery_ticks")),
                 step: get(&format!("{action}_distance")) as f32 / active as f32,
+                reach: get(&format!("{action}_reach")) as f32,
+                arc,
+                slice: arc / active as f32,
             }
         };
         let params = Self {
@@ -255,6 +295,8 @@ impl Params {
                 switch_threshold: get("switch_threshold") as f32,
                 switch_cooldown_ticks: ticks("switch_cooldown_ticks"),
             },
+            swing_low: get("swing_low") as f32,
+            swing_high: get("swing_high") as f32,
         };
         for (action, m) in [("roll", params.roll), ("backstep", params.backstep)] {
             if !(m.invuln_from <= m.invuln_to && m.invuln_to <= m.ticks) {
@@ -263,6 +305,9 @@ impl Params {
         }
         if params.lock.range > params.lock.break_range {
             return Err(GameError::LockRanges { character });
+        }
+        if params.swing_low >= params.swing_high {
+            return Err(GameError::SwingBand { character });
         }
         for (action, step) in [
             ("sprint", params.sprint_step),
@@ -312,7 +357,10 @@ mod tests {
     use loom_core::input::{ActionState, TickInput};
 
     use super::*;
-    use crate::{ATTACK, Game, GameState, HEAVY, LOCK, LOOK_X, LOOK_Y, MOVE_X, MOVE_Y, ROLL};
+    use crate::{
+        ATTACK, Game, GameState, HEAVY, HurtboxState, LOCK, LOOK_X, LOOK_Y, LastHit, MOVE_X,
+        MOVE_Y, ROLL,
+    };
     use std::f32::consts::FRAC_PI_2;
 
     /// Props of the test scene: every per-tick amount is a power-of-two
@@ -1224,7 +1272,267 @@ mod tests {
         assert!(facing < -0.2);
     }
 
-    // ------------------------------------------------------------ scene errors
+    // -------------------------------------------------------------------- hits
+
+    /// [`PROPS`] plus attacks that barely slide: 0.0625 m over 4 active
+    /// ticks, 1/64 m a tick (exact), so the angles to targets hardly move
+    /// and every target below stays at least 5° from a slice's edge.
+    /// Light: ticks 1-4 startup, 5-8 active, 9-14 recovery. Heavy: 1-6,
+    /// 7-10, 11-18. Arcs, reaches and the swing band are the defaults:
+    /// light 120° in four 30° slices from -60° (right) to 60° (left),
+    /// heavy 90° in four 22.5° slices; reach 2 and 2.4; swing 0.3-1.6 m.
+    fn hit_props() -> String {
+        format!(
+            r#"{PROPS}, ("attack_startup_ticks", 4), ("attack_active_ticks", 4),
+            ("attack_recovery_ticks", 6), ("attack_distance", 0.0625),
+            ("heavy_startup_ticks", 6), ("heavy_active_ticks", 4),
+            ("heavy_recovery_ticks", 8), ("heavy_distance", 0.0625)"#
+        )
+    }
+
+    /// A root hurtbox `name` standing at `(x, y, z)` with `radius` and
+    /// `height`, and a child mesh `body`.
+    fn hurtbox(name: &str, (x, y, z): (f32, f32, f32), radius: f32, height: f32) -> String {
+        format!(
+            r#"(name: "{name}", position: ({x:?}, {y:?}, {z:?}),
+                props: [("hurt_radius", {radius:?}), ("hurt_height", {height:?})],
+                children: [(name: "body", mesh: Cube, color: (0.2, 0.4, 0.6))]),"#
+        )
+    }
+
+    /// `(x, 0, z)` at `meters` from the origin, `degrees` from -Z (positive
+    /// to the left, like `facing`).
+    fn at(degrees: f32, meters: f32) -> (f32, f32, f32) {
+        let a = degrees.to_radians();
+        (-meters * libm::sinf(a), 0.0, -meters * libm::cosf(a))
+    }
+
+    fn hurtbox_state<'a>(s: &'a GameState, name: &str) -> &'a HurtboxState {
+        s.hurtboxes
+            .iter()
+            .find(|h| h.node == name)
+            .expect("the hurtbox exists")
+    }
+
+    /// The tick of the latest hit on `name`, if any.
+    fn hit_tick(s: &GameState, name: &str) -> Option<u64> {
+        hurtbox_state(s, name).last_hit.map(|h| h.tick)
+    }
+
+    #[test]
+    fn light_attack_sweeps_its_slices_right_to_left_one_per_active_tick() {
+        // 45° right is in the first slice (-60°..-30°), 45° left in the
+        // last (30°..60°).
+        let nodes = [
+            hurtbox("right", at(-45.0, 1.5), 0.05, 1.8),
+            hurtbox("left", at(45.0, 1.5), 0.05, 1.8),
+        ]
+        .concat();
+        let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+        let states = press_on(&mut run, ATTACK, &[1], 14, &NONE);
+        for (i, s) in states.iter().enumerate() {
+            let t = i as u64 + 1;
+            let right = if t >= 5 { Some(5) } else { None };
+            let left = if t >= 8 { Some(8) } else { None };
+            assert_eq!(hit_tick(s, "right"), right, "tick {t}");
+            assert_eq!(hit_tick(s, "left"), left, "tick {t}");
+        }
+        let last = states.last().unwrap();
+        assert_eq!(
+            hurtbox_state(last, "left").last_hit,
+            Some(LastHit {
+                tick: 8,
+                attack: Action::Attack,
+                combo: 1
+            })
+        );
+        assert_eq!(hurtbox_state(last, "right").hits, 1);
+    }
+
+    #[test]
+    fn hurtbox_circle_reaching_over_a_slice_edge_is_hit_a_tick_early() {
+        // Centered 25° right: in the second slice (-30°..0°), 1.5 * sin 5°
+        // ≈ 0.13 m from the -30° edge. A radius of 0.2 reaches over it into
+        // the first slice; 0.1 does not.
+        for (radius, tick) in [(0.2, 5), (0.1, 6)] {
+            let nodes = hurtbox("h", at(-25.0, 1.5), radius, 1.8);
+            let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+            let states = press_on(&mut run, ATTACK, &[1], 14, &NONE);
+            assert_eq!(hit_tick(&states[13], "h"), Some(tick), "radius {radius}");
+            assert_eq!(hurtbox_state(&states[13], "h").hits, 1);
+        }
+    }
+
+    #[test]
+    fn hurtbox_is_hit_exactly_up_to_reach_plus_its_radius() {
+        // Straight ahead (angle -0.0, the end of the second slice, whose
+        // `hi` is exactly 0). On active tick 2 the character is 2/64 m
+        // forward: 2.28125 m away is 2.25 = reach 2 + radius 0.25, all
+        // exact. 2.3 m is out of reach on every tick.
+        let reach = |meters: f32| {
+            let nodes = hurtbox("h", (0.0, 0.0, -meters), 0.25, 1.8);
+            let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+            let states = press_on(&mut run, ATTACK, &[1], 14, &NONE);
+            hit_tick(&states[13], "h")
+        };
+        assert_eq!(reach(2.28125), Some(6));
+        assert_eq!(reach(2.3), None);
+    }
+
+    #[test]
+    fn heavy_attack_reaches_farther_than_a_light_one() {
+        // 2.6 m ahead: out of the light reach (2 + 0.25), within the heavy
+        // one (2.4 + 0.25) on the heavy's active tick 2, game tick 8.
+        let nodes = hurtbox("h", (0.0, 0.0, -2.6), 0.25, 1.8);
+        let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+        let states = press_on(&mut run, ATTACK, &[1], 14, &NONE);
+        assert_eq!(hurtbox_state(&states[13], "h").hits, 0);
+        let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+        let states = press_on(&mut run, HEAVY, &[1], 18, &NONE);
+        assert_eq!(
+            hurtbox_state(&states[17], "h").last_hit,
+            Some(LastHit {
+                tick: 8,
+                attack: Action::Heavy,
+                combo: 0
+            })
+        );
+    }
+
+    #[test]
+    fn hurtbox_is_hit_when_its_heights_just_meet_the_swing_band() {
+        // Swing band 0.25-1.5 m, heights all exact: a hurtbox standing at
+        // 1.5 (bottom on the band's top) or from 0 to 0.25 (top on its
+        // bottom) is hit, both ends being closed; 1/16 m further is not.
+        let props = format!(
+            r#"{}, ("swing_low", 0.25), ("swing_high", 1.5)"#,
+            hit_props()
+        );
+        let hit = |y: f32, height: f32| {
+            let nodes = hurtbox("h", (0.0, y, -1.0), 0.25, height);
+            let mut run = Run::on(&scene_with(&props, &nodes));
+            let states = press_on(&mut run, ATTACK, &[1], 14, &NONE);
+            hurtbox_state(&states[13], "h").hits
+        };
+        assert_eq!(hit(1.5, 1.8), 1);
+        assert_eq!(hit(1.5625, 1.8), 0);
+        assert_eq!(hit(0.0, 0.25), 1);
+        assert_eq!(hit(-0.0625, 0.25), 0);
+    }
+
+    #[test]
+    fn each_attack_hits_a_hurtbox_once_and_a_buffered_one_again() {
+        // Close and big enough to touch every slice.
+        let nodes = hurtbox("h", (0.0, 0.0, -0.5), 1.0, 1.8);
+        let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+        // Tick 10 is in the first attack's recovery: buffered, the second
+        // attack starts on tick 15, its first active tick is 19.
+        let states = press_on(&mut run, ATTACK, &[1, 10], 28, &NONE);
+        assert_eq!(hurtbox_state(&states[13], "h").hits, 1);
+        assert_eq!(hit_tick(&states[13], "h"), Some(5));
+        let h = hurtbox_state(&states[27], "h");
+        assert_eq!(h.hits, 2);
+        assert_eq!(
+            h.last_hit,
+            Some(LastHit {
+                tick: 19,
+                attack: Action::Attack,
+                combo: 2
+            })
+        );
+    }
+
+    #[test]
+    fn one_attack_hits_several_hurtboxes_on_one_tick_or_on_different_ones() {
+        // Two in the first slice (40° and 50° right), one in the last.
+        let nodes = [
+            hurtbox("a", at(-40.0, 1.2), 0.05, 1.8),
+            hurtbox("b", at(-50.0, 1.7), 0.05, 1.8),
+            hurtbox("c", at(45.0, 1.5), 0.05, 1.8),
+        ]
+        .concat();
+        let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+        let states = press_on(&mut run, ATTACK, &[1], 14, &NONE);
+        let s = &states[13];
+        assert_eq!(hit_tick(s, "a"), Some(5));
+        assert_eq!(hit_tick(s, "b"), Some(5));
+        assert_eq!(hit_tick(s, "c"), Some(8));
+        assert!(s.hurtboxes.iter().all(|h| h.hits == 1));
+    }
+
+    /// The color of the mesh at `path`.
+    fn color_of(run: &Run, path: &str) -> Vec3 {
+        let scene = run.game.scene();
+        scene.node(scene.find(path).unwrap()).mesh.unwrap().color
+    }
+
+    #[test]
+    fn hit_during_a_flash_starts_the_eight_ticks_over() {
+        // One-tick phases: an attack lasts 3 ticks (startup, active,
+        // recovery), so a buffered one hits 3 ticks after the first, while
+        // it is still white: hits on ticks 2 and 5, white on 2..=12.
+        let props = format!(
+            r#"{PROPS}, ("attack_startup_ticks", 1), ("attack_active_ticks", 1),
+            ("attack_recovery_ticks", 1), ("attack_distance", 0.0625)"#
+        );
+        let mut run = Run::on(&scene_with(
+            &props,
+            &hurtbox("h", (0.0, 0.0, -1.0), 0.25, 1.8),
+        ));
+        // Tick 3 is the first attack's recovery: buffered, starts on 4.
+        let states = press_on(&mut run, ATTACK, &[1, 3], 14, &NONE);
+        assert_eq!(hit_tick(&states[1], "h"), Some(2));
+        assert_eq!(hit_tick(&states[4], "h"), Some(5));
+        assert_eq!(hurtbox_state(&states[13], "h").hits, 2);
+        let mut run = Run::on(&scene_with(
+            &props,
+            &hurtbox("h", (0.0, 0.0, -1.0), 0.25, 1.8),
+        ));
+        for t in 1..=14 {
+            let actions: &[&str] = if t == 1 || t == 3 { &[ATTACK] } else { &[] };
+            run.hold(actions, &NONE);
+            let white = (2..=12).contains(&t);
+            let expected = if white {
+                Vec3::ONE
+            } else {
+                Vec3::new(0.2, 0.4, 0.6)
+            };
+            assert_eq!(color_of(&run, "h/body"), expected, "tick {t}");
+        }
+    }
+
+    #[test]
+    fn hit_hurtbox_meshes_flash_white_for_eight_ticks_then_come_back() {
+        // `bare` has no mesh of its own, only its child; `full` has both.
+        let nodes = format!(
+            "{}{}",
+            hurtbox("bare", at(-40.0, 1.2), 0.05, 1.8),
+            r#"(name: "full", position: (1.0, 0.0, -1.2), mesh: Cube, color: (0.1, 0.2, 0.3),
+                props: [("hurt_radius", 0.05), ("hurt_height", 1.8)],
+                children: [(name: "inner", mesh: Cube, color: (0.3, 0.2, 0.1))]),"#
+        );
+        let mut run = Run::on(&scene_with(&hit_props(), &nodes));
+        let meshes = [
+            ("bare/body", Vec3::new(0.2, 0.4, 0.6)),
+            ("full", Vec3::new(0.1, 0.2, 0.3)),
+            ("full/inner", Vec3::new(0.3, 0.2, 0.1)),
+        ];
+        // Both are hit on tick 5 (the first slice; `full` is 39.8° right);
+        // presses on 1 and 10 give a second attack hitting on tick 19.
+        for t in 1..=30_u64 {
+            let actions: &[&str] = if t == 1 || t == 10 { &[ATTACK] } else { &[] };
+            let s = run.hold(actions, &NONE);
+            let white = (5..=12).contains(&t) || (19..=26).contains(&t);
+            for (path, color) in meshes {
+                let expected = if white { Vec3::ONE } else { color };
+                assert_eq!(color_of(&run, path), expected, "{path} on tick {t}");
+            }
+            if t == 19 {
+                assert_eq!(hit_tick(&s, "full"), Some(19));
+                assert_eq!(hurtbox_state(&s, "bare").hits, 2);
+            }
+        }
+    }
 
     #[test]
     fn unknown_character_prop_is_rejected() {
@@ -1436,7 +1744,7 @@ mod tests {
     fn lock_target_nodes_are_checked() {
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_heigth", 1.0)]),"#),
-            "the node \"t\": unknown prop \"lock_heigth\" (known: lock_height)"
+            "the node \"t\": unknown prop \"lock_heigth\" (known: lock_height, hurt_radius, hurt_height)"
         );
         // Any node but the character, target or not.
         assert_eq!(
@@ -1444,7 +1752,7 @@ mod tests {
                 "",
                 r#"(name: "g", children: [(name: "t", props: [("hp", 3)])]),"#
             ),
-            "the node \"g/t\": unknown prop \"hp\" (known: lock_height)"
+            "the node \"g/t\": unknown prop \"hp\" (known: lock_height, hurt_radius, hurt_height)"
         );
         assert_eq!(
             error_with("", r#"(name: "t", props: [("lock_height", 0)]),"#),
@@ -1502,5 +1810,135 @@ mod tests {
         assert!(error_with("", nodes).contains("unknown prop \"x\""));
         let nodes = r#"(name: "g", children: [(name: "t", props: [("lock_height", 0)])]),"#;
         assert!(error_with("", nodes).contains("must be greater than 0"));
+    }
+
+    #[test]
+    fn hit_props_are_checked_with_exact_messages() {
+        for (props, problem) in [
+            (
+                r#"("attack_arc", 0)"#,
+                "prop \"attack_arc\" must be greater than 0 and at most 360, got 0",
+            ),
+            (
+                r#"("attack_arc", 360.5)"#,
+                "prop \"attack_arc\" must be greater than 0 and at most 360, got 360.5",
+            ),
+            (
+                r#"("heavy_arc", -90)"#,
+                "prop \"heavy_arc\" must be greater than 0 and at most 360, got -90",
+            ),
+            (
+                r#"("attack_reach", 0)"#,
+                "prop \"attack_reach\" must be greater than 0, got 0",
+            ),
+            (
+                r#"("heavy_reach", -1)"#,
+                "prop \"heavy_reach\" must be greater than 0, got -1",
+            ),
+            (
+                r#"("swing_low", -0.1)"#,
+                "prop \"swing_low\" must be at least 0, got -0.1",
+            ),
+            (r#"("swing_low", 1.6)"#, "needs swing_low < swing_high"),
+            (r#"("swing_high", 0.2)"#, "needs swing_low < swing_high"),
+        ] {
+            assert_eq!(
+                error_of(props),
+                format!("the character \"player\": {problem}")
+            );
+        }
+        for props in [
+            r#"("attack_arc", 360)"#,
+            r#"("heavy_arc", 360)"#,
+            r#"("swing_low", 0)"#,
+            r#"("swing_low", 1.5)"#,
+        ] {
+            assert!(Game::from_source(&scene(props)).is_ok(), "{props}");
+        }
+    }
+
+    #[test]
+    fn hurtbox_nodes_are_checked_with_exact_messages() {
+        for (nodes, message) in [
+            (
+                r#"(name: "t", props: [("hurt_radius", 0.4)]),"#,
+                "the node \"t\": needs both hurt_radius and hurt_height, or neither",
+            ),
+            (
+                r#"(name: "t", props: [("hurt_height", 1.8)]),"#,
+                "the node \"t\": needs both hurt_radius and hurt_height, or neither",
+            ),
+            (
+                r#"(name: "t", props: [("hurt_radius", 0), ("hurt_height", 1.8)]),"#,
+                "the node \"t\": prop \"hurt_radius\" must be greater than 0, got 0",
+            ),
+            (
+                r#"(name: "t", props: [("hurt_radius", 0.4), ("hurt_height", -1)]),"#,
+                "the node \"t\": prop \"hurt_height\" must be greater than 0, got -1",
+            ),
+            (
+                r#"(name: "g", children: [(name: "t",
+                    props: [("hurt_radius", 0.4), ("hurt_height", 1.8)])]),"#,
+                "the hurtbox \"g/t\" must be a root node, and not the camera",
+            ),
+            (
+                r#"(name: "t", props: [("hurt_radius", 0.4), ("hurt_heigth", 1.8)]),"#,
+                "the node \"t\": unknown prop \"hurt_heigth\" \
+                 (known: lock_height, hurt_radius, hurt_height)",
+            ),
+        ] {
+            assert_eq!(error_with("", nodes), message);
+        }
+        let src = scene("").replace(
+            r#"(name: "cam","#,
+            r#"(name: "cam", props: [("hurt_radius", 0.4), ("hurt_height", 1.8)],"#,
+        );
+        match Game::from_source(&src) {
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "the hurtbox \"cam\" must be a root node, and not the camera"
+            ),
+            Ok(_) => panic!("the camera cannot be a hurtbox"),
+        }
+        // The lock_height message is unchanged.
+        assert_eq!(
+            error_with("", r#"(name: "t", props: [("lock_height", -1)]),"#),
+            "the node \"t\": prop \"lock_height\" must be greater than 0, got -1"
+        );
+        // The character's props are the character's: hurt props are unknown.
+        assert_eq!(
+            error_of(r#"("hurt_radius", 0.4)"#),
+            "the character \"player\": unknown prop \"hurt_radius\""
+        );
+    }
+
+    #[test]
+    fn hit_checks_run_in_the_documented_order() {
+        // The new values come after the lock ones, in table order.
+        assert!(
+            error_of(r#"("attack_arc", 0), ("switch_threshold", 0)"#).contains("switch_threshold")
+        );
+        assert!(error_of(r#"("swing_low", -1), ("attack_arc", 0)"#).contains("attack_arc"));
+        // Values, then the lock ranges, then the swing band, then distances.
+        assert!(error_of(r#"("swing_low", 2), ("heavy_arc", 0)"#).contains("heavy_arc"));
+        assert!(error_of(r#"("swing_low", 2), ("lock_range", 25)"#).contains("lock_break_range"));
+        assert!(error_of(r#"("sprint_speed", 30), ("swing_low", 2)"#).contains("swing_low <"));
+        // In a node: lock_height, hurt_radius, hurt_height values, pairing,
+        // the root rule; a lock target's root error beats a hurtbox's.
+        let node = |props: &str| error_with("", &format!(r#"(name: "t", props: [{props}]),"#));
+        assert!(node(r#"("hurt_radius", 0), ("lock_height", 0)"#).contains("\"lock_height\""));
+        assert!(node(r#"("hurt_height", 0), ("hurt_radius", 0)"#).contains("\"hurt_radius\""));
+        assert!(node(r#"("hurt_height", 0)"#).contains("\"hurt_height\" must be greater"));
+        let child = |props: &str| {
+            error_with(
+                "",
+                &format!(r#"(name: "g", children: [(name: "t", props: [{props}])]),"#),
+            )
+        };
+        assert!(child(r#"("hurt_radius", 0.4)"#).contains("needs both"));
+        assert!(
+            child(r#"("lock_height", 1), ("hurt_radius", 0.4), ("hurt_height", 1.8)"#)
+                .starts_with("the lock target \"g/t\"")
+        );
     }
 }

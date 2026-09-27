@@ -220,6 +220,15 @@ pub enum SpriteTagError {
     Undeclared { path: String, tag: String },
 }
 
+/// Why [`Scene::set_mesh_color`] refused.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum MeshColorError {
+    #[error("the node {0:?} has no mesh")]
+    NoMesh(String),
+    #[error("the node {path:?}: mesh color components must be between 0 and 1, got {color}")]
+    OutOfRange { path: String, color: Vec3 },
+}
+
 /// A grid of 1x1 cells on the node's XY plane: row `r`, column `c` is
 /// centered at `(c, -r, 0)`, row 0 on top (`docs/architecture.md` section 14).
 #[derive(Debug, Clone, PartialEq)]
@@ -478,6 +487,26 @@ impl Scene {
         };
         if let Some(sprite) = &mut self.nodes[id.0].sprite {
             sprite.current = index;
+        }
+        Ok(())
+    }
+
+    /// Sets the mesh color of `id`, drawn from the next frame on. The color
+    /// follows the scene file's rule for `color` (finite, every component
+    /// in `[0, 1]`); on an error nothing changes.
+    pub fn set_mesh_color(&mut self, id: NodeId, color: Vec3) -> Result<(), MeshColorError> {
+        let path = || self.path(id);
+        if self.nodes[id.0].mesh.is_none() {
+            return Err(MeshColorError::NoMesh(path()));
+        }
+        if self::color((color.x, color.y, color.z), "mesh color").is_err() {
+            return Err(MeshColorError::OutOfRange {
+                path: path(),
+                color,
+            });
+        }
+        if let Some(mesh) = &mut self.nodes[id.0].mesh {
+            mesh.color = color;
         }
         Ok(())
     }
