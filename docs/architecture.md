@@ -1120,12 +1120,14 @@ hp = max(hp - damage_of(a), 0.0)
 if hp == 0.0 {
     state = dead; state_ticks = revive_ticks
     impact = 0.0; impact_wait = 0
+    fall = bearing(position, h)                // 审查时加：往哪边倒，见「表现」
     if lock 是 h 的节点 { lock = null }       // 下一个 tick 起相机照常转
 } else {
     impact = impact + impact_of(a); impact_wait = poise_reset_ticks
     if impact > poise {
         state = stagger; state_ticks = stagger_ticks
         impact = 0.0
+        fall = bearing(position, h)
     }
 }
 ```
@@ -1142,10 +1144,13 @@ if hp == 0.0 {
   - 没死、在闪白：白色；
   - 否则：原色。
   - 血条永远用它自己的原色。
-- **姿势**：受击判定节点的局部旋转设成 `base * Quat::from_rotation_x(tilt)`，`base` 是加载时的旋转：
-  - `ok`：`tilt = 0`，也就是 `base` 本身；
-  - `stagger`：`tilt = 20°`，向后仰（节点朝 -Z，向后是往 +Z 倒）；
-  - `dead`：`tilt = 90°`，向后躺平。
+- **姿势**：**朝远离攻击者的方向倒**（G3.3 审查时改：原来写的是绕节点自己的 X 轴向后仰，但演示场景的假人面朝 -Z，角色从 +Z 过来打，「向后」正好倒向攻击者，死后躺在角色脚下）。
+  - `fall`：让受伤方硬直或死掉的那一下，从角色位置看受伤方的水平方向 `bearing(position, h)`（`position` 是命中检查时、滑动之后的角色位置）。硬直中再次被打出硬直时更新。内部状态，不进状态导出，从 `nodes` 里的旋转能看出来。加载时是 0。
+  - 受击判定节点的局部旋转设成 `Quat::from_rotation_y(fall) * Quat::from_rotation_x(-tilt) * Quat::from_rotation_y(-fall) * base`，`base` 是加载时的旋转。节点的上方（+Y）倒向 `fall` 那个方向，也就是远离角色的一侧；节点自己的朝向不变。
+  - `ok`：直接设成 `base`（不走上面的式子，保证逐位等于加载时的值）；
+  - `stagger`：`tilt = 20°`；
+  - `dead`：`tilt = 90°`，躺平。
+  - 角色和受伤方水平重合（`hdist` 为 0）时 `bearing` 给 0，往 -Z 倒。
 - **血条**：受伤方有血条时，`frac = hp / hp_max`：
   - `scale.x = width * frac`，`position.x = x0 - width * (1 - frac) / 2`，`width`、`x0` 是场景里的 `scale.x`、`position.x`；
   - 死了隐藏血条（`Scene::set_visible`，第 10 节「渲染」），复活时重新显示。死了 `frac` 是 0，缩放成 0 的方块没法正常画，所以要隐藏。
@@ -1161,6 +1166,8 @@ if hp == 0.0 {
 - 姿势只是绕节点原点转，没有动画，状态一变就立刻到位。
 - 血条是 3D 空间里的方块，从侧面看会变窄，从正后方看左右是反的。
 - 硬直和死亡对假人只是姿势：假人本来就不会动。「硬直中不能行动」要等 G3.4 的木桩和角色。
+- `revive_ticks` 小于闪白时长（8）时，复活后可能还白几个 tick（颜色的优先级是变暗、闪白、原色）。演示场景是 180，碰不到；不值得为它加规则（G3.3 审查时定）。
+- `hp_bar` 下面如果还有带 mesh 的子节点，它们照常闪白、变暗；只有 `hp_bar` 节点本身不参与（G3.3 实现时定）。
 - 没有击退、顿帧。
 
 ### 碰撞（G1.3 起）
