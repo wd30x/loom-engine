@@ -134,6 +134,7 @@ loom run [OPTIONS]
     --input <PATH>         回放输入脚本（第 9 节）；这时键盘不再驱动动作，Esc 仍然可以退出
     --record <PATH>        退出前把这次运行每个 tick 的动作变化写成输入脚本（第 9 节），会自动创建父目录
     --trace <PATH>         边跑边把每个 tick 的事件和状态写成 JSONL（E5.1 起，见下文「轨迹」），会自动创建父目录
+    --debug-draw[=<类别,…>] 在画面上叠加调试线框（E5.2 起，第 16 节）。不带值是游戏的全部类别，带值只开列出的
     --scene <PATH>         加载场景文件（第 10 节），按它顶层的 game 选游戏；不给时用 souls 内置的演示场景。窗口模式下文件变化会热重载
     --no-capture           窗口模式下不抓鼠标（不锁定、不隐藏指针），也不读鼠标移动（轴只来自按键）。
                            smoke 测试用它：不占用桌面鼠标，有人动鼠标也不会污染录制。和 --headless 同时给是参数错误
@@ -163,6 +164,7 @@ loom serve [OPTIONS]       远程控制会话（第 13 节），只有无头
 - `screenshot`：没有截图时为 `null`
 - `state`：没有导出状态时为 `null`，否则是 `--dump-state` 给的路径
 - `record`：没有录制时为 `null`，否则是 `--record` 给的路径
+- `debug_draw`（E5.2 起，紧跟在 `game` 后面）：没有 `--debug-draw` 时为 `null`，否则是开着的类别列表（按游戏定义的顺序），是命令行给的值，不管运行中按没按 F3
 - `trace`（E5.1 起，紧跟在 `record` 后面）：没有 `--trace` 时为 `null`，否则是 `{"path":…,"lines":写了几行,"events":一共几个事件}`，都只算最后一次热重载之后的部分
 - `input`：没有回放时为 `null`，否则是 `{"path":…,"events":脚本里的事件数,"applied":实际生效的事件数}`。脚本比运行长时 `applied < events`
 - `adapter`：没有创建 GPU 设备时为 `null`（无头模式且没有 `--screenshot`）
@@ -270,7 +272,7 @@ OS 按键事件 --(loom_platform 翻译)--> Key --(InputCollector 按 tick 采�
 - `loom_core` 自己定义的枚举，变体名用 W3C `KeyboardEvent.code` 的名字（`KeyW`、`Digit1`、`ArrowUp`、`ShiftLeft`……），和 winit 的 `KeyCode` 同名。按的是**物理位置**，不受键盘布局影响。
 - 目前的范围：`KeyA`–`KeyZ`、`Digit0`–`Digit9`、四个方向键、`Space`、`Enter`、`Tab`、`Backspace`、左右 `Shift`/`Control`/`Alt`，以及 E4.3 为 `rogue` 加的小键盘 `Numpad1`–`Numpad9` 和 `Period`（句号键）。其他按键平台层直接忽略。
 - 小键盘按的也是物理位置：NumLock 关着时，Windows 把小键盘 8 当成「上」，但它的扫描码和方向键不同，winit 应当仍报 `Numpad8`（E4.3 要实测）。
-- **`Escape` 不是 `Key`**：它保留给引擎用来退出，不能绑定。
+- **`Escape` 不是 `Key`**：它保留给引擎用来退出，不能绑定。`F3` 也不是 `Key`，保留给引擎开关调试绘制（E5.2 起，第 16 节）。
 - 鼠标的移动量作为轴的来源，见下文「模拟量（轴）」。手柄以后再加。
 - **鼠标按键**（G2.3 起）：`MouseLeft`、`MouseRight`、`MouseMiddle` 也是 `Key` 的变体，和键盘键一样写在键位表的 `keys` 里，也按同样的规则采样（按住、上次采样后按下过、失焦释放）。W3C 没有给鼠标按键起 `code` 名，这三个名字是 loom 自己定的。平台层把 winit 的 `WindowEvent::MouseInput` 翻译过来，其他鼠标按键忽略。抓不抓鼠标、`--no-capture` 都不影响按键；没抓鼠标时，点击窗口让它获得焦点的那一下也会算一次按下。
 
@@ -1435,6 +1437,27 @@ player_hit(s):
   - 命中：`hit` → 被打断的 `action_end`（`interrupted`）→ `lock`（`target_died` 或 `died`）。
 - 发事件不改变任何状态，状态导出和 E5.1 之前逐位相同。
 
+### 调试绘制（E5.2 起）
+
+引擎的部分见第 16 节。souls 的类别，按这个顺序：`hurtboxes`、`swings`、`colliders`、`lock`（用户决定四类都要，2026-09-27）。颜色是 `souls` 的常量，线性 RGB。画的都是**判定实际用的形状**：比如假人倒下时网格歪了，受击圆柱仍然竖直地画在节点位置上，因为命中检查用的就是它。
+
+- **`hurtboxes`**：每个受击判定（先序），然后是角色。
+  - 形状：`cylinder`。受击判定用节点位置和 `hurt_radius`、`hurt_height`；角色用它的位置和胶囊体的 `radius`、`height`。
+  - 颜色，按这个顺序取第一条：
+    - 死了：灰 `(0.4, 0.4, 0.4)`；
+    - 硬直：黄 `(1.0, 0.9, 0.1)`；
+    - 角色无敌（`invulnerable`）：青 `(0.1, 0.9, 1.0)`；
+    - 其他（包括不是受伤方的受击判定）：绿 `(0.2, 1.0, 0.2)`。
+- **`swings`**：角色的攻击，然后是每个挥砍者（先序）。只画前摇和出招中的，后摇和不在攻击中的不画。
+  - 扇形用攻击者的位置、朝向、`reach`、`arc`，在 `y + low` 和 `y + high` 两个高度各画一遍。角色的高度带是 `swing_low`、`swing_high`，挥砍者用自己的。
+  - 前摇：整个扇形，橙 `(1.0, 0.55, 0.1)`。角色前摇里还在转向，扇形跟着当前的 `facing`。
+  - 出招：整个扇形暗红 `(0.5, 0.1, 0.1)`，再用亮红 `(1.0, 0.15, 0.15)` 画这个 tick 扫的那一段 `[lo, hi]`（和命中检查同一个公式）。
+- **`colliders`**：每个碰撞体（先序），按游戏加载时算好的 `BoxCollider` 画 `wire_box`：XZ 上的中心和两个轴、半长，高度范围 `y_min`..`y_max`。浅灰 `(0.8, 0.8, 0.8)`。
+- **`lock`**：
+  - 每个锁定目标（先序）的锁定点画 `cross`，大小 0.3：活着的白 `(0.9, 0.9, 0.9)`，死了的灰 `(0.4, 0.4, 0.4)`。
+  - 当前锁定的目标：再画一个大小 0.5 的黄 `(1.0, 0.9, 0.1)` `cross`，加一条从相机 pivot（角色位置加 `pivot_height`）到锁定点的黄线。
+  - 角色脚下画 `lock_range` 的圆，蓝 `(0.3, 0.5, 1.0)`；锁定中再画 `lock_break_range` 的圆，暗蓝 `(0.2, 0.3, 0.6)`。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
@@ -1613,7 +1636,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 | `input` | `{"actions":{"名字":true/false},"axes":{"名字":数值}}`，两项都可以省略 | 设置**保持的输入**（电平语义，和输入脚本一样），从下一个 tick 起生效，直到再次修改。没提到的动作和轴不变。轴的值按 `canonical_axis_value` 规范化（`-0.0` 变成 `0.0`）。result 是修改后的完整输入：`{"actions":[按下的动作，排序],"axes":{非零的轴}}` |
 | `step` | `{"ticks":N}`，N ≥ 1，省略为 1 | 用保持的输入跑 N 个 tick。`{"tick":跑完之后的tick,"events":[...]}`。`events`（E5.1 起）是这 N 个 tick 里发出的全部事件，按先后排列，每个事件在 `type` 前面多一个 `tick` 字段：`{"tick":57,"type":"hit",…}` |
 | `state` | 无 | 状态导出的内容（第 6 节），作为 JSON 值，不是字符串 |
-| `screenshot` | `{"path":"...","size":[W,H]}`，`size` 可以省略 | 把**当前状态**渲染成 PNG（自动创建父目录）。`{"path":...,"size":[W,H],"adapter":{...},"render_ms":毫秒}` |
+| `screenshot` | `{"path":"...","size":[W,H],"debug_draw":…}`，`size`、`debug_draw` 可以省略 | 把**当前状态**渲染成 PNG（自动创建父目录）。`debug_draw`（E5.2 起）是 `true`（全部类别）、类别名的数组或 `false`，省略就是 `false`，规则同 `--debug-draw`（第 16 节）；类别名写错回复 -32602。`{"path":...,"size":[W,H],"adapter":{...},"render_ms":毫秒}` |
 | `record` | `{"path":"..."}` | 把从上次 `load_scene`/`reset`（或启动）以来的输入写成输入脚本，规范形式和 `--record` 相同。`{"path":...,"ticks":当前tick}` |
 | `trace` | `{"path":"..."}` 开始，`{}` 停止（E5.1 起） | 开始：把轨迹（第 6 节「轨迹」）写进 `path`（自动创建父目录，已有的文件清空），立刻写一行当前 tick，这一行的 `events` 是当前 tick 发出的事件（tick 0 是 `[]`）；之后每跑一个 tick 写一行。已经在写别的文件时，先停掉那个。result `{"path":…,"tick":当前tick}`。停止：写完并关闭，result `{"path":停掉的路径或null,"lines":写了几行}`。`load_scene`、`reset` 时文件清空，从新的 tick 0 重新写；`quit` 和适配程序退出时写完关闭 |
 | `quit` | 无 | `{}`，然后退出 |
@@ -1648,6 +1671,7 @@ E3.1 只做**无头**：`serve` 不创建窗口，时间只在收到 `step` 时�
 - **找 `loom`**：默认用 `loom-mcp` 所在目录里的 `loom.exe`，`--loom <PATH>` 可以覆盖。
 - **工具**：每个 serve 方法对应一个 MCP 工具，名字和方法相同。
   - `describe`、`load_scene`、`reset`、`input`、`step`、`state`、`screenshot`、`record`，E5.1 起加 `trace`（参数 `path` 可以省略，省略就是停止）。
+  - E5.2 起 `screenshot` 多一个可选参数 `debug_draw`，同 serve。
   - **没有 `quit`**：子进程的生命周期由适配程序管理。
   - 工具的参数和 serve 方法的 params 一一对应；参数的 JSON Schema 由 rmcp 按参数结构体生成。
 - **结果**：
@@ -1872,3 +1896,40 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 - `damage`：攻击力（整数，玩家是 `player_attack`，僵尸是它的 `attack`）；`hp`：之后剩下的血量（整数）。
 - `result`：`"hit"` 或 `"death"`（打到 0）。
 - 一条 `hit` 对应一条或两条消息（`You kill`、`bites you` 加 `You die`）。其余情况（撞墙、走路、僵尸走一步）不发事件，状态里看得出来。
+
+## 16. 调试绘制（E5.2 起）
+
+用户决定（2026-09-27）：
+- **线框，永远画在最上层**：不做深度测试，隔着墙、木桩也看得见。
+- **按类别选**：`--debug-draw` 不带值是全开，带值只开列出的类别；serve 的 `screenshot` 有同样的参数。类别名由游戏定义，写错报错。
+- **窗口里按 F3 开关**：只影响画面，不进输入录制，不影响模拟。
+- souls 画受击判定、攻击扇形、碰撞体、锁定（第 11 节「调试绘制」）。
+
+**分工**：引擎只提供画线段的能力，画什么由游戏决定。
+- `loom_core::debug`：
+  - `DebugLine { a: Vec3, b: Vec3, color: Vec3 }`：世界坐标的一条线段，线性 RGB，不透明。
+  - `DebugDraw`：收集线段的缓冲区。除了 `line`，还有几个拆成线段的形状：
+    - `circle(center, radius, color)`：水平圆（XZ 平面），32 段；
+    - `cylinder(base, radius, height, color)`：底圆、顶圆，加 4 条竖线（角度 0°、90°、180°、270°）；
+    - `sector(center, facing, radius, lo, hi, color)`：水平扇形，角度的约定和第 11 节的 `bearing` 相同，外弧按每段不超过 360°/32 分段；
+    - `wire_box(center, half, rotation, color)`：12 条棱；
+    - `cross(point, size, color)`：沿 X、Y、Z 的三条线段。
+  - 画形状用的三角函数用 libm，和模拟一样（这里只影响画面，不影响状态，用 libm 只是为了游戏 crate 的 lint 规则统一）。
+- 游戏：
+  - `debug_categories()`：这个游戏的类别名，固定顺序；
+  - `debug_draw(&self, categories, &mut DebugDraw)`：只读，按当前状态画开着的类别。**不许改变任何状态**。
+- `loom_render`：`Frame` 多一个 `lines: &[LineDraw]`，在网格和精灵之后、同一个离屏目标上画，线段拓扑，1 像素宽，关掉深度测试。截图、窗口都一样。`loom_engine` 把 `DebugLine` 转成 `LineDraw`。
+- 画的是**当前状态**，和截图、状态导出取的同一时刻。
+
+**开关**：
+- `--debug-draw` 不带值：游戏的全部类别。带值：逗号分隔的类别名，不能为空、不能重复，要在游戏的类别里；否则按参数错误报出（退出码 2）：`unknown debug draw category "<名字>": <游戏> has <类别列表>`、`debug draw category "<名字>" is given twice`。
+- `rogue` 目前没有类别：`--debug-draw` 不带值时什么都不画；带值时都是未知类别。
+- `loom view` 不跑游戏，没有 `--debug-draw`。
+- **F3**（只在窗口模式）：在「命令行给的类别」（没给 `--debug-draw` 时是全部类别）和「全关」之间切换。启动时：给了 `--debug-draw` 是开，没给是关。F3 是引擎保留的键，和 Esc 一样不能绑定，不进录制，热重载后保持当前的开关。
+- 窗口模式退出时的 `--screenshot` 按退出那一刻的开关画。
+
+**保证**：
+- 调试绘制不改变模拟：开不开，状态导出、轨迹、录制都逐字节相同。
+- 没开调试绘制时，截图和 E5.2 之前逐字节相同（`lines` 为空时不发绘制命令）。
+- 开着的截图同样确定：同一个状态、同一个后端，PNG 逐字节相同。不同后端之间可能差几个像素，和网格一样（第 3、4 节），smoke 不做跨后端比较。
+
