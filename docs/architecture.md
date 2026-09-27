@@ -1946,6 +1946,72 @@ if input.just_pressed("interact"):
 - 世界重置不重置角色的 `hits`、受击判定的 `hits`、`last_hit`。
 - Boss 追着的时候基本坐不了篝火：要离开它的仇恨范围（15 米），Boss 走得不比角色慢多少，冲刺又有耐力限制。这和黑魂「附近有敌人不能休息」一致，Boss 场景的篝火主要用于开打前和死后（G5.1 审查时确认）。
 
+### 原素瓶（G5.2 起）
+
+用户决定（2026-09-27）：
+- **3 瓶，每瓶回满血的 40%**。坐篝火补满，死后复活也补满。
+- **喝的时候能慢慢走**：不能翻滚、攻击、冲刺，可以边退边喝。
+- **动作中段回血**：按下后先举瓶一段时间，之后才回血；举瓶期间被打出硬直就打断，瓶子已经用掉，血没回。
+
+**参数**：角色 props，可以省略，接在 G3.4 的 5 个之后（角色 props 变成 55 个）：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `flask_charges` | 3 | 整数 ≥ 0。满的时候有几瓶 |
+| `flask_heal` | 0.4 | 0 < v ≤ 1。每瓶回满血的多少 |
+| `flask_ticks` | 60 | 整数 ≥ 1。喝一瓶的动作一共多少 tick |
+| `flask_heal_tick` | 30 | 整数 ≥ 1，≤ `flask_ticks`。第几个 tick 回血 |
+| `flask_walk_speed` | 1 | 米/秒，> 0。喝的时候走路的速度；每 tick 的步长必须小于胶囊体半径 |
+
+- 新的报错：
+  - `the character "<名字>": needs flask_heal_tick <= flask_ticks`；
+  - 步长用已有的文案，`<action>` 写 `drink`；
+  - `flask_heal` 的取值用 `positive_at_most`（上限 1）的文案。
+- 检查顺序：取值检查照表的顺序；`flask_heal_tick <= flask_ticks` 接在 `swing_low < swing_high` 后面；步长接在已有的步长检查后面。
+
+**键位**：新动作 `drink` 绑 `KeyR`，按下的那个 tick 触发（`just_pressed`）。
+
+**喝**：`drink` 是和攻击、翻滚一样的动作，`action` 多一个取值 `"drink"`。
+- **优先级**：`next_action()` 里，同一个 tick 按了几个键时，顺序是重攻击 > 轻攻击 > 喝 > 翻滚。
+- **能预输入**：攻击的出招、后摇里按 R，记成预输入 `"drink"`；`Buffered` 多一个取值。
+- **不要耐力**：`next_action()` 最后的「耐力为 0 就丢掉」对 `drink` 不适用。
+- **没瓶了**：`flask == 0` 时按 R，丢掉，`input_dropped` 的 `reason` 是新的 `"empty"`。
+- **开始**（`action_tick = 1`）：`flask -= 1`，发 `action_start`。冲刺中按 R：冲刺停下，开始喝。
+- **每个 tick**（`action == drink`）：
+  - `action_tick` 从 1 数到 `flask_ticks`；
+  - 移动：和普通跑一样用 `dir`（相对相机），但步长是 `flask_walk_speed / 60`，带碰撞；
+  - 转身：同普通跑的第 5 步（锁定时面朝目标）；
+  - `action_tick == flask_heal_tick` 时回血：`hp = min(hp + flask_heal * hp_max, hp_max)`，发 `heal` 事件；
+  - 最后一个 tick 结束（`action = idle`，发 `action_end`，`reason` 是 `finished`）。
+- **喝的时候**：
+  - 攻击、翻滚、E 键丢掉，`reason` 是新的 `"drinking"`；
+  - 锁定键照常能用；
+  - `busy` 为 false，耐力照常恢复；
+  - `invulnerable` 为 false。
+- **打断**：喝的时候被打出硬直或打死，照 G3.4 打断（`action_end` 的 `reason` 是 `interrupted`）。已经过了回血的 tick，血已经回了；还没到，瓶子白用。
+
+**补满**：
+- 坐下篝火时（「篝火」的坐下效果里，第 2 步之后），`flask = flask_charges`；
+- 角色复活时同样补满。
+
+**状态导出**：`player` 的最后追加 `flask`：剩下几瓶，加载时等于 `flask_charges`。
+
+**事件**：
+- 新增 `heal`：字段 `amount`（实际回了多少，满血时是 0）、`hp`（回完之后的血量）。
+- `action_start`、`action_end` 的 `action` 多了 `"drink"`。
+- `input_dropped` 的 `input` 多了 `"drink"`，`reason` 多了 `"empty"`、`"drinking"`。
+  - `drink` 键的丢弃原因用已有的判定顺序（`dead`、`staggered`、`rolling`、`startup`、`outranked`），然后是 `drinking`、`empty`。
+  - `sitting`（G5.1）仍然排在最前面。
+
+**表现**：
+- 角色如果有一个名叫 `flask` 的**直接子节点**，它就是瓶子，必须带 `mesh`（报错 `the character "<名字>": its flask needs a mesh`）。
+- 喝的时候显示，其余时候隐藏（`Scene::set_visible`）。
+- 演示场景和 Boss 场景的角色各加一个：`(name: "flask", position: (0.3, 1.2, -0.3), scale: (0.12, 0.25, 0.12), mesh: Cube, color: (0.9, 0.7, 0.2))`。
+
+**已知限制**（G5.2）：
+- 喝没有动画，只有瓶子显示出来。
+- 画面上看不到剩下几瓶（没有 HUD），看状态导出。
+
 ### 碰撞（G1.3 起）
 
 用户决定（2026-09-27）：碰撞体用显式组件 `collider: Box` 指定；斜着撞墙时只保留沿墙的分量（正面撞墙就停住）。
