@@ -551,6 +551,7 @@ wrap(a) = a - TAU * floor((a + PI) / TAU)     // 包到 [-π, π)，floor 是精
 - `game.lock`（G3.1 起，在 `camera` 后面）见下文「锁定」
 - `game.hurtboxes`（G3.2 起，在 `lock` 后面）见下文「命中判定」；每项的 `health`（G3.3 起）见下文「血量、韧性、死亡」
 - G3.3 起第 0 步和第 1 步之间多一个第 0b 步（受伤方的计时），见下文「血量、韧性、死亡」
+- G3.4 起 `player` 最后多 `hits`、`last_hit`、`health`，`game` 在 `hurtboxes` 后面多 `swingers`；第 5b 步和第 6 步之间多一个第 5c 步（挥砍者），见下文「角色受击和木桩」
 
 ### 耐力、翻滚、冲刺（G2.1 起）
 
@@ -662,7 +663,7 @@ invulnerable = (action == roll || action == backstep) && invuln_from_of(action) 
 "player": { "position": [x, y, z], "facing": f, "stamina": 100.0, "stamina_wait": 0, "action": "idle", "action_tick": 0, "invulnerable": false }
 ```
 
-- 无敌帧现在只是状态，还没有东西会打到角色。G3.2 的命中判定只有角色打别人，角色自己没有受击判定（G4 有了会出招的敌人再加）。
+- 无敌帧在 G3.2、G3.3 只是状态，没有东西会打到角色。G3.4 起木桩会打角色，无敌帧真正生效，见下文「角色受击和木桩」。
 
 ### 攻击（G2.3 起）
 
@@ -774,7 +775,7 @@ attack_tick(a):                                           // S、A、R 是 a 的
 **锁定目标**：带 prop `lock_height` 的节点（第 10 节的 `props`）。锁定点在节点位置上方 `lock_height` 米处，相机对准的是这个点。
 - 目标必须是**根节点**，并且不能是相机节点。每个 tick 从场景读它的位置（G3.1 的目标不会动，G4 的敌人会动）。
 - 目标的先后顺序是场景的先序。「相等时取先出现的」都按这个顺序。
-- 角色节点之外的节点，props 只认 `lock_height`（G3.2 起还有 `hurt_radius`、`hurt_height`，见下文「命中判定」；G3.3 起还有 `hp` 等 5 个，见「血量、韧性、死亡」），写了别的名字就报错（防拼写错误）。
+- 角色节点之外的节点，props 只认 `lock_height`（G3.2 起还有 `hurt_radius`、`hurt_height`，见下文「命中判定」；G3.3 起还有 `hp` 等 5 个，见「血量、韧性、死亡」；G3.4 起还有 `swing_damage` 等 9 个，见「角色受击和木桩」），写了别的名字就报错（防拼写错误）。
 - 演示场景里放了三个假人 `dummy_a`、`dummy_b`、`dummy_c`：
   - 根节点带 `lock_height`；
   - 子节点 `body` 是胶囊体网格，子节点 `block` 是挡路的 `collider: Box`（角色不能穿过假人）。
@@ -1021,7 +1022,7 @@ ray(θ):                                                        // 从 p 出发�
 - **不检查遮挡**（用户决定）：隔着柱子、墙也打得到。
 - 每一刀都从右往左扫，连段不左右交替。
 - 受击判定是平顶的圆柱，角色的挥砍高度范围是一个水平的带子。
-- 只有角色打别人：角色没有受击判定，假人不会还手（G4）。
+- 只有角色打别人：角色没有受击判定，假人不会还手（G3.4 起有会挥砍的木桩，见下文「角色受击和木桩」）。
 - 命中只计数和闪白：没有血量、硬直、击退、顿帧（G3.3 加了血量、硬直、死亡）。
 
 ### 血量、韧性、死亡（G3.3 起）
@@ -1068,7 +1069,7 @@ ray(θ):                                                        // 从 p 出发�
   - `the node "<路径>": prop "<p>" needs hp`（写了后 4 个之一却没写 `hp`）
   - `the node "<路径>": hp needs hurt_radius and hurt_height`
   - `the node "<路径>": its hp_bar needs a mesh`
-  - `unknown prop` 的 `known:` 名单改成 `lock_height, hurt_radius, hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks`。
+  - `unknown prop` 的 `known:` 名单改成 `lock_height, hurt_radius, hurt_height, hp, poise, stagger_ticks, poise_reset_ticks, revive_ticks`（G3.4 起再接上 9 个挥砍参数）。
   - 角色的 4 个新 prop 用已有的文案：`must be greater than 0`（两个 `_damage`）、`must be at least 0`（两个 `_impact`）。
 - 检查顺序：
   - 角色的 4 个新参数接在 G3.2 参数的后面（同一张表）。
@@ -1165,10 +1166,180 @@ if hp == 0.0 {
 - **尸体仍然挡路**：碰撞体在加载时算好，假人倒下后，它原来站的地方仍然挡路。
 - 姿势只是绕节点原点转，没有动画，状态一变就立刻到位。
 - 血条是 3D 空间里的方块，从侧面看会变窄，从正后方看左右是反的。
-- 硬直和死亡对假人只是姿势：假人本来就不会动。「硬直中不能行动」要等 G3.4 的木桩和角色。
+- 硬直和死亡对假人只是姿势：假人本来就不会动。「硬直中不能行动」见 G3.4 的「角色受击和木桩」。
 - `revive_ticks` 小于闪白时长（8）时，复活后可能还白几个 tick（颜色的优先级是变暗、闪白、原色）。演示场景是 180，碰不到；不值得为它加规则（G3.3 审查时定）。
 - `hp_bar` 下面如果还有带 mesh 的子节点，它们照常闪白、变暗；只有 `hp_bar` 节点本身不参与（G3.3 实现时定）。
 - 没有击退、顿帧。
+
+### 角色受击和木桩（G3.4 起）
+
+用户决定（2026-09-27）：
+- **角色死了回出生点复活**：倒地躺一段时间，然后在场景开局的位置满血、满耐力复活，解除锁定。假人和木桩不重置。以后 G5 做篝火，把复活点换成篝火就行。
+- **木桩出招有预警**：木桩有一根「手臂」子节点，前摇时转到扇形的起点并变色；出招时手臂沿扇形从右往左扫，和判定一一对应。
+- **木桩能打，也能打死**：和假人一样有血量、韧性，硬直和死亡时停止挥砍，恢复后从头开始计节奏。
+- **角色挨打的表现和假人一样**：闪白，硬直时歪一下，死了倒地变暗。血量只在状态导出里看，不做血条。
+
+规划者决定：
+- 会挥砍的节点叫**挥砍者**（swinger）：带 prop `swing_damage` 的根节点。它只打角色，不打假人，也不打别的挥砍者。
+- 角色的受击判定就是它的胶囊体：竖直圆柱，半径和高都取胶囊体的 `radius`、`height`，不另设 prop。
+- 角色的血量、韧性沿用受伤方的规则（上一小节），参数写在角色 props 里。
+
+**角色的参数**：角色节点的 props，可以省略，规则和「耐力、翻滚、冲刺」相同，接在 G3.3 的 4 个后面。
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `hp` | 100 | > 0。满血的血量 |
+| `poise` | 0 | ≥ 0。0 表示冲击值 > 0 的每一下都硬直 |
+| `stagger_ticks` | 30 | 整数 ≥ 1 |
+| `poise_reset_ticks` | 60 | 整数 ≥ 1 |
+| `respawn_ticks` | 120 | 整数 ≥ 1。死后躺多少 tick，回出生点复活 |
+
+- 报错用已有的文案（`must be greater than 0`、`must be at least 0`、`must be a whole number of at least 1`）。
+- 角色 props 和节点 props 是两张表，名字相同（`hp`、`poise` 等）不冲突。
+
+**挥砍者**：带 prop `swing_damage` 的节点。节点 props 在 G3.3 的 8 个之后再多 9 个：
+
+| prop | 默认 | 说明 |
+|---|---|---|
+| `swing_damage` | 无 | > 0。每次命中扣角色的血。写了它，这个节点才会挥砍 |
+| `swing_impact` | 20 | ≥ 0。冲击值 |
+| `swing_startup_ticks` | 40 | 整数 ≥ 1。前摇 |
+| `swing_active_ticks` | 6 | 整数 ≥ 1。出招 |
+| `swing_recovery_ticks` | 74 | 整数 ≥ 1。后摇。一轮 `period = startup + active + recovery` 个 tick（加法饱和，不会溢出） |
+| `swing_reach` | 2.2 | 米，> 0。扇形半径，从节点位置量起 |
+| `swing_arc` | 150 | 度，0 < v ≤ 360。以挥砍者的朝向为中线左右对称 |
+| `swing_low` | 0.3 | 米，≥ 0。挥砍的高度范围，相对节点位置的 y |
+| `swing_high` | 1.6 | 米，> `swing_low` |
+
+- 后 8 个必须和 `swing_damage` 一起写，可以省略（用默认值）。
+- 挥砍者必须是**根节点**，不能是相机节点。
+- 挥砍者**不必**是受击判定或受伤方：没有 `hp` 的挥砍者永远按节奏挥砍。演示场景的木桩三样都有（再加 `lock_height`）。
+- **朝向**：加载时由节点的旋转算出，公式和角色的初始 `facing` 相同（包括把 `-0.0` 规范成 `0.0`）。挥砍者不转身。
+- **手臂**：挥砍者如果有一个名叫 `arm` 的**直接子节点**，它就是手臂，必须带 `mesh`。
+  - 加载时记下它的局部 `position`、`rotation`（`p0`、`r0`）和颜色。场景里写的姿势就是「手臂在中线上」的样子（角度 0），演示场景把它写成从节点伸向 -Z 的细长方块。
+  - 可以没有手臂。不是挥砍者的节点，名叫 `arm` 的子节点没有特殊含义。
+- 换算：角度转成弧度，`slice = arc / active_ticks`。和前面一样，props 是 f64，先 `as f32` 再算。
+- 新的报错：
+  - `the node "<路径>": prop "<p>" must be greater than 0 and at most 360, got v`（`swing_arc`）
+  - `the node "<路径>": prop "<p>" needs swing_damage`（写了后 8 个之一却没写 `swing_damage`）
+  - `the node "<路径>": needs swing_low < swing_high`（没写的一方按默认值算）
+  - `the swinger "<路径>" must be a root node, and not the camera`
+  - `the node "<路径>": its arm needs a mesh`
+  - `unknown prop` 的 `known:` 名单在原有 8 个后面接上这 9 个，按上表顺序。
+  - `swing_damage`、`swing_reach` 用 `must be greater than 0`，`swing_impact`、`swing_low` 用 `must be at least 0`，三个 `_ticks` 用 `must be a whole number of at least 1`，都是节点的已有文案。`swing_high` 只查 > 0，和 `swing_low` 的大小关系由上面那条查。
+- 检查顺序：每个节点依次查：
+  1. 不认识的名字；
+  2. 17 个 prop 的取值，按名单顺序；
+  3. 两个 hurt prop 是否成对；
+  4. `hp` 有没有受击判定；
+  5. `hp` 的后 4 个有没有 `hp`；
+  6. `swing_damage` 的后 8 个有没有 `swing_damage`，按名单顺序报第一个；
+  7. `swing_low < swing_high`（只查挥砍者）；
+  8. 根节点：同时是几种时，按锁定目标、受击判定、挥砍者的顺序用第一个的报错；
+  9. 血条有没有 mesh；
+  10. 手臂有没有 mesh。
+
+**状态**：
+- `player` 的最后追加三个字段，含义和 `hurtboxes` 的同名字段相同：
+
+```json
+"player": { …, "buffered": null, "hits": 1,
+  "last_hit": { "tick": 145, "by": "stake" },
+  "health": { "hp": 70.0, "state": "stagger", "state_ticks": 30, "impact": 0.0, "impact_wait": 60 } }
+```
+
+  - `last_hit.by`：打中角色的挥砍者的路径。
+  - `health` 永远有值（角色的参数都有默认值），结构和受伤方的相同。`state_ticks` 在死亡时是离复活还剩的 tick 数。
+- `game.swingers`：每个挥砍者一项，按先序，放在 `hurtboxes` 后面：
+
+```json
+"swingers": [ { "node": "stake", "swing_tick": 43, "phase": "active" } ]
+```
+
+  - `swing_tick`：这一轮的第几个 tick，1 到 `period`；硬直或死亡时是 0。
+  - `phase`：`"startup"`、`"active"`、`"recovery"`，`swing_tick` 是 0 时是 `null`。
+  - 加载时 `swing_tick` 是 0，所以第 1 个 tick 就进入前摇。
+- 不进状态导出的内部状态：挥砍者的 `struck`（这一轮已经打中过角色），角色的 `fall`（同受伤方）、出生点（加载时角色的 `position`、`facing`）。
+
+**每个 tick**：
+- **第 0b 步**：受伤方计时之后，角色也按同样的伪代码计时。角色从 `dead` 变回 `ok` 的那个 tick 就是**复活**：
+
+```text
+position = 出生点的 position; facing = 出生点的 facing
+stamina = stamina_max; stamina_wait = 0
+yaw = 场景里的初始 yaw; pitch = 场景里的初始 pitch        // 同「初始状态」；cam_distance 不动，第 6 步照常处理
+flick = 0.0; switch_wait = 0
+```
+
+  复活的那个 tick 已经是满血的 `ok`，后面的步骤照常执行（能动、能出招）。
+- **第 1a 步**：角色死着的时候，锁定键不起作用（`lock` 在死的那一下已经清空，见下）。`look_x`、`look_y` 照常转相机。
+- **第 4 步**：角色的 `state` 不是 `ok`（硬直或死亡）时，整个第 4、5 步都不做：不移动、不转身、不出招，按键（包括翻滚的点按）丢掉，不预输入。`busy` 为 false，耐力照常恢复。第 0 步的 `hold` 照常计。
+- **第 5c 步（新增）**，在第 5b 步（耐力恢复、算 `invulnerable`）之后、第 6 步之前。对每个挥砍者（先序）：
+
+```text
+if 挥砍者是受伤方 && 它的 state != ok {                  // 硬直或死亡：停下，恢复后从头开始
+    swing_tick = 0
+    continue
+}
+swing_tick = swing_tick % period + 1
+if swing_tick == 1 { struck = false }
+S = startup; A = active
+if S < swing_tick && swing_tick <= S + A {
+    k    = swing_tick - S                                    // 出招的第几个 tick，1..A
+    half = arc * 0.5
+    lo   = -half + (k - 1) as f32 * slice
+    hi   = -half + k as f32 * slice
+    if !struck && 角色的 state != dead && !player.invulnerable
+       && swept(挥砍者的 position, 挥砍者的 facing, reach, lo, hi, 角色的圆柱) {   // swept 同「命中判定」，高度用挥砍者的 swing_low、swing_high
+        struck = true
+        player_hit(挥砍者)
+    }
+}
+
+player_hit(s):
+    hits += 1; last_hit = { tick, by: s 的路径 }
+    fall = hdist(s, position) > 0.0 ? bearing(s, position) : 0.0     // 远离挥砍者；重合时取 0，同受伤方
+    died = 按受伤方的「命中」伪代码扣血、加冲击值（damage、impact 取 s 的）
+    if 角色的 state != ok {                                  // 被打出硬直，或者死了：打断当前动作
+        action = idle; action_tick = 0; attack_phase = null; combo = 0; buffered = null
+        invulnerable = false
+        「上一个动作」= (idle, 0)                             // 硬直后不接连段
+    }
+    if died { lock = null }
+```
+
+- 第 5c 步用的是本 tick 第 4 步之后的角色位置和第 5b 步算出的 `invulnerable`，所以状态导出里 `invulnerable` 为 true 的 tick，就是打不中的 tick。
+- **无敌帧**：翻滚、后撤步的无敌帧从这里起真正生效。无敌时直接跳过，不算命中、不记 `struck`：这一轮后面的 tick 扫到角色时，照样能打中。
+- 硬直中照常能被打中：累计冲击值再次超过韧性时，硬直重新计时（同受伤方）。
+- **同一个 tick 互砍**：角色的攻击在第 4 步，挥砍者在第 5c 步。角色这一下把挥砍者打出硬直或打死时，挥砍者这个 tick 就停下，不再挥砍。
+- 挥砍者被打出硬直或打死，`swing_tick` 归零，正在进行的这一轮作废；恢复成 `ok` 的那个 tick 从 1 开始新的一轮。
+- 只用加减乘除、`sqrt`、`abs`、`min`、`max`、`clamp`、取余和 libm 的 `sinf`、`cosf`、`atan2f`，符合第 4 节。
+
+**表现**：
+- **角色**，在第 6 步写角色节点时：
+  - 姿势：`ok` 时 `rotation = Quat::from_rotation_y(facing)`，和原来逐位相同；硬直、死亡时 `Quat::from_rotation_y(fall) * Quat::from_rotation_x(-tilt) * Quat::from_rotation_y(-fall) * Quat::from_rotation_y(facing)`，`tilt` 同受伤方（20°、90°）。
+  - 颜色：角色子树里每个带 mesh 的节点（胶囊体和面罩），规则同受伤方：死了原色 × 0.4；`tick - last_hit.tick < 8` 时白色；否则原色。
+- **手臂**，在第 6 步写完受击判定的表现之后。角度 `θ`：
+  - 前摇：`θ = -half`（扇形右边的起点）；
+  - 出招的第 k 个 tick：`θ = hi`，也就是这个 tick 扫到的位置；
+  - 后摇、`swing_tick` 为 0：回到中线，**直接设成 `p0`、`r0`**（不走下面的式子，保证逐位等于场景里的值）。
+  - 不在中线时：`position = Quat::from_rotation_y(θ) * p0`，`rotation = Quat::from_rotation_y(θ) * r0`，也就是绕挥砍者的局部 Y 轴转 `θ`（正数往左）。
+  - 颜色：挥砍者是受击判定、并且正在变暗或闪白时，手臂跟着变暗或闪白（它在子树里）；否则前摇时是**预警色** `(1.0, 0.55, 0.1)`；否则原色。
+- 预警色是 `souls` 的常量，和闪白一样。
+
+**演示场景**：加一个木桩 `stake`，位置 `(6, 0, 2)`，不旋转（朝 -Z）：
+- props：`lock_height` 1.0，`hurt_radius` 0.3，`hurt_height` 1.6，`hp` 100，`poise` 25，挥砍的 9 个都写出来（`swing_damage` 30，其余等于默认值）；
+- 子节点：木色的 `post`（`Cube`，位置 `(0, 0.8, 0)`、缩放 `(0.3, 1.6, 0.3)`）、挡路的 `block`（`collider: Box`，同样大小）、`arm`（`Cube`，位置 `(0, 1.1, -1.2)`、缩放 `(0.1, 0.1, 2.0)`，从中心外 0.2 米伸到 2.2 米）、`hp_bar`（同假人，高度 1.9）。
+- 角色的 props 写出 5 个新参数，值等于默认值。
+- 角色 100 血，木桩每下 30：第 4 下打死。木桩一轮 120 tick（2 秒），前摇 40 tick。
+- 木桩在开局相机的视野外，内置场景 `--frames 60` 的截图预期不变。
+
+**已知限制**（G3.4）：
+- 木桩不追人、不转身，只打角色。
+- 手臂没有动画：状态一变就跳到位，后摇开始时从扇形左端直接回到中线。
+- 角色没有血条，也没有耐力条，要看就看状态导出（没有 HUD）。
+- 复活不重置世界：假人、木桩的血量和节奏都照旧。
+- 角色硬直时没有击退，站在原地。
 
 ### 碰撞（G1.3 起）
 
