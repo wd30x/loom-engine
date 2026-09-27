@@ -436,6 +436,7 @@ E4.3 起多一个顶层字段 `game`：字符串，用哪个游戏跑这个场�
 | `scale` | `(x, y, z)` | `(1, 1, 1)` | 每个分量必须 > 0 |
 | `mesh` | `Cube` / `Plane` / `Sphere` / `Capsule(radius, height)` | 无 | 前三种都是单位大小：`Cube` 边长 1、中心在原点；`Plane` 是 XZ 平面上 1×1、法线 +Y；`Sphere` 直径 1。大小用 `scale` 调。`Capsule` 带参数（非均匀缩放会把半球压扁）：`height` 是含两端半球的总高，**原点在底部**（占 y ∈ [0, height]），方便角色站在地面上 |
 | `model` | 字符串 | 无 | glTF 模型 `.glb` 的路径（E7.1 起，第 19 节）。不能和 `mesh`、`sprite`、`tilemap` 同时写 |
+| `animation` | `(clips, play)` | 无 | 模型的动画片段（E7.2 起，第 19 节「骨骼和动画片段」）：`clips` 是片段名到 RON 片段文件的表，`play` 是一开始播的片段。只能和 `model` 一起写 |
 | `color` | `(r, g, b)` 线性 | `(0.8, 0.8, 0.8)`；有 `model` 时是 `(1, 1, 1)` | 只有带 `mesh` 或 `model` 时才有意义；分量在 0 到 1 之间。对模型是染色（乘在顶点颜色上） |
 | `camera` | `(fov_y, near, far)` 或 `(ortho: (height), near, far)` | 无 | 相机看向自己的 -Z。`fov_y` 是透视相机的垂直视场角（度）。`ortho` 是正交相机（E4.2 起），`height` 是画面竖直方向覆盖的世界长度，宽度按画面比例算。`fov_y` 和 `ortho` 必须**恰好写一个** |
 | `sprite` | `(sheet, tag)` 或 `(sheet, tag, alternates)` | 无 | 精灵（E4.2 起，第 14 节）：`sheet` 是 sprite sheet 的 JSON 路径，`tag` 是其中的 tag 名。`alternates`（E4.4 起，可省略）是游戏运行中可以换成的其他 tag，例如 `["corpse"]` |
@@ -502,7 +503,7 @@ rotation = Quat::from_mat3(&Mat3::from_cols(right, up, back))
 运行中编辑（第 13 节）改的是**场景文件的内容**，`save_scene` 把它写回成文本。写出来的文本叫规范格式，规则固定，由 `loom_scene` 负责：
 - `loom_scene` 保留解析出来的文件结构（场景文件的节点描述，不是运行时的节点树），编辑作用在它上面；规范格式就是把它序列化回 RON。
 - 用 ron 的 `PrettyConfig`：缩进 4 个空格，开 `IMPLICIT_SOME`（可选字段写成裸值），不写结构体名。
-- 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`display_name`、`position`、`rotation`、`look_at`、`scale`、`mesh`、`model`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
+- 顶层字段顺序：`version`、`game`、`camera`、`ambient`、`nodes`。节点字段的顺序同上文的节点字段表：`name`、`display_name`、`position`、`rotation`、`look_at`、`scale`、`mesh`、`model`、`animation`、`color`、`camera`、`sprite`、`tilemap`、`light`、`character`、`orbit_camera`、`props`、`collider`、`children`。
 - 没写的可选字段不写；`props`、`children` 为空时不写；`sprite.alternates` 为空时不写。写了的字段原样保留，即使等于默认值（比如 `scale: (1.0, 1.0, 1.0)`）。
 - 旋转保留文件里写的欧拉角（度），不换成四元数；`look_at` 也原样保留。
 - 数字用 ron 的输出（最短的能精确还原的十进制）；`props` 的值是 f64，其余是 f32。`props` 里写成整数的值写出来带小数点，比如 `("hp", 100)` 变成 `("hp", 100.0)`，解析结果相同。
@@ -2744,6 +2745,7 @@ z 移到 best（没有更近的格子就不动），写回 z 节点的位置
 {
   "loom_schema": 1,
   "scene": { JSON Schema },
+  "clip": { JSON Schema },
   "games": {
     "rogue": { "props": {…}, "state_dump": { JSON Schema }, "trace_line": { JSON Schema }, "event": { JSON Schema } },
     "souls": { … }
@@ -2928,9 +2930,17 @@ E6.2 审查时定：
 
 切片：
 - **E7.1**：Blender 脚本生成的人形模型；glTF 静态网格的导入和渲染（按绑定姿势画，不蒙皮）；`loom model` 命令导出模型结构。
-- **E7.2**：骨骼和动画片段：RON 片段格式、从 glTF 转片段的命令、按 tick 采样、GPU 蒙皮、线性过渡；游戏的播放接口；状态导出、事件、调试绘制 `skeleton` 类别、胶片图。
-- **E7.3**：souls 的角色换成模型，接上各个动作。
-- **E7.4**：Boss 换成模型，接上它的招式和二阶段。
+- **E7.2**：骨骼和动画片段：RON 片段格式、按 tick 采样、GPU 蒙皮；场景里给模型节点挂片段（从 tick 0 循环播放）；`loom view --ticks` 胶片图；手写的待机、走路片段。
+- **E7.3**：游戏的播放接口（换片段、线性过渡）、状态导出、调试绘制 `skeleton` 类别；从 glTF 转片段的命令。
+- **E7.4**：souls 的角色换成模型，接上各个动作。
+- **E7.5**：Boss 换成模型，接上它的招式和二阶段。
+- 切片是规划者在 E7.2 规划时拆的（原来的 E7.2 太大，拆成 E7.2、E7.3）；「事件」没有单列：游戏自己知道什么时候换片段，要发事件由游戏发。
+
+E7.2 用户决定（2026-09-28）：
+- 片段里关键帧的时间用 **tick**（1/60 秒），和前摇、出招、后摇直接对齐；从 glTF 转换时把秒换成 tick。
+- 骨骼旋转写**欧拉角，单位度**，和场景文件的 `rotation` 一样；内部转成四元数，用球面插值。
+- 第一批片段由 **AI 直接手写 RON**。
+- 状态导出里动画**只记片段名和开始 tick**（E7.3 做），具体姿势用胶片图和调试绘制看。
 
 **朝向**：glTF 规定模型的正面朝 +Z，loom 的「前」是 -Z（第 5 节）。loom 导入时**不转**，模型文件自己要让正面朝 -Z，这样节点不写旋转时，模型就朝着 loom 的「前」。Blender 里就是让角色面朝 +Y（Blender 的 glTF 导出把 +Y 变成 -Z）。
 
@@ -2994,3 +3004,69 @@ E6.2 审查时定：
 - 键的顺序固定，就是上面的顺序。
 
 **`loom view` 能画模型**：场景里有 `model` 的节点照常画，用来预览，不用跑游戏。预览场景：`assets/scenes/model_preview.ron`（正面，旁边放 souls 角色现在的胶囊体比大小，smoke H12）和 `model_preview_side.ron`（侧面，看厚度和剑的方向）。
+
+### 骨骼和动画片段（E7.2 起）
+
+**节点字段 `animation`**，只能和 `model` 一起写，规范格式里写在 `model` 后面：
+
+```ron
+(name: "knight", model: "assets/models/humanoid.glb",
+    animation: (clips: {"idle": "assets/anims/humanoid/idle.ron", "walk": "assets/anims/humanoid/walk.ron"}, play: "idle")),
+```
+
+- `clips`：片段名到片段文件路径（相对工作目录）的表，至少一项；名字和路径都不能是空串。
+- `play`：一开始播哪个片段，必须是 `clips` 里的名字。从 tick 0 开始播。E7.2 里片段不会换；E7.3 加游戏的播放接口。
+- `loom_scene` 只检查字段本身；片段文件在加载场景时由 `loom_engine` 读和检查（同一个路径只读一次，报错写出节点路径、片段名、文件路径和原因），和模型一样。
+- 没有 `animation` 的模型节点和 E7.1 一样，按绑定姿势画静态网格，截图不变。
+
+**片段文件**（RON，`assets/anims/<模型名>/<片段名>.ron`）：
+
+```ron
+(
+    length: 60,
+    looping: true,
+    bones: {
+        "upper_leg_l": (rotation: [(0, (25.0, 0.0, 0.0)), (30, (-25.0, 0.0, 0.0)), (60, (25.0, 0.0, 0.0))]),
+        "hips": (translation: [(0, (0.0, 0.0, 0.0)), (15, (0.0, -0.03, 0.0)), (30, (0.0, 0.0, 0.0))]),
+    },
+)
+```
+
+- `length`：片段长度，tick，大于 0。
+- `looping`：`true` 时循环播放，`false` 时播完停在最后。
+- `bones`：骨骼名到通道的表，可以是空表（就是绑定姿势）。每根骨骼可以有 `rotation`、`translation` 两个通道，都可以不写，但不能都不写。没列出的骨骼保持绑定姿势。
+- 关键帧是 `(tick, (x, y, z))`：
+  - `rotation` 是欧拉角，单位度，YXZ 顺序（第 5 节），和场景文件的 `rotation` 相同；
+  - `translation` 单位米；
+  - 每个通道至少一个关键帧，tick 严格递增，都在 `0..=length` 里。
+- **值是相对绑定姿势的偏移，轴是模型的轴**（+X 右，+Y 上，-Z 前），和骨骼自己的局部轴（由 Blender 的骨骼方向决定）无关。例如 `upper_leg_l` 的 `rotation: (25, 0, 0)` 是大腿绕模型的 X 轴转 25°（右手定则），朝下的腿转向 -Z，也就是往前抬。
+  - 父骨骼动了，子骨骼的轴跟着转，和普通的骨骼层级一样。
+  - 公式：设关节 j 在绑定姿势下、模型空间里的旋转是 `B_j`，父关节的是 `B_p`（父节点不是关节时，就是它在绑定姿势下的模型空间旋转）；关节的局部旋转、平移（glTF 节点的 TRS）是 `R_j`、`T_j`。片段给出旋转偏移 `q`、平移偏移 `d` 时：
+    ```
+    局部旋转 = R_j * (B_j⁻¹ * q * B_j)
+    局部平移 = T_j + B_p⁻¹ * d
+    ```
+    父关节没有动时，关节在模型空间里正好是「绕自己的位置、按模型的轴转 `q`，再平移 `d`」。
+  - 不支持缩放通道。
+- 文件格式用 `deny_unknown_fields`，结构进 `loom schema`（第 17 节，顶层新增 `clip`，在 `scene` 后面）。
+
+**采样**（每个 tick 都是整数，所以完全确定）：
+- 片段时间 `t = tick - 开始 tick`。`looping` 时 `t = t % length`；否则 `t = min(t, length)`。
+- 通道在 `t` 的值：在第一个关键帧之前取第一个的值，在最后一个之后取最后一个的值；在两个关键帧 `(t0, a)`、`(t1, b)` 之间按 `s = (t - t0) / (t1 - t0)` 插值：平移线性插值；旋转把两个欧拉角各自转成四元数，按最短路径球面插值（`Quat::slerp`）。
+- 循环片段要在 tick 0 和 `length` 都写关键帧而且值相同，才会首尾相接；引擎不替你补。
+- 采样只影响画面，不进模拟状态；算法写在 `loom_scene::clip`（纯函数，好测），组合骨骼、算关节矩阵在 `loom_engine`。
+
+**蒙皮**：
+- 有 `animation` 的节点，模型必须**正好有一个 skin**，每个图元都有 `JOINTS_0` 和 `WEIGHTS_0`，没有 `JOINTS_1`（最多 4 个影响骨骼）；片段里的骨骼名都要在这个 skin 里。否则加载报错。
+- 按 glTF 的规则，蒙皮网格的顶点**不乘**网格节点的变换，而是由关节矩阵 `关节在模型空间的姿势 * inverseBindMatrix` 带到模型空间。
+- 权重先归一化（和为 1）；和为 0 的顶点报错。
+- 渲染：`loom_render` 加 `create_skinned_mesh(&[SkinnedVertex], &[u32]) -> MeshId`（顶点多了 4 个关节下标、4 个权重）和一条蒙皮管线；`Frame` 多一个 `joints: &[Mat4]`，`DrawItem` 多一个可选的关节范围。蒙皮在顶点着色器里做（GPU 蒙皮）；法线乘混合后矩阵的 3×3 再归一化（片段没有缩放，矩阵是刚体变换，这样是对的）。
+- 没有蒙皮的绘制项不变：`joints` 为空时不发任何新命令，已有截图逐字节不变。
+
+**胶片图 `loom view --ticks`**：
+- `--ticks 0,15,30,45`：按这些 tick 各画一帧，从左到右拼成一行，存成一张 PNG；每帧大小是 `--size`，整张宽是 `帧数 × 宽`。不写就是 `--ticks 0`，和以前一样只有一帧。
+- tick 最多 16 个，可以重复、可以不按顺序；为空、写错按参数错误报（退出码 2）。
+- 报告 JSON 多一个 `ticks` 字段。
+- 用来让 AI 一眼看完一段动作：选小一点的 `--size`，例如 `320x360`。
+
+**`loom run` 和 serve**：有 `animation` 的节点按游戏时钟的 tick 画，从 tick 0 开始循环。热重载、`reset`、`load_scene` 后从新的 tick 0 开始。
