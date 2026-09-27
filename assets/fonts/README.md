@@ -45,15 +45,16 @@ row = i / 16            -- 整数除法
 
 ## 怎么画出来的
 
-aseprite 的 MCP 的画布根目录是 `assets/art`，它不能读写 `assets/fonts`。所以要**在 `assets/art` 里画、导出，再把三个文件搬过来**：
+aseprite 的 MCP 的画布根目录是 `assets/`（2026-09-27 起），路径都带 `fonts/` 前缀，直接在这里画：
 
-1. `create_sprite`：`file: "loom_5x7.aseprite"`，`width: 96`，`height: 48`，`color_mode: "rgb"`，不传 `palette`。已有同名文件时加 `overwrite: true`。
-2. `run_lua`：`file: "loom_5x7.aseprite"`，代码见下文。
+1. `create_sprite`：`file: "fonts/loom_5x7.aseprite"`，`width: 96`，`height: 48`，`color_mode: "rgb"`，不传 `palette`。已有同名文件时加 `overwrite: true`。
+2. `run_lua`：`file: "fonts/loom_5x7.aseprite"`，代码见下文。
 3. `preview` 看一遍，例如 `scale: 8`、`background: "black"`，确认每个字形都清楚。
-4. `export_sheet`，参数见下文「怎么重新导出」，导出到 `assets/art`。
-5. 把 `assets/art/loom_5x7.aseprite`、`.json`、`.png` 三个文件搬到 `assets/fonts/`，覆盖旧的。`assets/art` 里不留副本。JSON 里的 `meta.image` 是相对文件名，搬动后不用改。
+4. `export_sheet`，参数见下文「怎么重新导出」。
 
-要改已有的字形：先把 `assets/fonts/loom_5x7.aseprite` 复制到 `assets/art/`，改完导出，再按第 5 步搬回来。也可以直接改下面 Lua 里的字符串，按 1、2、4、5 步从零重建。
+E6.2 时画布根目录还是 `assets/art`，字体是在那里画完再搬过来的；JSON 里的 `meta.image` 是相对文件名，所以搬动不影响。
+
+要改已有的字形：直接对 `fonts/loom_5x7.aseprite` 跑 `run_lua` 再导出；也可以改下面 Lua 里的字符串，按上面 4 步从零重建。
 
 Lua 里的像素写成字符串，整张 96×48 的图一行一个字符串，`#` 是白色，`.` 是透明，所以重建的结果完全确定。E6.2 核对过：按这几步重建再导出，得到的 PNG 和 JSON 与仓库里的逐字节相同。
 
@@ -126,12 +127,12 @@ cel.position = Point(0, 0)
 
 ## 怎么重新导出
 
-aseprite 的 MCP `export_sheet`（在 `assets/art` 里执行，然后按上文第 5 步搬走）：
+aseprite 的 MCP `export_sheet`：
 
 ```
-file: "loom_5x7.aseprite"
-png: "loom_5x7.png"
-data: "loom_5x7.json"
+file: "fonts/loom_5x7.aseprite"
+png: "fonts/loom_5x7.png"
+data: "fonts/loom_5x7.json"
 data_format: "json-array"
 ```
 

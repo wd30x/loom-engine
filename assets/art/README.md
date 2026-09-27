@@ -13,7 +13,7 @@
 
 HUD 的像素字体不在这里，在 `assets/fonts/`，说明见那里的 README。
 
-`.ase-mcp/` 是 aseprite 的 MCP（`ase-mcp`）存放 undo 快照和临时文件的私有目录，不属于美术资源。
+aseprite 的 MCP（`ase-mcp`）的画布根目录是 `assets/`（2026-09-27 起，之前是 `assets/art`），所以下文 MCP 调用里的路径都带 `art/` 前缀。它在 `assets/.ase-mcp/` 存放 undo 快照和临时文件，是私有目录（已 gitignore），不属于美术资源。
 
 ## 瓦片（tiles）
 
@@ -54,8 +54,8 @@ HUD 的像素字体不在这里，在 `assets/fonts/`，说明见那里的 READM
 
 用 aseprite 的 MCP，两次调用就能从零重建 `tiles.aseprite`：
 
-1. `create_sprite`：`file: "tiles.aseprite"`，`width: 16`，`height: 16`，`color_mode: "indexed"`，`palette` 是上表 16 色，按索引顺序排列。已有文件时加 `overwrite: true`。
-2. `run_lua`：`file: "tiles.aseprite"`，代码见下文。
+1. `create_sprite`：`file: "art/tiles.aseprite"`，`width: 16`，`height: 16`，`color_mode: "indexed"`，`palette` 是上表 16 色，按索引顺序排列。已有文件时加 `overwrite: true`。
+2. `run_lua`：`file: "art/tiles.aseprite"`，代码见下文。
 
 像素数据是写死在 Lua 里的字符串，一行一个字符串，一个十六进制字符对应一个调色板索引，`.` 表示索引 0，所以重建的结果完全确定。其中：
 - 地面的数据是用固定种子（4101）的随机数生成的：每个像素 12% 概率是暗点、10% 概率是亮点；然后按从左到右、从上到下的顺序，去掉和左边或上边同色的点（跨边缘也算）；
@@ -187,9 +187,9 @@ end
 aseprite 的 MCP `export_sheet`：
 
 ```
-file: "tiles.aseprite"
-png: "tiles.png"
-data: "tiles.json"
+file: "art/tiles.aseprite"
+png: "art/tiles.png"
+data: "art/tiles.json"
 data_format: "json-array"
 sheet_type: "horizontal"
 list_tags: true
@@ -233,8 +233,8 @@ RGB 模式，所以没有调色板。只用到下面这些不透明色，其余�
 
 用 aseprite 的 MCP，两次调用就能从零重建 `souls_hud.aseprite`：
 
-1. `create_sprite`：`file: "souls_hud.aseprite"`，`width: 16`，`height: 16`，`color_mode: "rgb"`，不传 `palette`。已有文件时加 `overwrite: true`。
-2. `run_lua`：`file: "souls_hud.aseprite"`，代码见下文。
+1. `create_sprite`：`file: "art/souls_hud.aseprite"`，`width: 16`，`height: 16`，`color_mode: "rgb"`，不传 `palette`。已有文件时加 `overwrite: true`。
+2. `run_lua`：`file: "art/souls_hud.aseprite"`，代码见下文。
 
 像素写成字符串，一行一个，一个字母对应上表的一个颜色，`.` 是透明。两帧都是手画的字符图。E6.2 核对过：按这两步重建，再按下文导出，得到的 PNG 和 JSON 与仓库里的逐字节相同。
 
@@ -318,9 +318,9 @@ end
 aseprite 的 MCP `export_sheet`：
 
 ```
-file: "souls_hud.aseprite"
-png: "souls_hud.png"
-data: "souls_hud.json"
+file: "art/souls_hud.aseprite"
+png: "art/souls_hud.png"
+data: "art/souls_hud.json"
 data_format: "json-array"
 sheet_type: "horizontal"
 list_tags: true

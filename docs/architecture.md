@@ -2313,7 +2313,7 @@ aseprite-rs（`B:\Material\Project\claude\ports\aseprite-rs`，ADR-0004）和 lo
 
 **美术管线**（2026-09-27，用户决定）：
 - 用 aseprite-rs 的 MCP（`ase-mcp`）画，AI 通过它的 `create_sprite`、`run_lua`、`preview`、`export_sheet` 等工具操作。
-- **注册方式**：按 aseprite-rs 那边给的方案，用 `claude mcp add aseprite --scope local` 注册在本机的 loom 项目上，**不进仓库**，写在用户的 `~/.claude.json` 里。`--root` 是 loom 的 `assets/art`，所有文件操作都限制在这个目录里。
+- **注册方式**：按 aseprite-rs 那边给的方案，用 `claude mcp add aseprite --scope local` 注册在本机的 loom 项目上，**不进仓库**，写在用户的 `~/.claude.json` 里。`--root` 是 loom 的 `assets/`（2026-09-27 起；之前是 `assets/art`，字体放不进 `assets/fonts`），所有文件操作都限制在这个目录里，MCP 调用的路径写成 `art/…`、`fonts/…`。
   - 代价：它直接运行 aseprite-rs 的 `target/release/ase-mcp.exe`。只要有 loom 会话开着它，aseprite-rs 那边就重新编译不了这个 exe（Windows 的文件锁）。遇到时在 loom 会话里用 `/mcp` 断开即可。
 - **文件**：
   - `assets/art/<名字>.aseprite` 是源文件（二进制，走 Git LFS）；
