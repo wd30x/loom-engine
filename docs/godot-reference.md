@@ -1,14 +1,14 @@
 # Godot 参考对照
 
-`ref/godot/` 是 Godot **4.7.2-stable** 的只读浅克隆，已 gitignore。重新获取：
+`../godot/`（和本仓库同级）是 Godot **4.7.2-stable** 的只读浅克隆，在仓库之外。重新获取（在本仓库根目录运行）：
 
 ```powershell
-git clone --depth 1 --branch 4.7.2-stable https://github.com/godotengine/godot.git ref/godot
+git clone --depth 1 --branch 4.7.2-stable https://github.com/godotengine/godot.git ../godot
 ```
 
 **原则**：学它的设计，不照搬它的规模。Godot 要支持所有游戏类型、所有平台，还要带编辑器；我们只取真实使用者（现在是类魂原型，之后是 2D 示例游戏）用得到的部分。
 
-许可：Godot 本体是 MIT。借鉴思路不需要声明；**移植具体代码**时，要在 `THIRD_PARTY_NOTICES.md` 里附上 Godot 的版权声明（见 `ref/godot/LICENSE.txt` 和 `COPYRIGHT.txt`）。`thirdparty/` 目录下的代码许可证各不相同，不要从里面拷。
+许可：Godot 本体是 MIT。借鉴思路不需要声明；**移植具体代码**时，要在 `THIRD_PARTY_NOTICES.md` 里附上 Godot 的版权声明（见 `../godot/LICENSE.txt` 和 `COPYRIGHT.txt`）。`thirdparty/` 目录下的代码许可证各不相同，不要从里面拷。
 
 ## 按里程碑对照
 

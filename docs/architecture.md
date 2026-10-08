@@ -2401,7 +2401,7 @@ obstruct(pivot, u):
 
 ### Aseprite（E4）
 
-aseprite-rs（`B:\Material\Project\claude\ports\aseprite-rs`，ADR-0004）和 loom 的约定：交换格式是原版的 sprite sheet 导出。原版 `aseprite.exe -b x.aseprite --sheet x.png --data x.json` 现在就能生成，以后 aseprite-rs 输出同样的格式。
+aseprite-rs（`B:\Material\Project\claude\aseprite-rs`，ADR-0004）和 loom 的约定：交换格式是原版的 sprite sheet 导出。原版 `aseprite.exe -b x.aseprite --sheet x.png --data x.json` 现在就能生成，以后 aseprite-rs 输出同样的格式。
 
 已知要点（规划者 2026-09-27 实测原版导出）：
 - 先只支持 `--format json-array`。`json-hash` 用对象的键表示帧，serde_json 默认按键排序，帧顺序会错（`x 10` 排在 `x 2` 前面）。
