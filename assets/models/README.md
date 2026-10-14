@@ -69,7 +69,7 @@ glTF 模型（`docs/architecture.md` 第 19 节）。`.glb` 是二进制导出�
 blender -b --factory-startup --python tools/blender/humanoid.py -- assets/models/humanoid.glb
 ```
 
-- 本机的 Blender 在 `F:\SSDsoftware\Blender\blender.exe`。
+- `blender` 不在 PATH 里时，换成 Blender 可执行文件的完整路径。
 - 生成时用的是 **Blender 5.2.2 LTS**（hash `d13f752e3b9c`），导出器是 `Khronos glTF Blender I/O v5.2.40`（写在 `.glb` 的 `asset.generator` 里）。
 - 脚本从空场景开始，全部用代码建：
   - 材质；
