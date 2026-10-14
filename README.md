@@ -26,6 +26,10 @@ pwsh scripts/verify.ps1
 cargo loom run --headless --frames 60 --screenshot out/shot.png
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 Licensed under either of

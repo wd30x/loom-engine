@@ -13,6 +13,10 @@ pwsh scripts/verify.ps1
 cargo loom run --headless --frames 60 --screenshot out/shot.png
 ```
 
+## 参与贡献
+
+见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。
+
 ## 许可证
 
 可以任选以下一种许可证使用：
