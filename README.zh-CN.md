@@ -1,6 +1,6 @@
 # loom-engine
 
-[English](README.md) | 简体中文
+[English](README.md) | 简体中文 | [日本語](README.ja.md)
 
 用 Rust 从零手写的游戏引擎（winit + wgpu + glam），专门设计成让 AI 能直接操作和验证。AI 可以加载场景、按键、一个 tick 一个 tick 地推进模拟、以 JSON 读取完整状态、查看截图，全程不需要窗口；同样的输入永远得到同样的结果。
 

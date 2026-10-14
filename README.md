@@ -1,6 +1,6 @@
 # loom-engine
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 A game engine written from scratch in Rust (winit + wgpu + glam), designed to be driven and verified by AI agents. An agent can load a scene, press buttons, step the simulation tick by tick, read the full state as JSON and look at screenshots, all without a window, and the same inputs always produce the same result.
 
