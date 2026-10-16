@@ -3,7 +3,7 @@
 //! for a character drawn by a model; a capsule mesh plays nothing.
 
 use glam::{Vec2, Vec3};
-use loom_scene::{Play, Scene};
+use loom_scene::{AnimationError, NodeId, Play, Scene};
 
 use crate::GameError;
 use crate::health::{Condition, Health};
@@ -20,11 +20,11 @@ pub(super) const SPRINT_CLIP_SPEED: f32 = 6.0;
 /// Ticks the blend into a roll or backstep takes.
 const ROLL_BLEND: u64 = 2;
 /// Ticks the blend into an attack's startup takes.
-const STARTUP_BLEND: u64 = 3;
+pub(super) const STARTUP_BLEND: u64 = 3;
 /// Ticks the blend into a stagger takes.
-const STAGGER_BLEND: u64 = 2;
+pub(super) const STAGGER_BLEND: u64 = 2;
 /// Ticks the blend into death takes.
-const DEATH_BLEND: u64 = 3;
+pub(super) const DEATH_BLEND: u64 = 3;
 /// Ticks the blend into a drink takes.
 const DRINK_BLEND: u64 = 4;
 /// Ticks every other blend takes.
@@ -127,13 +127,13 @@ pub(super) struct Choice {
 }
 
 /// `round(x)` as a rate, at least 1 so that a clip never stops.
-fn rate(x: f32) -> u32 {
+pub(super) fn rate(x: f32) -> u32 {
     // `as` saturates; a NaN gives 0.
     (libm::roundf(x) as u32).max(1)
 }
 
 /// `100 × written / actual` ticks, rounded.
-fn stretch(written: u32, actual: u32) -> u32 {
+pub(super) fn stretch(written: u32, actual: u32) -> u32 {
     rate(100.0 * written as f32 / actual as f32)
 }
 
@@ -294,32 +294,43 @@ impl Game {
             self.move_input.1,
         );
         let tick = self.clock.tick();
-        let animation = self
-            .scene
-            .node(self.player)
-            .model
-            .as_ref()
-            .and_then(|m| m.animation.as_ref())
-            .expect("a character with clips has an animation");
-        let (same_clip, same_rate) = (
-            animation.playing == choice.clip,
-            animation.rate == choice.rate,
-        );
-        let play = |offset, blend| {
-            Play::new(choice.clip, tick)
-                .offset(offset)
-                .blend(blend)
-                .rate(choice.rate)
-        };
-        let result = if let Some((offset, blend)) = choice.restart {
-            self.scene.play_clip(self.player, play(offset, blend))
-        } else if !same_clip {
-            self.scene.play_clip(self.player, play(0, BLEND))
-        } else if !same_rate {
-            self.scene.set_clip_rate(self.player, tick, choice.rate)
-        } else {
-            Ok(())
-        };
-        result.expect("every clip in CLIPS was checked at load");
+        show(&mut self.scene, self.player, &choice, tick)
+            .expect("every clip in CLIPS was checked at load");
+    }
+}
+
+/// Plays `choice` on `node` on tick `tick`, calling the scene only when
+/// something changes: a restart, another clip (blended over [`BLEND`]
+/// ticks), or another rate.
+pub(super) fn show(
+    scene: &mut Scene,
+    node: NodeId,
+    choice: &Choice,
+    tick: u64,
+) -> Result<(), AnimationError> {
+    let animation = scene
+        .node(node)
+        .model
+        .as_ref()
+        .and_then(|m| m.animation.as_ref())
+        .expect("a node playing clips has an animation");
+    let (same_clip, same_rate) = (
+        animation.playing == choice.clip,
+        animation.rate == choice.rate,
+    );
+    let play = |offset, blend| {
+        Play::new(choice.clip, tick)
+            .offset(offset)
+            .blend(blend)
+            .rate(choice.rate)
+    };
+    if let Some((offset, blend)) = choice.restart {
+        scene.play_clip(node, play(offset, blend))
+    } else if !same_clip {
+        scene.play_clip(node, play(0, BLEND))
+    } else if !same_rate {
+        scene.set_clip_rate(node, tick, choice.rate)
+    } else {
+        Ok(())
     }
 }

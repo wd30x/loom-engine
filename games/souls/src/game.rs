@@ -9,6 +9,7 @@ mod clips;
 mod collision;
 mod debug;
 mod enemy_ai;
+mod enemy_clips;
 mod error;
 mod hud;
 mod player;
@@ -698,6 +699,7 @@ impl Game {
         }
         self.show_hurtboxes();
         self.show_arms();
+        self.show_enemy_clips();
     }
 
     pub fn clock(&self) -> SimClock {
@@ -854,3 +856,6 @@ mod hud_tests;
 
 #[cfg(test)]
 mod clips_tests;
+
+#[cfg(test)]
+mod enemy_clips_tests;

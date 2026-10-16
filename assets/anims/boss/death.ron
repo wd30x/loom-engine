@@ -1,0 +1,87 @@
+// The boss dying: 40 ticks, not looping; it holds the last pose until it
+// comes back (docs/architecture.md section 11, "模型和动画"). Rotations are
+// YXZ degrees about each bone's position along the model's axes; see
+// assets/anims/README.md.
+//
+// The game lays the node on its face or its back on the tick it dies, and
+// lifts the body by enemy_dead_lift (0.30 m in boss.ron), so from the first
+// key on the limbs only move in the body's plane (about the model's Z
+// axis), and the halberd lies flat in it, beside the right leg, pointing at
+// the feet. 6: the arms loosening. 16: limp, the feet stretched out. 30,
+// 40: lying, the arms and legs a little apart, the head tipped to one side.
+(
+    length: 40,
+    looping: false,
+    bones: {
+        "head": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, 0.0)),
+            (16, (0.0, 0.0, 10.0)),
+            (30, (0.0, 0.0, 16.0)),
+            (40, (0.0, 0.0, 16.0)),
+        ]),
+        "upper_arm_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, -8.0)),
+            (16, (0.0, 0.0, -20.0)),
+            (30, (0.0, 0.0, -28.0)),
+            (40, (0.0, 0.0, -28.0)),
+        ]),
+        "lower_arm_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, -2.4)),
+            (16, (0.0, 0.0, -6.0)),
+            (30, (0.0, 0.0, -8.4)),
+            (40, (0.0, 0.0, -8.4)),
+        ]),
+        "upper_arm_r": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, 8.0)),
+            (16, (0.0, 0.0, 20.0)),
+            (30, (0.0, 0.0, 28.0)),
+            (40, (0.0, 0.0, 28.0)),
+        ]),
+        "lower_arm_r": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, 2.4)),
+            (16, (0.0, 0.0, 6.0)),
+            (30, (0.0, 0.0, 8.4)),
+            (40, (0.0, 0.0, 8.4)),
+        ]),
+        "weapon": (rotation: [
+            (0, (-6.8, -90.0, 180.0)),
+            (6, (-17.2, -90.0, 180.0)),
+            (16, (-32.8, -90.0, 180.0)),
+            (30, (-43.2, -90.0, 180.0)),
+            (40, (-43.2, -90.0, 180.0)),
+        ]),
+        "upper_leg_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, 0.0)),
+            (16, (0.0, 0.0, -4.0)),
+            (30, (0.0, 0.0, -7.0)),
+            (40, (0.0, 0.0, -7.0)),
+        ]),
+        "foot_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (-25.0, 0.0, 0.0)),
+            (16, (-65.0, 0.0, 0.0)),
+            (30, (-80.0, 0.0, 0.0)),
+            (40, (-80.0, 0.0, 0.0)),
+        ]),
+        "upper_leg_r": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, 0.0)),
+            (16, (0.0, 0.0, 4.0)),
+            (30, (0.0, 0.0, 7.0)),
+            (40, (0.0, 0.0, 7.0)),
+        ]),
+        "foot_r": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (-25.0, 0.0, 0.0)),
+            (16, (-65.0, 0.0, 0.0)),
+            (30, (-80.0, 0.0, 0.0)),
+            (40, (-80.0, 0.0, 0.0)),
+        ]),
+    },
+)

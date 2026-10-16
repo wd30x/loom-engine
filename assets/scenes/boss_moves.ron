@@ -1,0 +1,26 @@
+// Preview of the souls boss's move clips (docs/architecture.md sections 11 and 19), rendered
+// without a game, in place; the clips play once and then hold their last pose. A film strip of
+// it is smoke H17:
+//   loom view --scene assets/scenes/boss_moves.ron --ticks 20,30,35,40,47,60 --size 800x420 --screenshot out/boss_moves.png
+// Four bosses face loom's forward (-Z), seen from the front, a little to their left and above;
+// left to right on screen: sweep, cleave, lunge (in place: the game moves the node), combo (its
+// first cut).
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (-1.5, 3.6, -13.5), look_at: (0.0, 1.5, 0.0),
+            camera: (fov_y: 38.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 150.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (40.0, 1.0, 40.0), color: (0.35, 0.35, 0.38)),
+        (name: "sweep", position: (6.0, 0.0, 0.0), model: "assets/models/boss.glb",
+            animation: (clips: [("sweep", "assets/anims/boss/sweep.ron")], play: "sweep")),
+        (name: "cleave", position: (2.0, 0.0, 0.0), model: "assets/models/boss.glb",
+            animation: (clips: [("cleave", "assets/anims/boss/cleave.ron")], play: "cleave")),
+        (name: "lunge", position: (-2.0, 0.0, 0.0), model: "assets/models/boss.glb",
+            animation: (clips: [("lunge", "assets/anims/boss/lunge.ron")], play: "lunge")),
+        (name: "combo", position: (-6.0, 0.0, 0.0), model: "assets/models/boss.glb",
+            animation: (clips: [("combo", "assets/anims/boss/combo.ron")], play: "combo")),
+    ],
+)

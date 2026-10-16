@@ -99,24 +99,6 @@
         1.0
       ]
     },
-    "boss/arm": {
-      "position": [
-        0.0,
-        1.8,
-        -1.9
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "scale": [
-        0.15,
-        0.15,
-        2.8
-      ]
-    },
     "boss/body": {
       "position": [
         0.0,
@@ -133,7 +115,21 @@
         1.0,
         1.0,
         1.0
-      ]
+      ],
+      "animation": {
+        "clip": "idle",
+        "start": 471,
+        "offset": 0,
+        "rate": 100,
+        "from": {
+          "clip": "cleave",
+          "start": 432,
+          "offset": 4900,
+          "rate": 100
+        },
+        "blend_start": 471,
+        "blend": 6
+      }
     },
     "boss/hp_bar": {
       "position": [

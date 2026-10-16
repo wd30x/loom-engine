@@ -172,6 +172,28 @@ fn humanoid_model_has_the_19_named_joints_no_animation_and_few_triangles() {
 }
 
 #[test]
+fn boss_model_has_the_humanoid_joints_no_animation_and_few_triangles() {
+    let model = |path: &str| {
+        let out = run_loom(&["model", path]);
+        assert_eq!(out.code, 0, "{}", out.stdout);
+        report(&out)
+    };
+    let (boss, humanoid) = (
+        model("assets/models/boss.glb"),
+        model("assets/models/humanoid.glb"),
+    );
+    assert!(boss["triangles"].as_u64().expect("a count") <= 3000);
+    assert_eq!(boss["animations"], json!([]));
+    // The same bones, names, parents and order: the clips' axes hold.
+    assert_eq!(boss["skins"][0]["joints"], humanoid["skins"][0]["joints"]);
+    // Standing on y = 0; the halberd's tip, above the 3 m head, is the top.
+    let bounds = &boss["bounds"];
+    assert_eq!(bounds["min"][1], json!(0.0));
+    let top = bounds["max"][1].as_f64().expect("a number");
+    assert!((3.15..3.22).contains(&top), "{top}");
+}
+
+#[test]
 fn view_of_a_scene_with_a_missing_model_fails_before_rendering() {
     let dir = test_dir("model_missing_view");
     fs::write(

@@ -105,6 +105,47 @@ loom view --scene assets/scenes/knight_rest.ron --ticks 3,10,20,30,45,60 --size 
 
 后两张分别是 smoke H15、H16。`knight_rest` 里硬直和死亡的骑士按游戏里被正面打中的样子摆放：向后倾斜 20°、仰面躺着并抬高 0.13 m；喝瓶的骑士左手挂着瓶子。
 
+## boss 的片段
+
+`assets/models/boss.glb` 用（E7.6 起，`docs/architecture.md` 第 11 节「Boss 的模型和动画」）。骨骼和 humanoid 相同，上面「各骨骼的转向」表照样适用。每个文件开头有英文注释，写了各关键帧的姿势。
+
+| 文件 | 长度 | 循环 | 内容 |
+|---|---|---|---|
+| `boss/idle.ron` | 120 tick | 是 | 站立：两脚分开、左脚在前、膝盖微屈，戟竖在右手里，戟尾离地；呼吸：tick 60 胸口抬 1.5°、hips 下沉 12 mm |
+| `boss/walk.ron` | 48 tick | 是 | 走近，按 2.5 m/s 写（`WALK_CLIP_SPEED`）：一个循环两步，每步 1 m。每只脚着地 55% 的时间，从髋前 0.55 m 到髋后 0.55 m，每 2 tick 一个关键帧让脚贴地不动；抬腿最高 16 cm。身体前倾，左臂和腿反向摆，右手的戟竖着轻摆 |
+| `boss/sweep.ron` | 68 tick | 否 | 横扫：前摇里双手举戟、刃转到右后方；出招 30–38 从右往左平扫过身前，左脚跨入；后摇收回 |
+| `boss/cleave.ron` | 89 tick | 否 | 下劈：前摇里把戟高举到脑后、身体后仰；出招 45–49 从头顶劈到身前，左脚跨入、弯腰；49 时戟尖贴近前方地面 |
+| `boss/lunge.ron` | 80 tick | 否 | 突进：前摇里下蹲、双手把戟平端如枪，右脚往后蓄力；出招 35–45 刺出，腿成长弓步，枪尖从右扫到左。原地写，游戏移动节点 |
+| `boss/combo.ron` | 75 tick | 否 | 连击第 1 刀：25 举到右肩上方，26–30 从右肩斜劈到左下 |
+| `boss/combo_even.ron` | 62 tick | 否 | 连击偶数刀：从左下开始，12 蓄在左下，13–17 往右上撩 |
+| `boss/combo_odd.ron` | 62 tick | 否 | 连击第 3 刀以后的奇数刀：从右上开始，12 蓄到右肩上方，13–17 斜劈到左下，同 `combo` |
+| `boss/stagger.ron` | 30 tick | 否 | 硬直：3 被打得后仰、手臂甩开；8 右脚退半步；22 回到戒备；30 站稳 |
+| `boss/death.ron` | 40 tick | 否 | 死亡：四肢只在身体平面里动，戟平放在右腿旁、指向脚；30、40 躺着，四肢稍微张开，头偏向一边。游戏把 `body` 抬高 `enemy_dead_lift`（`boss.ron` 写 0.3 m，戟离身体平面最远 0.16 m） |
+
+**按默认参数写**：
+
+| 片段 | 分段（tick） | 对应的默认参数 |
+|---|---|---|
+| `sweep` | 前摇 0–30、出招 30–38、后摇 38–68 | `sweep_startup_ticks` 30、`sweep_active_ticks` 8、`sweep_recovery_ticks` 30 |
+| `cleave` | 0–45、45–49、49–89 | `cleave_*` 45、4、40 |
+| `lunge` | 0–35、35–45、45–80 | `lunge_*` 35、10、35 |
+| `combo` | 0–25、25–30、30–75 | `combo_*` 25、5、45 |
+| `combo_even`、`combo_odd` | 刀前的间隔 0–12、出招 12–17、后摇 17–62 | `combo_gap_ticks` 12，`combo_active_ticks` 5、`combo_recovery_ticks` 45 |
+| `stagger` | 0–30 | `stagger_ticks` 30 |
+| `death` | 0–40 | 不随参数伸缩 |
+| `walk` | 整个循环 | `WALK_CLIP_SPEED` 2.5 m/s |
+
+- 分界 tick 上都有关键帧；出招期间每 tick 一个关键帧。四个招式的出招都从右往左扫（`combo_even` 从左往右），和命中判定的扫掠方向一致。
+- 连击首尾相接：`combo` 第 30 格 = `combo_even` 第 0 格，`combo_even` 第 17 格 = `combo_odd` 第 0 格，`combo_odd` 第 12 格 = `combo` 第 25 格。
+
+**怎么写的**：同 humanoid，用没进仓库的草稿工具（按引擎的偏移规则做正向运动学、两段骨骼 IK）算出关键帧，片段文件本身是源头。
+
+预览（smoke H17，左到右：sweep、cleave、lunge、combo 第 1 刀）：
+
+```
+loom view --scene assets/scenes/boss_moves.ron --ticks 20,30,35,40,47,60 --size 800x420 --screenshot out/boss_moves.png
+```
+
 ## 从 Blender 的动画转片段
 
 `loom clip <模型.glb> --animation <名字> --out <片段.ron> [--looping]` 把 glTF 里的一个动画按片段格式写成 RON（规则见第 19 节「glTF 动画转片段」）：

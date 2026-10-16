@@ -12,10 +12,11 @@ use crate::health::{Health, HpBar};
 use crate::moves::AttackPhase;
 
 use super::enemy_ai::slice_of;
+use super::enemy_clips::ENEMY_CLIPS;
 use super::error::GameError;
 use super::props::{
-    BOSS_BAR_PROP, ENEMY_OTHER_PROPS, HP_PROPS, NODE_PROPS, PHASE2_OTHER_PROPS, SOULS_PROP,
-    SWING_PROPS,
+    BOSS_BAR_PROP, DEAD_LIFT_PROP, ENEMY_OTHER_PROPS, HP_PROPS, NODE_PROPS, PHASE2_OTHER_PROPS,
+    SOULS_PROP, SWING_PROPS,
 };
 use super::state::LastHit;
 use super::{positive_zero, wrap};
@@ -24,6 +25,8 @@ use super::{positive_zero, wrap};
 const HP_BAR: &str = "hp_bar";
 /// The name of the child of a swinger that shows its swing.
 const ARM: &str = "arm";
+/// The name of the child of an enemy whose model shows what it does.
+const BODY: &str = "body";
 
 /// The name of the root node that marks the bloodstain.
 const BLOODSTAIN: &str = "bloodstain";
@@ -50,10 +53,10 @@ pub(super) struct Hurtbox {
     pub(super) path: String,
     pub(super) radius: f32,
     pub(super) height: f32,
-    /// Every node with a mesh in the subtree (the node itself included)
-    /// but the hp bar, in pre-order, with its color in the scene file: what
-    /// flashes and darkens.
-    pub(super) meshes: Vec<(NodeId, Vec3)>,
+    /// Every node with a mesh or a model in the subtree (the node itself
+    /// included) but the hp bar, in pre-order, with its color in the scene
+    /// file and whether it is a model: what flashes and darkens.
+    pub(super) meshes: Vec<(NodeId, Vec3, bool)>,
     /// The node's rotation in the scene file: its pose standing.
     pub(super) base: Quat,
     pub(super) hits: u32,
@@ -129,6 +132,8 @@ pub(super) struct Enemy {
     pub(super) radius: f32,
     pub(super) height: f32,
     pub(super) arm: Option<Arm>,
+    /// Its child named `body` when that has a model: what plays its clips.
+    pub(super) body: Option<Body>,
     pub(super) state: EnemyCondition,
     /// The move being done, while `Attack`.
     pub(super) current: Option<MoveKind>,
@@ -144,6 +149,17 @@ pub(super) struct Enemy {
     pub(super) struck: u32,
     /// `boss_bar` 1: the HUD shows its health.
     pub(super) boss_bar: bool,
+}
+
+/// An enemy's child named `body` with a model, which plays a clip for what
+/// the enemy does (`docs/architecture.md` section 11, "模型和动画").
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Body {
+    pub(super) id: NodeId,
+    /// Its position in the scene file: where it stands, but lying dead.
+    pub(super) p0: Vec3,
+    /// `enemy_dead_lift`: how far it is lifted while lying dead.
+    pub(super) lift: f32,
 }
 
 /// A node with `bonfire_range`: the character sits down at it.
@@ -282,7 +298,7 @@ pub(crate) const NODE_REQUIRES: [&str; 6] = [
 ];
 
 /// The other rules [`roles`] checks on a node's props.
-pub(crate) const NODE_CONSTRAINTS: [&str; 13] = [
+pub(crate) const NODE_CONSTRAINTS: [&str; 14] = [
     "a swinger: swing_low < swing_high",
     "lock-on targets, hurtboxes and swingers are root nodes, and not the camera",
     "a hurtbox with hp: its child named hp_bar, if any, needs a mesh",
@@ -295,6 +311,9 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 13] = [
     "an enemy: enemy_speed / 60, lunge_distance / lunge_active_ticks and, with phase2_at, \
      enemy_speed / 60 / phase2_speed_scale are less than hurt_radius",
     "an enemy has no collider in its subtree",
+    "an enemy has no model itself; a model on its child named body has an animation with every \
+     clip an enemy plays (idle, walk, sweep, cleave, lunge, combo, combo_even, combo_odd, \
+     stagger, death)",
     "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a \
      lock target, hurtbox, swinger or enemy",
     "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children",
@@ -311,8 +330,10 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 13] = [
 /// only with `enemy_speed`; the phase 2 props only with `phase2_at`; then,
 /// for an enemy, each move's ranges, the roar's blast within it, its swing
 /// band, the props it needs, not a swinger, its steps (with phase 2's
-/// walk last) shorter than `hurt_radius` and no collider in its subtree
-/// (a lock-on target, it is a root node already); last, for a bonfire, a
+/// walk last) shorter than `hurt_radius`, no collider in its subtree (a
+/// lock-on target, it is a root node already), no model on itself and a
+/// model on its `body` with an animation of every clip in [`ENEMY_CLIPS`];
+/// last, for a bonfire, a
 /// root node other than the camera, then none of the other roles; last,
 /// the bloodstain marker's mesh, props and children. `souls` goes with
 /// `hp` after the four props before it.
@@ -430,7 +451,7 @@ pub(super) fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Rol
         if enemy_speed.is_none()
             && let Some(spec) = NODE_PROPS[ENEMY_OTHER_PROPS]
                 .iter()
-                .chain([&NODE_PROPS[BOSS_BAR_PROP]])
+                .chain([&NODE_PROPS[BOSS_BAR_PROP], &NODE_PROPS[DEAD_LIFT_PROP]])
                 .find(|spec| node.prop(spec.name).is_some())
         {
             return Err(GameError::NeedsEnemySpeed {
@@ -555,7 +576,35 @@ pub(super) fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Rol
                 {
                     return Err(GameError::EnemyCollider(path()));
                 }
-                Some((params, phase2, radius, height))
+                if node.model.is_some() {
+                    return Err(GameError::EnemyModelNotOnBody(path()));
+                }
+                let body = child(BODY).filter(|&b| scene.node(b).model.is_some());
+                if let Some(b) = body {
+                    let Some(animation) = scene
+                        .node(b)
+                        .model
+                        .as_ref()
+                        .and_then(|m| m.animation.as_ref())
+                    else {
+                        return Err(GameError::EnemyBodyWithoutAnimation(path()));
+                    };
+                    if let Some(clip) = ENEMY_CLIPS
+                        .iter()
+                        .find(|c| animation.clip_path(c).is_none())
+                    {
+                        return Err(GameError::EnemyMissingClip {
+                            enemy: path(),
+                            clip: (*clip).to_owned(),
+                        });
+                    }
+                }
+                let body = body.map(|b| Body {
+                    id: b,
+                    p0: scene.transform(b).position,
+                    lift: value("enemy_dead_lift") as f32,
+                });
+                Some((params, phase2, radius, height, body))
             }
         };
         if let Some(range) = node.prop("bonfire_range") {
@@ -605,7 +654,12 @@ pub(super) fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Rol
                 meshes: scene
                     .ids()
                     .filter(|&n| is_in_subtree(scene, n, id) && Some(n) != bar)
-                    .filter_map(|n| scene.node(n).mesh.map(|m| (n, m.color)))
+                    .filter_map(|n| {
+                        let node = scene.node(n);
+                        node.mesh
+                            .map(|m| (n, m.color, false))
+                            .or(node.model.as_ref().map(|m| (n, m.color, true)))
+                    })
                     .collect(),
                 base: scene.transform(id).rotation,
                 hits: 0,
@@ -666,7 +720,7 @@ pub(super) fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Rol
                 struck: false,
             });
         }
-        if let Some((params, phase2, radius, height)) = enemy {
+        if let Some((params, phase2, radius, height, body)) = enemy {
             // As the character's facing at load.
             let f = scene.transform(id).rotation * Vec3::NEG_Z;
             let facing = positive_zero(wrap(libm::atan2f(-f.x, -f.z)));
@@ -696,6 +750,7 @@ pub(super) fn roles(scene: &Scene, player: NodeId, camera: NodeId) -> Result<Rol
                             .color,
                     }
                 }),
+                body,
                 state: EnemyCondition::Idle,
                 current: None,
                 move_tick: 0,

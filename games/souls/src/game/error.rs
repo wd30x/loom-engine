@@ -134,6 +134,12 @@ pub enum GameError {
     },
     #[error("the enemy {0:?} must not have a collider in its subtree: colliders are static")]
     EnemyCollider(String),
+    #[error("the enemy {0:?} has a model: an enemy's model goes on its child named body")]
+    EnemyModelNotOnBody(String),
+    #[error("the enemy {0:?}: the model on its body needs an animation")]
+    EnemyBodyWithoutAnimation(String),
+    #[error("the enemy {enemy:?}: its body's animation needs a clip {clip:?}")]
+    EnemyMissingClip { enemy: String, clip: String },
     #[error("the bloodstain marker {0:?} needs a mesh, and no props or children")]
     BloodstainMarker(String),
     #[error("the node {node:?}: display_name has a character the HUD font lacks: {c:?}")]

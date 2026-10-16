@@ -131,7 +131,7 @@
                 // Sweep: a wide swing.
                 ("sweep_damage", 25),            // hp each hit takes off the character
                 ("sweep_impact", 20),            // added up against the character's poise
-                ("sweep_startup_ticks", 30),     // the warning before the swing, the arm out in orange
+                ("sweep_startup_ticks", 30),     // the wind-up before the swing
                 ("sweep_active_ticks", 8),       // the swing
                 ("sweep_recovery_ticks", 30),    // after the swing
                 ("sweep_reach", 3.0),            // meters: radius of the swept sector
@@ -143,7 +143,7 @@
                 // Cleave: a narrow, far-reaching swing.
                 ("cleave_damage", 45),           // hp each hit takes off the character
                 ("cleave_impact", 40),           // added up against the character's poise
-                ("cleave_startup_ticks", 45),    // the warning before the swing, the arm out in orange
+                ("cleave_startup_ticks", 45),    // the wind-up before the swing
                 ("cleave_active_ticks", 4),      // the swing
                 ("cleave_recovery_ticks", 40),   // after the swing
                 ("cleave_reach", 4.0),           // meters: radius of the swept sector
@@ -155,7 +155,7 @@
                 // Lunge: a charge forward, swinging on the way.
                 ("lunge_damage", 30),            // hp each hit takes off the character
                 ("lunge_impact", 30),            // added up against the character's poise
-                ("lunge_startup_ticks", 35),     // the warning before the swing, the arm out in orange
+                ("lunge_startup_ticks", 35),     // the wind-up before the swing
                 ("lunge_active_ticks", 10),      // the swing
                 ("lunge_recovery_ticks", 35),    // after the swing
                 ("lunge_reach", 2.5),            // meters: radius of the swept sector
@@ -167,7 +167,7 @@
                 // Combo: cuts in a row, every other one left to right.
                 ("combo_damage", 20),            // hp each hit takes off the character
                 ("combo_impact", 15),            // added up against the character's poise
-                ("combo_startup_ticks", 25),     // the warning before the swing, the arm out in orange
+                ("combo_startup_ticks", 25),     // the wind-up before the swing
                 ("combo_active_ticks", 5),       // each cut's swing
                 ("combo_recovery_ticks", 45),    // after the last cut
                 ("combo_reach", 2.8),            // meters: radius of the swept sector
@@ -195,7 +195,7 @@
                 // Spin: a full turn on the spot, only in phase 2.
                 ("spin_damage", 40),             // hp each hit takes off the character
                 ("spin_impact", 40),             // added up against the character's poise
-                ("spin_startup_ticks", 50),      // the warning before the swing, the arm out in orange
+                ("spin_startup_ticks", 50),      // the wind-up before the swing
                 ("spin_active_ticks", 12),       // the swing, all the way around
                 ("spin_recovery_ticks", 40),     // after the swing
                 ("spin_reach", 3.5),             // meters: radius of the swept circle
@@ -204,12 +204,24 @@
                 ("spin_max_range", 3.5),         // meters: ... and at most this far
                 ("spin_weight", 2),              // how likely it is chosen among the moves in range
                 ("spin_track_speed", 0),         // degrees per second it turns to the character during startup
+                ("enemy_dead_lift", 0.3),        // meters its body is lifted lying dead: half its thickness
             ],
             children: [
-                (name: "body", mesh: Capsule(radius: 0.7, height: 3.0), color: (0.28, 0.24, 0.3)),
-                // On the center line, out to 3.3 m; turned to show each move.
-                (name: "arm", position: (0.0, 1.8, -1.9), scale: (0.15, 0.15, 2.8), mesh: Cube,
-                    color: (0.4, 0.35, 0.35)),
+                // The warden model plays a clip for what the boss does (docs/architecture.md
+                // section 11, "模型和动画"); the hurt props above are what is hit and collides.
+                (name: "body", model: "assets/models/boss.glb",
+                    animation: (clips: [
+                        ("idle", "assets/anims/boss/idle.ron"),
+                        ("walk", "assets/anims/boss/walk.ron"),
+                        ("sweep", "assets/anims/boss/sweep.ron"),
+                        ("cleave", "assets/anims/boss/cleave.ron"),
+                        ("lunge", "assets/anims/boss/lunge.ron"),
+                        ("combo", "assets/anims/boss/combo.ron"),
+                        ("combo_even", "assets/anims/boss/combo_even.ron"),
+                        ("combo_odd", "assets/anims/boss/combo_odd.ron"),
+                        ("stagger", "assets/anims/boss/stagger.ron"),
+                        ("death", "assets/anims/boss/death.ron"),
+                    ], play: "idle")),
                 (name: "hp_bar", position: (0.0, 3.4, 0.0), scale: (1.6, 0.1, 0.1), mesh: Cube,
                     color: (0.8, 0.1, 0.1)),
             ]),

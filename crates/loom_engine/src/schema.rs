@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(character["props"].as_array().unwrap().len(), 56);
         assert_eq!(
             group("souls", "node")["props"].as_array().unwrap().len(),
-            98
+            99
         );
         assert_eq!(
             prop("souls", "character", "stamina_max"),
@@ -281,7 +281,7 @@ mod tests {
                 }
             }
         }
-        assert!(texts.len() > 2 * (56 + 98 + 2 + 3), "{}", texts.len());
+        assert!(texts.len() > 2 * (56 + 99 + 2 + 3), "{}", texts.len());
         for text in &texts {
             assert!(
                 !text.contains('\\') && !text.contains('\n') && !text.contains("  "),

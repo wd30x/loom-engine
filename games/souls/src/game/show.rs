@@ -222,13 +222,16 @@ impl Game {
     /// tick, whether it changed or not:
     /// - its meshes (but the hp bar): the scene colors times [`DEAD_DIM`]
     ///   when dead, else [`FLASH_COLOR`] within [`FLASH_TICKS`] ticks of a
-    ///   hit (this one included), else for an enemy (but its arm, which
+    ///   hit (this one included; a model [`FLASH_TINT`] instead), else for
+    ///   an enemy (but its arm, which
     ///   [`Game::show_arms`] colors) [`WARN_COLOR`] roaring before the
     ///   blast and the scene colors times [`PHASE2_TINT`] in phase 2, else
     ///   the scene colors;
     /// - with health, its pose: the scene rotation, or when staggered or dead
     ///   tipped over by [`STAGGER_TILT_DEGREES`] or [`DEAD_TILT_DEGREES`]
-    ///   towards its `fall`, away from the character;
+    ///   towards its `fall`, away from the character; an enemy with a body
+    ///   model falls dead only on its face or back ([`front_or_back`]), its
+    ///   body lifted by `enemy_dead_lift`;
     /// - its hp bar: as long as the health left, the left end in place,
     ///   hidden when dead.
     pub(super) fn show_hurtboxes(&mut self) {
@@ -244,8 +247,10 @@ impl Game {
                 enemy.is_some_and(|e| e.roar().is_some_and(|(_, p)| p == AttackPhase::Startup));
             let phase2 = enemy.is_some_and(|e| e.stage == 2);
             let arm = enemy.and_then(|e| e.arm).map(|arm| arm.id);
-            for &(id, color) in &h.meshes {
-                let color = if dead || flashing || Some(id) == arm {
+            for &(id, color, model) in &h.meshes {
+                let color = if model && flashing && !dead {
+                    FLASH_TINT
+                } else if dead || flashing || Some(id) == arm {
                     shown(color, dead, flashing)
                 } else if warning {
                     WARN_COLOR
@@ -261,7 +266,21 @@ impl Game {
             let Some(health) = h.health else {
                 continue;
             };
-            self.scene.transform_mut(h.id).rotation = pose(health.now.state, health.fall, h.base);
+            // An enemy drawn by a model lies dead like the character: on
+            // its face or back, its body lifted.
+            let body = enemy.and_then(|e| e.body.map(|b| (b, e.facing)));
+            let fall = match body {
+                Some((_, facing)) if dead => front_or_back(health.fall, facing),
+                _ => health.fall,
+            };
+            let rotation = pose(health.now.state, fall, h.base);
+            self.scene.transform_mut(h.id).rotation = rotation;
+            if let Some((b, _)) = body {
+                // Straight up in the world, whichever way the node lies.
+                let lift = if dead { b.lift } else { 0.0 };
+                self.scene.transform_mut(b.id).position =
+                    b.p0 + rotation.inverse() * Vec3::new(0.0, lift, 0.0);
+            }
             if let Some(bar) = health.bar {
                 let frac = health.now.hp / health.hp_max;
                 let t = self.scene.transform_mut(bar.id);

@@ -107,8 +107,10 @@ macro_rules! move_props {
 ///   with it too), then the spin's eleven;
 /// - `bonfire_range` makes it a bonfire;
 /// - `souls` goes with `hp`: what killing it gives;
-/// - `boss_bar` goes with `enemy_speed`: the enemy's bar on the HUD.
-pub(crate) const NODE_PROPS: [PropSpec; 98] = join(&[
+/// - `boss_bar` goes with `enemy_speed`: the enemy's bar on the HUD;
+/// - `enemy_dead_lift` goes with `enemy_speed`: its body model's lift while
+///   lying dead.
+pub(crate) const NODE_PROPS: [PropSpec; 99] = join(&[
     &BASE_PROPS,
     &ENEMY_PROPS,
     &move_props!(
@@ -166,6 +168,15 @@ pub(crate) const NODE_PROPS: [PropSpec; 98] = join(&[
         unit: "flag",
         description: "1: the HUD shows the enemy's health at the bottom while the character is \
                       within its aggro range.",
+    }],
+    &[PropSpec {
+        name: "enemy_dead_lift",
+        default: Some(0.0),
+        rule: PropRule::AtLeast { min: 0.0 },
+        unit: "meters",
+        description: "With a model on its child named body: how far the body is lifted while \
+                      lying dead, about half its thickness, so that it does not sink into the \
+                      ground.",
     }],
 ]);
 
@@ -508,3 +519,6 @@ pub(super) const SOULS_PROP: usize = 96;
 /// Where `boss_bar`, which also goes with `enemy_speed`, is in
 /// [`NODE_PROPS`].
 pub(super) const BOSS_BAR_PROP: usize = 97;
+/// Where `enemy_dead_lift`, which also goes with `enemy_speed`, is in
+/// [`NODE_PROPS`].
+pub(super) const DEAD_LIFT_PROP: usize = 98;

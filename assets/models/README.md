@@ -5,6 +5,7 @@ glTF 模型（`docs/architecture.md` 第 19 节）。`.glb` 是二进制导出�
 | 文件 | 说明 |
 |---|---|
 | `humanoid.glb` | 低多边形骑士，右手握直剑，19 根骨骼。由 `tools/blender/humanoid.py` 生成，57216 字节 |
+| `boss.glb` | 3 m 高的低多边形 Boss，右手握戟，骨骼和 `humanoid` 相同。由 `tools/blender/boss.py` 生成，64212 字节 |
 
 ## humanoid
 
@@ -93,3 +94,62 @@ blender -b --factory-startup --python tools/blender/humanoid.py -- assets/models
 - `bounds` 的 y 从 0 到约 1.82。
 
 `crates/loom_engine/tests/cli/model.rs` 的 `humanoid_model_has_the_19_named_joints_no_animation_and_few_triangles` 会检查前三条和 y 的范围。
+
+## boss
+
+souls 的 Boss（E7.6 起，`assets/scenes/boss.ron`）：魁梧的守卫，暗铜色的盔甲、肩上一圈兽皮披肩、深色的布裙，右手握一把戟。造型和 `humanoid` 一样是方块和棱柱，平面着色，没有贴图。
+
+### 尺寸和朝向
+
+坐标同上，loom 坐标。
+
+- **身高**：3.0 m（头盔顶上的冠饰到约 3.0 m），脚底在 y = 0。和 Boss 原来的胶囊体（半径 0.7、高 3.0）一样高。
+- **朝向**：正面朝 **-Z**，右手在 +X。
+- **站姿**：两臂从肩膀斜向下 55°。
+- **戟**：握在右拳里，竖在身体右边、稍往前倾，方向 (0, 0.92, -0.40) 归一化。握点 (0.96, 1.40, 0)，戟尾 (0.96, 0.62, 0.34)，戟尖 (0.96, 3.19, -0.78)；斧刃朝前，在握点往上 1.55 m 处。
+- **包围盒**：`loom model` 报的是 min (-1.061, 0, -1.067)、max (1.061, 3.188, 0.396)。最高是戟尖，最前是斧刃。
+- **规模**：1104 个顶点、592 个三角形。
+
+### 骨骼
+
+和 `humanoid` 的 19 根**完全相同**：名字、父子关系、在 `skin` 里的顺序（脚本里有 assert 检查），所以 `assets/anims/README.md` 的「各骨骼的转向」表照样适用。每个部件同样整块绑定到一根骨骼。关节的位置不同：
+
+| 关节 | 位置 |
+|---|---|
+| `hips` | (0, 1.45, 0)，`spine` 1.68，`chest` 1.90，`neck` 2.34，`head` 2.46（都在中线上） |
+| 肩（`upper_arm_l`、`upper_arm_r` 的头） | (∓0.40, 2.20, 0) |
+| 肘 | (∓0.68, 1.81, 0) |
+| 腕（`hand_*` 的头） | (∓0.92, 1.46, 0) |
+| `weapon` 的头 | 握点 (0.96, 1.40, 0)，尾在戟尖 |
+| 髋、膝、踝 | x = ∓0.18；y = 1.45、0.78、0.14 |
+| 脚尖（`foot_*` 的尾） | (∓0.18, 0.05, -0.30) |
+
+### 材质
+
+| 序号 | 名字 | 颜色 | 用途 |
+|---|---|---|---|
+| 0 | `armor` | (0.27, 0.25, 0.19) | 暗铜：胸甲、肩甲、护臂、胫甲、头盔 |
+| 1 | `cloth` | (0.17, 0.06, 0.04) | 深褐红：布裙、下摆、袖子、大腿 |
+| 2 | `leather` | (0.14, 0.09, 0.05) | 深棕：腰带、手套、靴子、脖子 |
+| 3 | `steel` | (0.55, 0.55, 0.52) | 钢：戟的斧刃、钩、尖、戟尾的箍 |
+| 4 | `wood` | (0.22, 0.14, 0.07) | 戟杆 |
+| 5 | `hide` | (0.30, 0.25, 0.17) | 肩上的兽皮披肩 |
+| 6 | `visor` | (0.02, 0.02, 0.02) | 面甲的缝 |
+
+游戏里二阶段时整个模型乘暗红系数，所以这些颜色在二阶段会变暗变红（`docs/architecture.md` 第 11 节「二阶段」）。
+
+### 怎么重新生成
+
+```
+blender -b --factory-startup --python tools/blender/boss.py -- assets/models/boss.glb
+```
+
+- 脚本 import 同目录的 `humanoid.py`，复用它的部件函数、导出参数和骨骼表（只换材质和尺寸），不会在 `tools/blender/` 下留 `__pycache__`。
+- 用的是 **Blender 5.2.2 LTS**，导出参数和 `humanoid` 相同。
+- 改完用 `loom view --scene assets/scenes/boss_moves.ron` 看一眼。
+
+### 可复现性
+
+同一个 Blender 版本跑两次，`.glb` **逐字节相同**（E7.6 用 5.2.2 核对过，sha256 `411b9c0f82d799e00856efcb2334790e864c44ad22349efbe722c8fa7650458e`）。重跑 `boss.py` 不影响 `humanoid.glb`（也核对过，sha256 不变）。
+
+`crates/loom_engine/tests/cli/model.rs` 的 `boss_model_has_the_humanoid_joints_no_animation_and_few_triangles` 检查：关节和 `humanoid` 相同、没有动画、三角形在 3000 以内、y 从 0 到 3.15–3.22。
