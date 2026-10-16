@@ -3,11 +3,6 @@
 # Runtime output: screenshots, state dumps, logs, recordings
 /out/
 
-# One-off collaboration files, rewritten every slice (see CLAUDE.md)
-/docs/PLAN.md
-/docs/FEEDBACK.md
-/docs/REVIEW.md
-
 # Task list and progress: kept local, not published
 /docs/TODO.md
 
