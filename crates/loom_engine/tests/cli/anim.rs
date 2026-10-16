@@ -103,6 +103,8 @@ fn every_repository_clip_fits_the_clip_schema_and_broken_ones_do_not() {
             "attack2.ron",
             "attack3.ron",
             "backstep.ron",
+            "death.ron",
+            "drink.ron",
             "heavy.ron",
             "idle.ron",
             "roll.ron",
@@ -110,7 +112,9 @@ fn every_repository_clip_fits_the_clip_schema_and_broken_ones_do_not() {
             "run_back.ron",
             "run_left.ron",
             "run_right.ron",
+            "sit.ron",
             "sprint.ron",
+            "stagger.ron",
             "walk.ron",
         ]
     );

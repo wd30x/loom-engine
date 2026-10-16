@@ -1,6 +1,8 @@
 //! How the game's state shows on the scene's nodes: the character's and
 //! the enemies' colors and poses, the arms, the flash of a hit.
 
+use std::f32::consts::PI;
+
 use glam::{Quat, Vec3};
 
 use crate::health::Condition;
@@ -26,8 +28,13 @@ const DEAD_TILT_DEGREES: f32 = 90.0;
 /// The color of a swinger's arm during its startup: the warning that a
 /// swing is coming. A stand-in, like the flash.
 pub(super) const WARN_COLOR: Vec3 = Vec3::new(1.0, 0.55, 0.1);
-/// How far below its `position` the character node is drawn while sitting.
+/// How far below its `position` a character drawn by a capsule is drawn
+/// while sitting; a model's `sit` clip lowers the hips itself.
 const SIT_DROP: f32 = 0.5;
+/// How far above its `position` a dead character drawn by a model is
+/// drawn: about half the depth of its body, which lies on its face or its
+/// back ([`front_or_back`]) on the ground instead of halfway in it.
+pub(super) const DEAD_LIFT: f32 = 0.13;
 
 /// What an enemy's scene colors are multiplied by in phase 2: dark red.
 const PHASE2_TINT: Vec3 = Vec3::new(1.0, 0.3, 0.3);
@@ -48,6 +55,18 @@ pub(super) fn pose(state: Condition, fall: f32, base: Quat) -> Quat {
         * base
 }
 
+/// Which way a dead character drawn by a model falls, for [`pose`]: of
+/// its front (`facing`) and its back, the one nearer to `fall`, so that it
+/// lies on its face or its back, never on its side, which would push one
+/// arm into the ground and raise the other.
+pub(super) fn front_or_back(fall: f32, facing: f32) -> f32 {
+    if libm::cosf(fall - facing) >= 0.0 {
+        facing
+    } else {
+        facing + PI
+    }
+}
+
 /// The color a mesh of scene color `color` shows: darkened when `dead`,
 /// else [`FLASH_COLOR`] while `flashing`, else its own.
 fn shown(color: Vec3, dead: bool, flashing: bool) -> Vec3 {
@@ -63,28 +82,34 @@ fn shown(color: Vec3, dead: bool, flashing: bool) -> Vec3 {
 impl Game {
     /// Step 6 for the character node: its position, its pose (turned to
     /// `facing`, tipped over away from the swinger when staggered or dead)
-    /// and the colors of its meshes, like a hurtbox's.
+    /// and the colors of its meshes, like a hurtbox's. A character drawn by
+    /// a model does not sink while sitting, and dead it lies on its face
+    /// or back, lifted by [`DEAD_LIFT`].
     pub(super) fn show_player(&mut self) {
         let tick = self.clock.tick();
         let player = &self.state.player;
         let state = self.health.now.state;
+        let modeled = self.clips.is_some();
+        let dead = state == Condition::Dead;
         let transform = self.scene.transform_mut(self.player);
-        transform.position = if player.action == Action::Sit {
+        transform.position = if player.action == Action::Sit && !modeled {
             player.position - Vec3::new(0.0, SIT_DROP, 0.0)
+        } else if dead && modeled {
+            player.position + Vec3::new(0.0, DEAD_LIFT, 0.0)
         } else {
             player.position
         };
-        transform.rotation = pose(
-            state,
-            self.health.fall,
-            Quat::from_rotation_y(player.facing),
-        );
+        let fall = if dead && modeled {
+            front_or_back(self.health.fall, player.facing)
+        } else {
+            self.health.fall
+        };
+        transform.rotation = pose(state, fall, Quat::from_rotation_y(player.facing));
         let flashing = player
             .last_hit
             .as_ref()
             .is_some_and(|hit| tick - hit.tick < FLASH_TICKS);
         for &(id, color, model) in &self.player_meshes {
-            let dead = state == Condition::Dead;
             let color = if model && flashing && !dead {
                 FLASH_TINT
             } else {

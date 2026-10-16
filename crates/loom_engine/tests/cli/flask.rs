@@ -11,7 +11,7 @@ use super::common::{
 
 /// The built-in demo scene: hit twice by the stake, back off and drink, go
 /// back and drink again only to be interrupted, then sit at the bonfire.
-const FLASK_SCRIPT: &str = concat!(
+pub(super) const FLASK_SCRIPT: &str = concat!(
     "(version: 1, tick_hz: 60, events: [",
     "(tick: 370, action: \"drink\", down: true), (tick: 371, action: \"drink\", down: false), ",
     "(tick: 500, action: \"drink\", down: true), (tick: 501, action: \"drink\", down: false), ",

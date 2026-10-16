@@ -294,6 +294,14 @@
               }
             ]
           },
+          "bone": {
+            "description": "A bone of the parent node's model: the node and its subtree move\nwith it on screen, offset along the model's axes. Not empty; the\nparent needs a `model`.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
           "camera": {
             "description": "Makes the node a camera, looking along its -Z axis.",
             "anyOf": [

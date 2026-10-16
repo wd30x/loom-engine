@@ -282,13 +282,13 @@
     "player": {
       "position": [
         -1.87456e-7,
-        0.0,
+        0.13,
         5.133341
       ],
       "rotation": [
         0.70710677,
         1.8075186e-8,
-        -8.869497e-8,
+        -4.3742055e-8,
         0.70710677
       ],
       "scale": [
@@ -297,25 +297,25 @@
         1.0
       ],
       "animation": {
-        "clip": "idle",
-        "start": 484,
+        "clip": "death",
+        "start": 518,
         "offset": 0,
         "rate": 100,
         "from": {
-          "clip": "attack2",
-          "start": 474,
-          "offset": 1400,
+          "clip": "stagger",
+          "start": 501,
+          "offset": 0,
           "rate": 100
         },
-        "blend_start": 484,
-        "blend": 6
+        "blend_start": 518,
+        "blend": 3
       }
     },
     "player/flask": {
       "position": [
-        0.5,
-        1.2,
-        -0.3
+        -0.04,
+        -0.05,
+        -0.03
       ],
       "rotation": [
         0.0,
@@ -324,9 +324,9 @@
         1.0
       ],
       "scale": [
-        0.12,
-        0.25,
-        0.12
+        0.07,
+        0.14,
+        0.07
       ]
     },
     "sun": {

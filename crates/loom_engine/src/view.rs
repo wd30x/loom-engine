@@ -47,14 +47,32 @@ pub(crate) fn render_scene(
 ) -> Result<bool, RenderError> {
     let mut joints = Vec::new();
     let mut bones = skeleton.then(DebugDraw::new);
-    let draws = mesh_draws(scene, |model, world| {
-        models.draw(renderer, model, world, tick, &mut joints, bones.as_mut())
+    // Each drawn animated model's pose at `tick`, computed once: for its
+    // joint matrices, its skeleton lines and what hangs on its bones.
+    let poses: Vec<Option<Vec<Mat4>>> = scene
+        .ids()
+        .map(|id| match &scene.node(id).model {
+            Some(model) if scene.is_drawn(id) => models.pose(model, tick),
+            _ => None,
+        })
+        .collect();
+    let worlds = screen_worlds(scene, |parent, bone| {
+        let model = scene
+            .node(parent)
+            .model
+            .as_ref()
+            .expect("Scene::parse checks a node with a bone has a parent with a model");
+        models.anchor(model, poses[parent.index()].as_deref(), bone)
+    });
+    let draws = mesh_draws(scene, &worlds, |id, model, world| {
+        let pose = poses[id.index()].as_deref();
+        models.draw(renderer, model, world, pose, &mut joints, bones.as_mut())
     })?;
     let lines: Cow<'_, [LineDraw]> = match &bones {
         Some(bones) => [lines, &debug::line_draws(bones.lines())].concat().into(),
         None => lines.into(),
     };
-    let sprites = sprite_draws(renderer, scene, sheets)?;
+    let sprites = sprite_draws(renderer, scene, &worlds, sheets)?;
 
     let camera_id = scene.camera();
     let camera = scene
@@ -67,8 +85,7 @@ pub(crate) fn render_scene(
             .light
             .expect("Scene::light only returns nodes with a light");
         DirectionalLight {
-            direction: scene
-                .world_matrix(id)
+            direction: worlds[id.index()]
                 .transform_vector3(Vec3::NEG_Z)
                 .normalize(),
             color: light.color,
@@ -76,7 +93,7 @@ pub(crate) fn render_scene(
         }
     });
 
-    let view = scene.world_matrix(camera_id).inverse();
+    let view = worlds[camera_id.index()].inverse();
     let projection = projection(camera.projection);
     let (width, height) = renderer.size();
     let hud = match hud {
@@ -195,21 +212,50 @@ fn hud_draws(
     Ok(draws)
 }
 
+/// Every node's world matrix on screen, by node index
+/// (`docs/architecture.md` section 19, "挂在骨骼上"): exactly
+/// [`Scene::world_matrix`] for a node without a `bone` on its ancestor
+/// chain; otherwise the parent's screen matrix, times `anchor(parent,
+/// bone)` for a node with a `bone`, times the node's local matrix.
+/// `anchor` places a bone of the parent's model in model space.
+fn screen_worlds(scene: &Scene, mut anchor: impl FnMut(NodeId, &str) -> Mat4) -> Vec<Mat4> {
+    let mut worlds: Vec<Mat4> = Vec::new();
+    // Whether each node's chain has a bone, so its matrix differs from
+    // Scene::world_matrix.
+    let mut hung: Vec<bool> = Vec::new();
+    for id in scene.ids() {
+        let node = scene.node(id);
+        let parent_hung = node.parent.is_some_and(|p| hung[p.index()]);
+        let world = match (node.parent, &node.bone) {
+            (Some(parent), Some(bone)) => {
+                worlds[parent.index()] * anchor(parent, bone) * node.transform.matrix()
+            }
+            (Some(parent), None) if parent_hung => worlds[parent.index()] * node.transform.matrix(),
+            _ => scene.world_matrix(id),
+        };
+        worlds.push(world);
+        hung.push(parent_hung || node.bone.is_some());
+    }
+    worlds
+}
+
 /// One draw per drawn node with a mesh or a model ([`Scene::is_drawn`]),
-/// in scene pre-order; `model` gives the mesh of a model at its world
-/// matrix, and its joint range if it is animated.
+/// in scene pre-order, placed by its screen matrix in `worlds`
+/// ([`screen_worlds`]); `model` gives the mesh of node `id`'s model at its
+/// world matrix, and its joint range if it is animated.
 fn mesh_draws(
     scene: &Scene,
-    mut model: impl FnMut(&Model, Mat4) -> Result<(MeshId, Option<JointRange>), RenderError>,
+    worlds: &[Mat4],
+    mut model: impl FnMut(NodeId, &Model, Mat4) -> Result<(MeshId, Option<JointRange>), RenderError>,
 ) -> Result<Vec<DrawItem>, RenderError> {
     let mut draws = Vec::new();
     for id in scene.ids().filter(|&id| scene.is_drawn(id)) {
         let node = scene.node(id);
-        let world = scene.world_matrix(id);
+        let world = worlds[id.index()];
         let (mesh, color, joints) = match (&node.mesh, &node.model) {
             (Some(mesh), _) => (mesh_kind(mesh.kind).into(), mesh.color, None),
             (None, Some(m)) => {
-                let (mesh, joints) = model(m, world)?;
+                let (mesh, joints) = model(id, m, world)?;
                 (DrawMesh::Id(mesh), m.color, joints)
             }
             (None, None) => continue,
@@ -240,12 +286,13 @@ fn drawn_sprite_nodes(scene: &Scene) -> Vec<NodeId> {
 fn sprite_draws(
     renderer: &mut Renderer,
     scene: &Scene,
+    worlds: &[Mat4],
     sheets: &mut Sheets,
 ) -> Result<Vec<SpriteDraw>, RenderError> {
     let mut sprites = Vec::new();
     for id in drawn_sprite_nodes(scene) {
         let node = scene.node(id);
-        let world = scene.world_matrix(id);
+        let world = worlds[id.index()];
         if let Some(sprite) = &node.sprite {
             // The current tag: the game may have switched it (e.g. to a corpse).
             let (texture, rect) = sheets.draw(renderer, &sprite.sheet, sprite.tag())?;
@@ -574,7 +621,8 @@ mod tests {
         )
         .unwrap();
         let mut asked = Vec::new();
-        let draws = mesh_draws(&scene, |model, _| {
+        let worlds = screen_worlds(&scene, |_, _| unreachable!("no bones"));
+        let draws = mesh_draws(&scene, &worlds, |_, model, _| {
             asked.push(model.path.clone());
             let id = MeshId::from_index(if model.path == "k.glb" { 7 } else { 3 });
             let joints = (model.path == "j.glb").then_some(JointRange { first: 4, count: 2 });
@@ -620,11 +668,14 @@ mod tests {
         )
         .unwrap();
         let colors = |scene: &Scene| {
-            mesh_draws(scene, |_, _| unreachable!("the scene has no model"))
-                .unwrap()
-                .iter()
-                .map(|d| d.color)
-                .collect::<Vec<_>>()
+            let worlds = screen_worlds(scene, |_, _| unreachable!("no bones"));
+            mesh_draws(scene, &worlds, |_, _, _| {
+                unreachable!("the scene has no model")
+            })
+            .unwrap()
+            .iter()
+            .map(|d| d.color)
+            .collect::<Vec<_>>()
         };
         assert_eq!(colors(&scene), [Vec3::X, Vec3::Y, Vec3::Z]);
         let a = scene.find("a").unwrap();
@@ -649,5 +700,125 @@ mod tests {
             scene.set_visible(id, false);
         }
         assert_eq!(names(&scene), ["player", "zombie_2"]);
+    }
+
+    /// A model node `k` at (1, 0, 0) with `f` hung on its bone `b` 0.1 m
+    /// up, and `f`'s child `g` 0.5 m along X.
+    fn hung_scene() -> Scene {
+        Scene::parse(
+            r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+                (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+                (name: "k", position: (1.0, 0.0, 0.0), model: "k.glb", children: [
+                    (name: "f", bone: "b", position: (0.0, 0.1, 0.0), mesh: Cube, children: [
+                        (name: "g", position: (0.5, 0.0, 0.0), mesh: Cube),
+                    ]),
+                ]),
+                (name: "c", position: (0.0, 3.0, 0.0), mesh: Cube),
+            ])"#,
+        )
+        .unwrap()
+    }
+
+    /// The screen matrices of [`hung_scene`] with the two-bone model's b
+    /// in `pose` (`None`: the bind pose), and where `f` and `g` are.
+    fn hung_at(pose: Option<&[Mat4]>) -> (Vec<Mat4>, Vec3, Vec3) {
+        use crate::anim::tests::{two_bone_bin, two_bone_gltf};
+        let skeleton =
+            crate::model::import(&crate::model::tests::glb(&two_bone_gltf(), &two_bone_bin()))
+                .unwrap()
+                .skinned
+                .unwrap()
+                .skeleton;
+        let b = skeleton
+            .joints
+            .iter()
+            .position(|j| j.name.as_deref() == Some("b"))
+            .unwrap();
+        let scene = hung_scene();
+        let worlds = screen_worlds(&scene, |parent, bone| {
+            assert_eq!((scene.path(parent).as_str(), bone), ("k", "b"));
+            crate::anim::anchor(&skeleton, pose, b)
+        });
+        let at =
+            |path: &str| worlds[scene.find(path).unwrap().index()].transform_point3(Vec3::ZERO);
+        let (f, g) = (at("k/f"), at("k/f/g"));
+        (worlds, f, g)
+    }
+
+    #[test]
+    fn a_node_on_a_bone_in_the_bind_pose_hangs_at_the_joint() {
+        let (worlds, f, g) = hung_at(None);
+        // k's world, then to b's joint (0, 1, 0), then the node's own move.
+        let scene = hung_scene();
+        let want = Mat4::from_translation(Vec3::X)
+            * Mat4::from_translation(Vec3::Y)
+            * Mat4::from_translation(Vec3::new(0.0, 0.1, 0.0));
+        assert_eq!(worlds[scene.find("k/f").unwrap().index()], want);
+        assert!(f.abs_diff_eq(Vec3::new(1.0, 1.1, 0.0), 1e-6), "{f}");
+        assert!(g.abs_diff_eq(Vec3::new(1.5, 1.1, 0.0), 1e-6), "{g}");
+        // Outside the hung subtree: the scene tree's matrices, bit for bit.
+        for path in ["k", "c", "cam"] {
+            let id = scene.find(path).unwrap();
+            assert_eq!(worlds[id.index()], scene.world_matrix(id), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_node_on_a_turned_bone_turns_with_it_and_carries_its_children() {
+        use crate::anim::tests::{two_bone_bin, two_bone_gltf};
+        let skeleton =
+            crate::model::import(&crate::model::tests::glb(&two_bone_gltf(), &two_bone_bin()))
+                .unwrap()
+                .skinned
+                .unwrap()
+                .skeleton;
+        // b turned 90° about the model's Z.
+        let turned = crate::anim::pose(&skeleton, |bone| match bone {
+            "b" => (
+                glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                Vec3::ZERO,
+            ),
+            _ => (glam::Quat::IDENTITY, Vec3::ZERO),
+        });
+        let (_, f, g) = hung_at(Some(&turned));
+        // (1, 0, 0) + b's joint (0, 1, 0) + (0, 0.1, 0) turned: (-0.1, 0, 0).
+        assert!(f.abs_diff_eq(Vec3::new(0.9, 1.0, 0.0), 1e-6), "{f}");
+        // g's (0.5, 0, 0) turned too: (0, 0.5, 0).
+        assert!(g.abs_diff_eq(Vec3::new(0.9, 1.5, 0.0), 1e-6), "{g}");
+    }
+
+    #[test]
+    fn without_bones_every_draw_is_placed_exactly_by_the_scene_tree() {
+        for src in [
+            include_str!("../../../games/souls/src/g3_3_demo.scene.ron"),
+            include_str!("../../../assets/scenes/rogue.ron"),
+            include_str!("../../../assets/scenes/knight_attacks.ron"),
+            include_str!("../../../assets/scenes/anim_preview.ron"),
+        ] {
+            let scene = Scene::parse(src).unwrap();
+            let worlds = screen_worlds(&scene, |_, _| unreachable!("no bones"));
+            for id in scene.ids() {
+                let (a, b) = (worlds[id.index()], scene.world_matrix(id));
+                assert_eq!(
+                    a.to_cols_array().map(f32::to_bits),
+                    b.to_cols_array().map(f32::to_bits)
+                );
+            }
+            let draws =
+                mesh_draws(&scene, &worlds, |_, _, _| Ok((MeshId::from_index(0), None))).unwrap();
+            let drawn: Vec<NodeId> = scene
+                .ids()
+                .filter(|&id| scene.is_drawn(id))
+                .filter(|&id| scene.node(id).mesh.is_some() || scene.node(id).model.is_some())
+                .collect();
+            assert_eq!(draws.len(), drawn.len());
+            for (d, id) in draws.iter().zip(drawn) {
+                let want = scene.world_matrix(id);
+                assert_eq!(
+                    d.model.to_cols_array().map(f32::to_bits),
+                    want.to_cols_array().map(f32::to_bits)
+                );
+            }
+        }
     }
 }

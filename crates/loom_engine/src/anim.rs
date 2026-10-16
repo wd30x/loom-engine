@@ -106,6 +106,23 @@ pub(crate) fn pose(skeleton: &Skeleton, offsets: impl Fn(&str) -> (Quat, Vec3)) 
     model
 }
 
+/// Where a node hanging on joint `joint` of `skeleton` is placed, in model
+/// space, when the skeleton is in `pose` ([`pose`]; `None`: the bind pose):
+/// `A = translate(P_j's position) * rotate(P_j's rotation * P0_j's
+/// rotation⁻¹)`, with `P0` the bind pose, so its offset is along the
+/// model's axes (`docs/architecture.md` section 19, "挂在骨骼上").
+pub(crate) fn anchor(skeleton: &Skeleton, pose: Option<&[Mat4]>, joint: usize) -> Mat4 {
+    let bind = self::pose(skeleton, |_| (Quat::IDENTITY, Vec3::ZERO));
+    let (_, bind_rotation, bind_at) = bind[joint].to_scale_rotation_translation();
+    match pose {
+        None => Mat4::from_translation(bind_at),
+        Some(pose) => {
+            let (_, rotation, at) = pose[joint].to_scale_rotation_translation();
+            Mat4::from_rotation_translation(rotation * bind_rotation.inverse(), at)
+        }
+    }
+}
+
 /// The joint matrices of a pose ([`pose`]) of `skeleton`: each joint's
 /// model-space transform times its inverse bind matrix.
 pub(crate) fn joint_matrices(skeleton: &Skeleton, pose: &[Mat4]) -> Vec<Mat4> {

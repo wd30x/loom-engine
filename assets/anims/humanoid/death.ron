@@ -1,0 +1,81 @@
+// Death: going limp, 40 ticks, not looping; it holds its last pose
+// until the respawn (docs/architecture.md section 11, "模型和动画"). The
+// game lays the node flat on its face or its back on the tick of the
+// death, so the clip neither turns the whole body nor bends anything far
+// forward or back: from the first key on, the limbs stay near the plane
+// of the body, which lies on the ground. Nothing buckles at the knees.
+// Rotations are YXZ degrees about each bone's position along the model's
+// axes (+X right, +Y up, -Z forward); see assets/anims/README.md for which
+// way each bone turns.
+//
+// Tick 0: standing. 6: the arms go slack, the blade already turned to lie
+// along the body, the head starting to turn aside. 16: going limp. 30 and
+// 40: lying limp: arms and legs spread a little, the head turned aside,
+// the blade along the body toward the feet.
+(
+    length: 40,
+    looping: false,
+    bones: {
+        "head": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 5.0, 0.0)),
+            (16, (0.0, 12.0, 0.0)),
+            (30, (0.0, 25.0, 0.0)),
+            (40, (0.0, 25.0, 0.0)),
+        ]),
+        // Arms slack, then spread out flat (Z only, the elbows a little bent).
+        "upper_arm_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (5.0, 0.0, 10.0)),
+            (16, (0.0, 0.0, -15.0)),
+            (30, (0.0, 0.0, -30.0)),
+            (40, (0.0, 0.0, -30.0)),
+        ]),
+        "lower_arm_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (15.0, 0.0, 0.0)),
+            (16, (5.0, 0.0, 0.0)),
+            (30, (10.0, 0.0, 0.0)),
+            (40, (10.0, 0.0, 0.0)),
+        ]),
+        "upper_arm_r": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (5.0, 0.0, -10.0)),
+            (16, (0.0, 0.0, 15.0)),
+            (30, (0.0, 0.0, 30.0)),
+            (40, (0.0, 0.0, 30.0)),
+        ]),
+        "lower_arm_r": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (10.0, 0.0, 0.0)),
+            (16, (7.5, 0.0, 0.0)),
+            (30, (15.0, 0.0, 0.0)),
+            (40, (15.0, 0.0, 0.0)),
+        ]),
+        // The blade turned to lie along the body at once: the standing pose
+        // points it forward, which the flat node would push into the ground
+        // or up in the air.
+        "weapon": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (-46.3, -14.7, -4.8)),
+            (16, (-46.3, -14.7, -4.8)),
+            (30, (-46.3, -14.7, -4.8)),
+            (40, (-46.3, -14.7, -4.8)),
+        ]),
+        // Legs straight, a little apart.
+        "upper_leg_l": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, -2.0)),
+            (16, (0.0, 0.0, -4.0)),
+            (30, (0.0, 0.0, -8.0)),
+            (40, (0.0, 0.0, -8.0)),
+        ]),
+        "upper_leg_r": (rotation: [
+            (0, (0.0, 0.0, 0.0)),
+            (6, (0.0, 0.0, 2.0)),
+            (16, (0.0, 0.0, 4.0)),
+            (30, (0.0, 0.0, 8.0)),
+            (40, (0.0, 0.0, 8.0)),
+        ]),
+    },
+)

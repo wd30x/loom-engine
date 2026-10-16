@@ -408,7 +408,7 @@
     "player": {
       "position": [
         -5.281956,
-        -0.5,
+        0.0,
         5.713902
       ],
       "rotation": [
@@ -423,25 +423,25 @@
         1.0
       ],
       "animation": {
-        "clip": "idle",
-        "start": 780,
+        "clip": "sit",
+        "start": 790,
         "offset": 0,
         "rate": 100,
         "from": {
-          "clip": "run",
-          "start": 571,
+          "clip": "idle",
+          "start": 780,
           "offset": 0,
           "rate": 100
         },
-        "blend_start": 780,
+        "blend_start": 790,
         "blend": 6
       }
     },
     "player/flask": {
       "position": [
-        0.5,
-        1.2,
-        -0.3
+        -0.04,
+        -0.05,
+        -0.03
       ],
       "rotation": [
         0.0,
@@ -450,9 +450,9 @@
         1.0
       ],
       "scale": [
-        0.12,
-        0.25,
-        0.12
+        0.07,
+        0.14,
+        0.07
       ]
     },
     "stake": {

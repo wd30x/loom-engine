@@ -1,0 +1,34 @@
+// Preview of the souls knight's clips for being hit, dying, drinking and resting
+// (docs/architecture.md sections 11 and 19), rendered without a game, in place; the clips
+// play once and then hold their last pose. A film strip of it is smoke H16:
+//   loom view --scene assets/scenes/knight_rest.ron --ticks 3,10,20,30,45,60 --size 720x400 --screenshot out/knight_rest.png
+// Four knights face loom's forward (-Z), seen from the front, a little to their left and
+// above; left to right on screen: stagger, death, drink, sit. The staggered and the dead
+// knight are placed the way the game shows them hit from the front: tipped back 20 degrees,
+// and lying on its back, lifted 0.13 m (section 11, "模型和动画"). The drinking knight holds
+// the flask, hung on its left hand; without a game nothing hides it.
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (-2.2, 2.6, -6.4), look_at: (0.0, 0.8, 0.0),
+            camera: (fov_y: 45.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 150.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (30.0, 1.0, 30.0), color: (0.35, 0.35, 0.38)),
+        (name: "stagger", position: (2.85, 0.0, 0.0), rotation: (20.0, 0.0, 0.0),
+            model: "assets/models/humanoid.glb",
+            animation: (clips: [("stagger", "assets/anims/humanoid/stagger.ron")], play: "stagger")),
+        (name: "death", position: (0.95, 0.13, 0.0), rotation: (90.0, 0.0, 0.0),
+            model: "assets/models/humanoid.glb",
+            animation: (clips: [("death", "assets/anims/humanoid/death.ron")], play: "death")),
+        (name: "drink", position: (-0.95, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("drink", "assets/anims/humanoid/drink.ron")], play: "drink"), children: [
+                // The estus flask, hung on the left hand (docs/architecture.md section 19).
+                (name: "flask", position: (-0.04, -0.05, -0.03), scale: (0.07, 0.14, 0.07),
+                    bone: "hand_l", mesh: Cube, color: (0.9, 0.7, 0.2)),
+            ]),
+        (name: "sit", position: (-2.85, 0.0, 0.0), model: "assets/models/humanoid.glb",
+            animation: (clips: [("sit", "assets/anims/humanoid/sit.ron")], play: "sit")),
+    ],
+)

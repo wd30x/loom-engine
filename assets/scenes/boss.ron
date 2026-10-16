@@ -25,6 +25,10 @@
                 ("attack2", "assets/anims/humanoid/attack2.ron"),
                 ("attack3", "assets/anims/humanoid/attack3.ron"),
                 ("heavy", "assets/anims/humanoid/heavy.ron"),
+                ("stagger", "assets/anims/humanoid/stagger.ron"),
+                ("death", "assets/anims/humanoid/death.ron"),
+                ("drink", "assets/anims/humanoid/drink.ron"),
+                ("sit", "assets/anims/humanoid/sit.ron"),
             ], play: "idle"),
             character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),
             // Stamina, roll, sprint and backstep (docs/architecture.md section 11). Every value
@@ -88,9 +92,10 @@
                 ("bloodstain_range", 1.5),       // meters: how close the character picks its souls back up
             ],
             children: [
-                // The estus flask: shown only while drinking.
-                (name: "flask", position: (0.5, 1.2, -0.3), scale: (0.12, 0.25, 0.12),
-                    mesh: Cube, color: (0.9, 0.7, 0.2)),
+                // The estus flask, held in the left hand (hung on the bone
+                // hand_l): shown only while drinking.
+                (name: "flask", position: (-0.04, -0.05, -0.03), scale: (0.07, 0.14, 0.07),
+                    bone: "hand_l", mesh: Cube, color: (0.9, 0.7, 0.2)),
             ]),
         (name: "pillars", children: [
             (name: "a", position: (-7.0, 1.5, -8.0), scale: (1.0, 3.0, 1.0), mesh: Cube,

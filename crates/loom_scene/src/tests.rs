@@ -95,9 +95,12 @@ fn demo_scene_parses_into_the_character_scene_tree() {
     assert!(player.mesh.is_none());
     let model = player.model.as_ref().unwrap();
     assert_eq!(model.path, "assets/models/humanoid.glb");
-    assert_eq!(model.animation.as_ref().unwrap().clips.len(), 12);
+    assert_eq!(model.animation.as_ref().unwrap().clips.len(), 16);
     assert_eq!(player.character.unwrap().capsule, Some((0.35, 1.8)));
     assert_eq!(player.transform.position, Vec3::ZERO);
+    // The flask hangs on the knight's left hand.
+    let flask = scene.node(scene.find("player/flask").unwrap());
+    assert_eq!(flask.bone.as_deref(), Some("hand_l"));
 }
 
 #[test]
@@ -1260,4 +1263,40 @@ fn animation_rules_are_scene_errors_naming_the_node() {
         let err = Scene::parse(&scene_with(node)).unwrap_err();
         assert_eq!(err.to_string(), format!("node \"k\": {problem}"), "{node}");
     }
+}
+
+#[test]
+fn bone_is_read_for_a_child_of_a_model() {
+    let scene = Scene::parse(&scene_with(
+        r#"(name: "k", model: "k.glb", children: [
+            (name: "flask", bone: "hand_l", position: (0.0, -0.05, 0.0), mesh: Cube)])"#,
+    ))
+    .unwrap();
+    let flask = scene.node(scene.find("k/flask").unwrap());
+    assert_eq!(flask.bone.as_deref(), Some("hand_l"));
+    assert_eq!(scene.node(scene.find("k").unwrap()).bone, None);
+}
+
+#[test]
+fn bone_must_not_be_empty_and_needs_a_model_on_the_parent() {
+    let p = node_problem(
+        r#"(name: "k", model: "k.glb", children: [(name: "f", bone: "", mesh: Cube)])"#,
+        "k/f",
+    );
+    assert_eq!(p, Problem::EmptyField("bone"));
+    assert_eq!(p.to_string(), "bone must not be empty");
+    for nodes in [
+        r#"(name: "g", mesh: Cube, children: [(name: "f", bone: "hand_l")])"#,
+        r#"(name: "g", children: [(name: "f", bone: "hand_l")])"#,
+    ] {
+        let p = node_problem(nodes, "g/f");
+        assert_eq!(p, Problem::BoneWithoutParentModel);
+        assert_eq!(p.to_string(), "bone needs a model on the parent node");
+    }
+    // A root node has no parent at all; a model on the node itself is not
+    // its parent's.
+    assert_eq!(
+        node_problem(r#"(name: "f", bone: "hand_l", model: "k.glb")"#, "f"),
+        Problem::BoneWithoutParentModel
+    );
 }

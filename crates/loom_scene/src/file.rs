@@ -66,6 +66,12 @@ pub(crate) struct NodeDesc {
     /// Every component greater than 0. Default (1, 1, 1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<Triple>,
+    /// A bone of the parent node's model: the node and its subtree move
+    /// with it on screen, offset along the model's axes. Not empty; the
+    /// parent needs a `model`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1))]
+    pub bone: Option<String>,
     /// At most one of `mesh`, `model`, `sprite` and `tilemap`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh: Option<MeshKind>,
@@ -284,6 +290,7 @@ pub(crate) struct NodePatch {
     pub rotation: Option<Triple>,
     pub look_at: Option<Triple>,
     pub scale: Option<Triple>,
+    pub bone: Option<String>,
     pub mesh: Option<MeshKind>,
     pub model: Option<String>,
     pub animation: Option<AnimationDesc>,

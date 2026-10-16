@@ -23,6 +23,10 @@
                 ("attack2", "assets/anims/humanoid/attack2.ron"),
                 ("attack3", "assets/anims/humanoid/attack3.ron"),
                 ("heavy", "assets/anims/humanoid/heavy.ron"),
+                ("stagger", "assets/anims/humanoid/stagger.ron"),
+                ("death", "assets/anims/humanoid/death.ron"),
+                ("drink", "assets/anims/humanoid/drink.ron"),
+                ("sit", "assets/anims/humanoid/sit.ron"),
             ], play: "idle"),
             character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),
             // Stamina, roll, sprint and backstep (docs/architecture.md section 11). Every value
@@ -86,9 +90,9 @@
                 ("bloodstain_range", 1.5),       // meters: how close the character picks its souls back up
             ],
             children: [
-                // 原素瓶：只在喝的时候显示
-                (name: "flask", position: (0.5, 1.2, -0.3), scale: (0.12, 0.25, 0.12),
-                    mesh: Cube, color: (0.9, 0.7, 0.2)),
+                // 原素瓶：握在左手里（挂在骨骼 hand_l 上），只在喝的时候显示
+                (name: "flask", position: (-0.04, -0.05, -0.03), scale: (0.07, 0.14, 0.07),
+                    bone: "hand_l", mesh: Cube, color: (0.9, 0.7, 0.2)),
             ]),
         (name: "pillars", children: [
             (name: "a", position: (3.0, 1.5, -4.0), scale: (1.0, 3.0, 1.0), mesh: Cube, color: (0.6, 0.58, 0.52),

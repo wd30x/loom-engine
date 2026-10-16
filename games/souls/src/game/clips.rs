@@ -6,7 +6,7 @@ use glam::{Vec2, Vec3};
 use loom_scene::{Play, Scene};
 
 use crate::GameError;
-use crate::health::Condition;
+use crate::health::{Condition, Health};
 use crate::moves::{Action, Attack, AttackPhase, Params, default_of};
 
 use super::Game;
@@ -21,11 +21,17 @@ pub(super) const SPRINT_CLIP_SPEED: f32 = 6.0;
 const ROLL_BLEND: u64 = 2;
 /// Ticks the blend into an attack's startup takes.
 const STARTUP_BLEND: u64 = 3;
+/// Ticks the blend into a stagger takes.
+const STAGGER_BLEND: u64 = 2;
+/// Ticks the blend into death takes.
+const DEATH_BLEND: u64 = 3;
+/// Ticks the blend into a drink takes.
+const DRINK_BLEND: u64 = 4;
 /// Ticks every other blend takes.
 const BLEND: u64 = 6;
 
 /// The clips a character's animation must have.
-pub(super) const CLIPS: [&str; 12] = [
+pub(super) const CLIPS: [&str; 16] = [
     "idle",
     "run",
     "run_left",
@@ -38,6 +44,10 @@ pub(super) const CLIPS: [&str; 12] = [
     "attack2",
     "attack3",
     "heavy",
+    "stagger",
+    "death",
+    "drink",
+    "sit",
 ];
 
 /// The action lengths the clips are written for: the props' defaults.
@@ -48,6 +58,9 @@ pub(super) struct ClipLengths {
     /// Startup, active and recovery ticks.
     attack: [u32; 3],
     heavy: [u32; 3],
+    stagger: u32,
+    /// Ticks up to and including the heal, and after it.
+    drink: [u32; 2],
 }
 
 impl ClipLengths {
@@ -56,11 +69,14 @@ impl ClipLengths {
         let phases = |action: &str| {
             ["startup", "active", "recovery"].map(|p| ticks(&format!("{action}_{p}_ticks")))
         };
+        let heal = ticks("flask_heal_tick");
         Self {
             roll: ticks("roll_ticks"),
             backstep: ticks("backstep_ticks"),
             attack: phases("attack"),
             heavy: phases("heavy"),
+            stagger: ticks("stagger_ticks"),
+            drink: [heal, ticks("flask_ticks") - heal],
         }
     }
 }
@@ -121,14 +137,14 @@ fn stretch(written: u32, actual: u32) -> u32 {
     rate(100.0 * written as f32 / actual as f32)
 }
 
-/// The clip for the state at the end of a tick: `player`, its health
-/// `condition`, and the tick's movement input `v` (at most 1 long) and
-/// direction `dir` (section 11, "每个 tick 选片段").
+/// The clip for the state at the end of a tick: `player`, its `health`,
+/// and the tick's movement input `v` (at most 1 long) and direction `dir`
+/// (section 11, "每个 tick 选片段").
 pub(super) fn choose(
     clips: &Clips,
     params: &Params,
     player: &PlayerState,
-    condition: Condition,
+    health: &Health,
     v: Vec2,
     dir: Vec3,
 ) -> Choice {
@@ -138,7 +154,53 @@ pub(super) fn choose(
         rate,
         restart: None,
     };
+    // A death or a stagger sets its countdown full on the tick it happens
+    // (the countdown runs at the start of a tick, the hits later), so a
+    // full countdown at the end of the tick is that tick, a stagger over a
+    // stagger included.
+    let now = &health.now;
+    match now.state {
+        Condition::Dead => {
+            return Choice {
+                clip: "death",
+                rate: 100,
+                restart: (now.state_ticks == health.revive_ticks).then_some((0, DEATH_BLEND)),
+            };
+        }
+        Condition::Stagger => {
+            return Choice {
+                clip: "stagger",
+                rate: stretch(lengths.stagger, health.stagger_ticks),
+                restart: (now.state_ticks == health.stagger_ticks).then_some((0, STAGGER_BLEND)),
+            };
+        }
+        Condition::Ok => {}
+    }
     match player.action {
+        Action::Drink => {
+            // Two parts like an attack's: lifting up to the heal, then
+            // drinking and lowering.
+            let [lift, lower] = lengths.drink;
+            let heal = params.flask_heal_tick;
+            let (rate, restart) = if player.action_tick <= heal {
+                (
+                    stretch(lift, heal),
+                    (player.action_tick == 1).then_some((0, DRINK_BLEND)),
+                )
+            } else {
+                (
+                    stretch(lower, params.flask_ticks - heal),
+                    (player.action_tick == heal + 1).then_some((u64::from(lift) * 100, 0)),
+                )
+            };
+            Choice {
+                clip: "drink",
+                rate,
+                restart,
+            }
+        }
+        // Played from the tick it sits down: the clip changes then.
+        Action::Sit => steady("sit", 100),
         Action::Roll | Action::Backstep => {
             let (clip, written, actual) = if player.action == Action::Roll {
                 ("roll", lengths.roll, params.roll.ticks)
@@ -175,7 +237,7 @@ pub(super) fn choose(
             "sprint",
             rate(100.0 * params.sprint_speed / SPRINT_CLIP_SPEED),
         ),
-        Action::Idle if condition == Condition::Ok && v.length_squared() > 0.0 => {
+        Action::Idle if v.length_squared() > 0.0 => {
             let f = player.facing;
             let forward = Vec3::new(-libm::sinf(f), 0.0, -libm::cosf(f));
             let right = Vec3::new(libm::cosf(f), 0.0, -libm::sinf(f));
@@ -194,7 +256,7 @@ pub(super) fn choose(
                 rate(100.0 * v.length() * clips.run_speed / RUN_CLIP_SPEED),
             )
         }
-        Action::Idle | Action::Sit | Action::Drink => steady("idle", 100),
+        Action::Idle => steady("idle", 100),
     }
 }
 
@@ -227,7 +289,7 @@ impl Game {
             clips,
             &self.params,
             &self.state.player,
-            self.health.now.state,
+            &self.health,
             self.move_input.0,
             self.move_input.1,
         );

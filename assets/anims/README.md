@@ -54,7 +54,6 @@ loom view --scene assets/scenes/anim_preview.ron --ticks 0,15,30,45 --size 480x3
 |---|---|---|---|
 | `humanoid/idle.ron` | 120 tick（2 秒） | 是 | 站立呼吸：胸口后仰 2° 再回来，头反向 1.5° 让视线保持水平；hips 上下 6 mm；两臂往前、往里微摆（左臂 2°/3°，持剑的右臂 1°/2°）；剑尖最低约离地 0.3 m |
 | `humanoid/walk.ron` | 60 tick（1 秒） | 是 | 原地走一个完整步态，节点不动：<br>• 大腿前后 ±25°；<br>• 膝盖在后摆和收腿时弯曲，最大 45°；<br>• 脚在前时接近水平，在后时脚尖朝下约 45°（蹬地）；<br>• hips 在两腿分开时下沉 5 cm，交错时回到 -1 cm，一个循环起伏两次；<br>• 两臂和腿反向摆：左臂 ±20°，持剑的右臂 ±10°。<br>tick 0 左腿在前，tick 30 右腿在前 |
-
 | `humanoid/run.ron` | 40 tick | 是 | 往前跑，按 4 m/s 写（`RUN_CLIP_SPEED`）：一个循环两步，每步 20 tick、1.33 m，一秒 3 步。每只脚着地 8 tick（左脚 0–8，右脚 20–28），从髋前 0.27 m 落地、到髋后 0.27 m 蹬离，其余时间双脚离地。身体前倾 12°，着地中段最低（下沉 6 cm），腾空最高。手臂和腿反向摆，持剑的右臂摆得少，剑朝前下方 |
 | `humanoid/sprint.ron` | 36 tick | 是 | 冲刺，按 6 m/s 写（`SPRINT_CLIP_SPEED`）：每步 18 tick、1.8 m，着地 6 tick，前后各 0.3 m。前倾 20°，手臂摆得更大，剑拖在手后方偏下 |
 | `humanoid/run_back.ron` | 40 tick | 是 | 锁定时往后跑，按 4 m/s 写：步子和 `run` 一样长，脚在髋后落地（前脚掌先着地）、在髋前蹬离。上身直立，持剑戒备（剑竖在胸前，左手在旁边） |
@@ -65,6 +64,10 @@ loom view --scene assets/scenes/anim_preview.ron --ticks 0,15,30,45 --size 480x3
 | `humanoid/attack2.ron` | 30 tick | 否 | 第 2 刀：齐腰从右往左平扫 |
 | `humanoid/attack3.ron` | 30 tick | 否 | 第 3 刀：从右肩上方往左下的大斜劈，左脚往前跨一步 |
 | `humanoid/heavy.ron` | 50 tick | 否 | 重攻击：双手握剑（左手 10–35 握在右手下面），前摇里举到右肩后上方、身体后仰蓄力，出招时从右上往左下重劈，左脚跨出，后摇较长 |
+| `humanoid/stagger.ron` | 30 tick | 否 | 硬直：3 被打得上身后仰、手臂甩开；8 右脚往后退半步、膝盖发软；15 稳住；22 回到戒备（剑竖在胸前），脚停在退到的位置；30 站稳。游戏还会把节点倾斜 20°，片段自己不整体倾斜 |
+| `humanoid/death.ron` | 40 tick | 否 | 死亡：6 手臂松开、剑已经转到贴着身体、头开始偏向一边；16 瘫软；30、40 躺着：四肢稍微张开，头偏向一边，剑沿着身体指向脚。游戏在死亡那个 tick 就把节点放倒成仰躺或俯卧，所以片段从第一个关键帧起，四肢都只在身体所在的平面附近动，不屈膝、不弯腰（E7.5 审查时定） |
+| `humanoid/drink.ron` | 60 tick | 否 | 喝原素瓶：10、20 左手把瓶子往上举；30 瓶口正对面甲的缝；38、45 仰头，瓶子倾向嘴边；52 放下；60 站立。右手的剑一直垂在身侧。瓶子是挂在 `hand_l` 上的节点，不在片段里；各关键帧瓶口的位置写在文件开头的注释里 |
+| `humanoid/sit.ron` | 40 tick | 否 | 篝火坐下：10 下蹲，脚不动；20 蹲到最低，前脚掌着地；30 盘腿坐下（左小腿在右小腿前面），剑横放在腿上，左手搭在左膝；40 坐定，头微微低下。片段自己把髋部放低 0.74 m，到贴近地面，游戏不再降低节点 |
 
 每个循环片段的每个通道在 tick 0 和 `length` 写同样的值，循环时首尾相接。
 
@@ -78,10 +81,13 @@ souls 的动作片段按**默认参数**的长度写（`docs/architecture.md` �
 | `backstep` | 0–20 | `backstep_ticks` 20 |
 | `attack1`–`attack3` | 前摇 0–10、出招 10–14、后摇 14–30 | `attack_startup_ticks` 10、`attack_active_ticks` 4、`attack_recovery_ticks` 16 |
 | `heavy` | 前摇 0–22、出招 22–27、后摇 27–50 | `heavy_startup_ticks` 22、`heavy_active_ticks` 5、`heavy_recovery_ticks` 23 |
+| `stagger` | 0–30 | `stagger_ticks` 30 |
+| `drink` | 举瓶 0–30、喝和放下 30–60 | `flask_heal_tick` 30、`flask_ticks` 60（第二段 30 tick 是两者之差） |
+| `death`、`sit` | 0–40 | 不随参数伸缩，按速度 100 播完后停在最后一格 |
 | `run` 系列 | 整个循环 | `RUN_CLIP_SPEED` 4 m/s |
 | `sprint` | 整个循环 | `SPRINT_CLIP_SPEED` 6 m/s |
 
-攻击片段的分界 tick（10、14；22、27）上都有关键帧，每一段单独拉伸时，分界处的姿势不变。四个攻击的出招都是剑从角色右边扫到左边（命中判定是从右往左扫过的扇形），出招各帧剑尖的高度见各文件开头的注释。
+攻击片段的分界 tick（10、14；22、27）和 `drink` 的 30 上都有关键帧，每一段单独拉伸时，分界处的姿势不变。四个攻击的出招都是剑从角色右边扫到左边（命中判定是从右往左扫过的扇形），出招各帧剑尖的高度见各文件开头的注释。
 
 ### 怎么写的
 
@@ -94,9 +100,10 @@ souls 的动作片段按**默认参数**的长度写（`docs/architecture.md` �
 ```
 loom view --scene assets/scenes/knight_moves.ron --ticks 0,10,20,30 --size 720x480 --screenshot out/knight_moves.png
 loom view --scene assets/scenes/knight_attacks.ron --ticks 6,12,20,25,40 --size 720x480 --screenshot out/knight_attacks.png
+loom view --scene assets/scenes/knight_rest.ron --ticks 3,10,20,30,45,60 --size 720x400 --screenshot out/knight_rest.png
 ```
 
-后一张是 smoke H15。
+后两张分别是 smoke H15、H16。`knight_rest` 里硬直和死亡的骑士按游戏里被正面打中的样子摆放：向后倾斜 20°、仰面躺着并抬高 0.13 m；喝瓶的骑士左手挂着瓶子。
 
 ## 从 Blender 的动画转片段
 

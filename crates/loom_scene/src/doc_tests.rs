@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-const SCENES: [(&str, &str); 11] = [
+const SCENES: [(&str, &str); 12] = [
     (
         "souls demo",
         include_str!("../../../games/souls/src/demo.scene.ron"),
@@ -43,6 +43,10 @@ const SCENES: [(&str, &str); 11] = [
     (
         "knight attacks",
         include_str!("../../../assets/scenes/knight_attacks.ron"),
+    ),
+    (
+        "knight rest",
+        include_str!("../../../assets/scenes/knight_rest.ron"),
     ),
 ];
 
@@ -573,4 +577,32 @@ fn edit_node_sets_and_unsets_animation() {
         .clone()
         .unwrap();
     assert_eq!(model.animation, None);
+}
+
+#[test]
+fn bone_is_written_after_scale_and_can_be_unset() {
+    let src = r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+        (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+        (name: "k", model: "k.glb", children: [
+            (mesh: Cube, bone: "hand_l", scale: (0.1, 0.2, 0.1), name: "flask"),
+        ]),
+    ])"#;
+    let mut doc = SceneDoc::parse(src).unwrap();
+    assert_eq!(
+        ron_of(&doc, "k/flask"),
+        "(
+    name: \"flask\",
+    scale: (0.1, 0.2, 0.1),
+    bone: \"hand_l\",
+    mesh: Cube,
+)
+"
+    );
+    doc.edit_node("k/flask", None, &["bone".to_owned()], &no_props())
+        .unwrap();
+    assert!(!ron_of(&doc, "k/flask").contains("bone"));
+    doc.edit_node("k/flask", Some(r#"bone: "hand_r""#), &[], &no_props())
+        .unwrap();
+    assert!(ron_of(&doc, "k/flask").contains("bone: \"hand_r\""));
+    assert!(doc.build().is_ok());
 }

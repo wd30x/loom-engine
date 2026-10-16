@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use std::f32::consts::FRAC_PI_2;
+
 use glam::{Mat4, Quat, Vec3};
 use loom_core::debug::DebugDraw;
 use loom_render::SkinnedVertex;
@@ -456,4 +458,93 @@ fn animated_node_errors_name_the_node_the_clip_and_the_file() {
     ))
     .unwrap();
     Models::load(&scene).expect("a static model needs no skin");
+}
+
+/// The index of joint `name` of `skeleton`.
+fn joint(skeleton: &Skeleton, name: &str) -> usize {
+    skeleton
+        .joints
+        .iter()
+        .position(|j| j.name.as_deref() == Some(name))
+        .unwrap()
+}
+
+/// The skeleton of [`two_bone_gltf`].
+fn two_bone_skeleton() -> Skeleton {
+    import(&glb(&two_bone_gltf(), &two_bone_bin()))
+        .unwrap()
+        .skinned
+        .unwrap()
+        .skeleton
+}
+
+#[test]
+fn anchor_in_the_bind_pose_only_moves_to_the_joint() {
+    let skeleton = two_bone_skeleton();
+    // b's bind pose is at (0, 1, 0), turned 45° about Z; the anchor keeps
+    // the model's axes.
+    let b = joint(&skeleton, "b");
+    let bind = anchor(&skeleton, None, b);
+    assert_eq!(bind, Mat4::from_translation(Vec3::Y));
+    let still = pose(&skeleton, |_| (Quat::IDENTITY, Vec3::ZERO));
+    let posed = anchor(&skeleton, Some(&still), b);
+    assert!(posed.abs_diff_eq(bind, 1e-6), "{posed}");
+}
+
+#[test]
+fn anchor_turns_with_its_bone_along_the_model_axes() {
+    let skeleton = two_bone_skeleton();
+    // b turned 90° about the model's Z: an offset of 0.1 m up points to
+    // -X.
+    let turned = pose(&skeleton, |bone| match bone {
+        "b" => (Quat::from_rotation_z(FRAC_PI_2), Vec3::ZERO),
+        _ => (Quat::IDENTITY, Vec3::ZERO),
+    });
+    let b = joint(&skeleton, "b");
+    let a = anchor(&skeleton, Some(&turned), b);
+    let at = a.transform_point3(Vec3::new(0.0, 0.1, 0.0));
+    assert!(at.abs_diff_eq(Vec3::new(-0.1, 1.0, 0.0), 1e-6), "{at}");
+    // a moved 0.5 m along X carries b and the anchor with it.
+    let moved = pose(&skeleton, |bone| match bone {
+        "a" => (Quat::IDENTITY, Vec3::new(0.5, 0.0, 0.0)),
+        _ => (Quat::IDENTITY, Vec3::ZERO),
+    });
+    let at = anchor(&skeleton, Some(&moved), b).transform_point3(Vec3::ZERO);
+    assert!(at.abs_diff_eq(Vec3::new(0.5, 1.0, 0.0), 1e-6), "{at}");
+}
+
+#[test]
+fn bone_errors_name_the_node_the_bone_and_the_model() {
+    let dir = test_dir("bones");
+    let model = dir.join("m.glb");
+    std::fs::write(&model, glb(&two_bone_gltf(), &two_bone_bin())).unwrap();
+    let mut unskinned = two_bone_gltf();
+    unskinned["nodes"][3]
+        .as_object_mut()
+        .unwrap()
+        .remove("skin");
+    unskinned.as_object_mut().unwrap().remove("skins");
+    let plain = dir.join("plain.glb");
+    std::fs::write(&plain, glb(&unskinned, &two_bone_bin())).unwrap();
+    let (model, plain) = (forward(&model), forward(&plain));
+    let scene = |model: &str, bone: &str| {
+        Scene::parse(&format!(
+            r#"(version: 1, camera: "cam", ambient: (0.2, 0.2, 0.2), nodes: [
+                (name: "cam", camera: (fov_y: 60.0, near: 0.1, far: 100.0)),
+                (name: "k", model: {model:?}, children: [(name: "f", bone: {bone:?}, mesh: Cube)]),
+            ])"#
+        ))
+        .expect("a valid scene")
+    };
+    let error = |scene: &Scene| format!("{:#}", Models::load(scene).unwrap_err());
+    // A static model with a skin takes bones: its bind pose.
+    Models::load(&scene(&model, "b")).expect("a bone of the skin");
+    assert_eq!(
+        error(&scene(&plain, "b")),
+        format!("node \"k/f\": bone \"b\": model {plain}: the model has no skin")
+    );
+    assert_eq!(
+        error(&scene(&model, "tail")),
+        format!("node \"k/f\": bone \"tail\": model {model}: not a joint of the model's skin")
+    );
 }

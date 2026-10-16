@@ -9,7 +9,7 @@ use loom_core::input::{ActionState, TickInput};
 use loom_scene::{Animation, ClipTime};
 
 use super::clips::{CLIPS, choose};
-use super::show::{DEAD_DIM, FLASH_TICKS, FLASH_TINT};
+use super::show::{DEAD_DIM, DEAD_LIFT, FLASH_TICKS, FLASH_TINT, front_or_back};
 use super::state::PlayerState;
 use super::*;
 
@@ -64,10 +64,17 @@ const TARGET: &str = r#"(name: "t", position: (0.0, 0.0, -5.0), props: [("lock_h
 /// A stake 2 m behind swinging all around once, hitting the character
 /// for `damage` on tick 5.
 fn stake(damage: u32) -> String {
+    stake_at((0.0, 2.0), damage, 4, 1000)
+}
+
+/// A stake at `(x, 0, z)` swinging all around, hitting the character for
+/// `damage` (and the default impact, which staggers it) on tick
+/// `startup + 1` of every round of `startup + 1 + recovery` ticks.
+fn stake_at((x, z): (f32, f32), damage: u32, startup: u32, recovery: u32) -> String {
     format!(
-        r#"(name: "stake", position: (0.0, 0.0, 2.0), props: [("swing_damage", {damage}),
-        ("swing_startup_ticks", 4), ("swing_active_ticks", 1), ("swing_recovery_ticks", 1000),
-        ("swing_arc", 360), ("swing_reach", 10)]),"#
+        r#"(name: "stake", position: ({x:?}, 0.0, {z:?}), props: [("swing_damage", {damage}),
+        ("swing_startup_ticks", {startup}), ("swing_active_ticks", 1),
+        ("swing_recovery_ticks", {recovery}), ("swing_arc", 360), ("swing_reach", 10)]),"#
     )
 }
 
@@ -84,14 +91,18 @@ impl Run {
         }
     }
 
-    /// One tick with exactly `actions` held and `axes` pushed; what the
-    /// character's model plays after it.
-    fn hold(&mut self, actions: &[&str], axes: &[(&str, f32)]) -> Animation {
+    /// One tick with exactly `actions` held and `axes` pushed.
+    fn step(&mut self, actions: &[&str], axes: &[(&str, f32)]) {
         self.input.advance(TickInput {
             actions: actions.iter().map(|&a| a.to_owned()).collect(),
             axes: axes.iter().map(|&(a, v)| (a.to_owned(), v)).collect(),
         });
         self.game.tick(&self.input);
+    }
+
+    /// [`Run::step`]; what the character's model plays after it.
+    fn hold(&mut self, actions: &[&str], axes: &[(&str, f32)]) -> Animation {
+        self.step(actions, axes);
         self.animation()
     }
 
@@ -211,19 +222,22 @@ fn a_character_capsule_without_a_model_is_rejected() {
 }
 
 #[test]
-fn an_animation_missing_one_of_the_twelve_clips_is_rejected() {
-    let form = format!(
-        r#"model: "m.glb", {},
-           character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),"#,
-        animation().replace(
-            r#"("run_back", "assets/anims/humanoid/run_back.ron"), "#,
-            ""
-        )
-    );
-    assert_eq!(
-        form_error(&form),
-        r#"the character "player": its animation needs a clip "run_back""#
-    );
+fn an_animation_missing_one_of_the_sixteen_clips_is_rejected() {
+    assert_eq!(CLIPS.len(), 16);
+    for clip in ["run_back", "drink"] {
+        let form = format!(
+            r#"model: "m.glb", {},
+               character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),"#,
+            animation().replace(
+                &format!(r#"("{clip}", "assets/anims/humanoid/{clip}.ron"), "#),
+                ""
+            )
+        );
+        assert_eq!(
+            form_error(&form),
+            format!(r#"the character "player": its animation needs a clip "{clip}""#)
+        );
+    }
 }
 
 #[test]
@@ -426,23 +440,27 @@ fn a_move_as_much_forward_as_sideways_picks_run() {
     let clips = game.clips.unwrap();
     let player = game.state.player.clone();
     // Facing -Z: forward is -Z, right is +X.
-    let pick =
-        |dir: Vec3| choose(&clips, &game.params, &player, Condition::Ok, Vec2::ONE, dir).clip;
+    let pick = |dir: Vec3| choose(&clips, &game.params, &player, &game.health, Vec2::ONE, dir).clip;
     assert_eq!(pick(Vec3::new(0.5, 0.0, -0.5)), "run");
     assert_eq!(pick(Vec3::new(-0.5, 0.0, -0.5)), "run");
     assert_eq!(pick(Vec3::new(0.5, 0.0, 0.5)), "run_right");
     assert_eq!(pick(Vec3::new(-0.5, 0.0, 0.5)), "run_left");
     assert_eq!(pick(Vec3::new(0.4, 0.0, 0.5)), "run_back");
-    // Staggered or dead: idle, whatever the input.
-    let staggered = choose(
-        &clips,
-        &game.params,
-        &player,
-        Condition::Stagger,
-        Vec2::ONE,
-        Vec3::NEG_Z,
-    );
-    assert_eq!((staggered.clip, staggered.rate), ("idle", 100));
+    // Staggered or dead: their own clips, whatever the input.
+    for (state, clip) in [(Condition::Stagger, "stagger"), (Condition::Dead, "death")] {
+        let mut health = game.health;
+        health.now.state = state;
+        health.now.state_ticks = 10;
+        let c = choose(
+            &clips,
+            &game.params,
+            &player,
+            &health,
+            Vec2::ONE,
+            Vec3::NEG_Z,
+        );
+        assert_eq!((c.clip, c.rate, c.restart), (clip, 100, None));
+    }
 }
 
 #[test]
@@ -503,6 +521,238 @@ fn modeled_character_flashes_red_when_hit_and_darkens_dead() {
     }
     assert!(run.game.health.is_dead());
     assert_eq!(color(&run), Vec3::ONE * DEAD_DIM);
-    // Dead: idle plays, whatever the input.
-    assert_eq!(run.hold(&[], &[(MOVE_Y, 1.0)]).playing, "idle");
+    // Dead: death plays, whatever the input.
+    assert_eq!(run.hold(&[], &[(MOVE_Y, 1.0)]).playing, "death");
+}
+
+// ------------------------------------------------ stagger, death, drink, sit
+
+/// A bonfire 1 m ahead, in reach.
+const BONFIRE: &str =
+    r#"(name: "bonfire", position: (0.0, 0.0, -1.0), props: [("bonfire_range", 1.5)]),"#;
+
+#[test]
+fn death_plays_from_the_tick_of_the_death_and_idle_follows_the_respawn() {
+    let mut run = Run::new("", &stake(10_000));
+    let mut a = run.idle();
+    while run.tick() < 5 {
+        assert_eq!(a.playing, "idle");
+        a = run.idle();
+    }
+    // Killed on tick 5.
+    assert!(run.game.health.is_dead());
+    assert_eq!(a.playing, "death");
+    assert_eq!((a.start, a.offset, a.rate), (5, 0, 100));
+    assert_eq!((a.blend_start, a.blend), (5, 3));
+    assert_eq!(a.from, Some(time("idle", 0, 0, 100)));
+    // Lying dead, pushed or not, nothing more is called.
+    for _ in 0..10 {
+        assert_eq!(run.hold(&[], &[(MOVE_Y, 1.0)]), a);
+    }
+    let mut b = run.idle();
+    while run.game.health.is_dead() {
+        assert_eq!(b, a);
+        b = run.idle();
+    }
+    // The respawn, 120 ticks (the default respawn_ticks) later.
+    assert_eq!(run.tick(), 125);
+    assert_eq!((b.playing.as_str(), b.start, b.blend), ("idle", 125, 6));
+    assert_eq!(b.from, Some(time("death", 5, 0, 100)));
+}
+
+#[test]
+fn every_stagger_restarts_the_stagger_clip_stretched_to_stagger_ticks() {
+    // Hits, each staggering, on ticks 5 and 19: the second while still
+    // staggered by the first.
+    let nodes = stake_at((0.0, 2.0), 1, 4, 9);
+    for (props, rate) in [("", 100), (r#"("stagger_ticks", 60)"#, 50)] {
+        let mut run = Run::new(props, &nodes);
+        let mut starts = Vec::new();
+        for _ in 0..25 {
+            let a = run.idle();
+            if run.game.health.now.state == Condition::Stagger && a.start == run.tick() {
+                starts.push((a.start, a.offset, a.rate, a.blend, a.from.unwrap().clip));
+            }
+        }
+        assert_eq!(
+            starts,
+            [
+                (5, 0, rate, 2, "idle".to_owned()),
+                (19, 0, rate, 2, "stagger".to_owned())
+            ],
+            "{props}"
+        );
+    }
+}
+
+/// Presses the drink key and drinks to the end; the animation on each
+/// tick, the first the press.
+fn drink(run: &mut Run) -> Vec<Animation> {
+    let mut seen = vec![run.hold(&[DRINK], &[])];
+    assert_eq!(
+        (run.player().action, run.player().action_tick),
+        (Action::Drink, 1)
+    );
+    while run.player().action == Action::Drink {
+        seen.push(run.idle());
+    }
+    seen
+}
+
+#[test]
+fn drink_plays_its_two_parts_from_their_offsets_stretched_to_the_heal_tick() {
+    let mut run = Run::new(r#"("flask_heal_tick", 20), ("flask_ticks", 60)"#, "");
+    let first = run.tick() + 1;
+    let seen = drink(&mut run);
+    assert_eq!(seen.len(), 60);
+    // Tick 1 lifts at 100 × 30 / 20; tick 21, after the heal, drinks and
+    // lowers at 100 × 30 / 40 from clip time 30.
+    let (lift, lower) = (&seen[0], &seen[20]);
+    assert_eq!(
+        (lift.playing.as_str(), lift.start, lift.offset, lift.rate),
+        ("drink", first, 0, 150)
+    );
+    assert_eq!((lift.blend_start, lift.blend), (first, 4));
+    assert_eq!(
+        (
+            lower.playing.as_str(),
+            lower.start,
+            lower.offset,
+            lower.rate
+        ),
+        ("drink", first + 20, 3000, 75)
+    );
+    assert_eq!((lower.blend_start, lower.blend), (first + 20, 0));
+    // Inside a part nothing is called; the heal tick shows 19 × 150.
+    assert!(seen[1..20].iter().all(|a| a == lift));
+    assert!(seen[21..59].iter().all(|a| a == lower));
+    assert_eq!(seen[19].time_at(first + 19), 2850);
+    // On the last tick the drink is over and idle blends in.
+    assert_eq!((seen[59].playing.as_str(), seen[59].blend), ("idle", 6));
+}
+
+#[test]
+fn drink_healing_on_its_last_tick_plays_a_single_part() {
+    let mut run = Run::new(r#"("flask_heal_tick", 60), ("flask_ticks", 60)"#, "");
+    let seen = drink(&mut run);
+    assert_eq!(seen.len(), 60);
+    let a = &seen[0];
+    assert_eq!(
+        (a.playing.as_str(), a.offset, a.rate, a.blend),
+        ("drink", 0, 50, 4)
+    );
+    assert!(seen[1..59].iter().all(|b| b == a));
+    assert_eq!(seen[59].playing, "idle");
+}
+
+#[test]
+fn sit_plays_from_the_tick_the_character_sits_down() {
+    let mut run = Run::new("", BONFIRE);
+    run.idle();
+    let a = run.hold(&[INTERACT], &[]);
+    let now = run.tick();
+    assert_eq!(run.player().action, Action::Sit);
+    assert_eq!(
+        (a.playing.as_str(), a.start, a.offset, a.rate),
+        ("sit", now, 0, 100)
+    );
+    assert_eq!((a.blend_start, a.blend), (now, 6));
+    for _ in 0..60 {
+        assert_eq!(run.idle(), a);
+    }
+    // A push stands it up, and it runs from there.
+    let b = run.hold(&[], &[(MOVE_Y, 1.0)]);
+    assert_eq!(run.player().action, Action::Idle);
+    assert_eq!(
+        (b.playing.as_str(), b.start, b.blend),
+        ("run", run.tick(), 6)
+    );
+}
+
+#[test]
+fn modeled_character_sits_without_sinking() {
+    let mut run = Run::new("", BONFIRE);
+    run.hold(&[INTERACT], &[]);
+    assert_eq!(run.player().action, Action::Sit);
+    let node = run.game.scene.transform(run.game.player);
+    assert_eq!(node.position, Vec3::ZERO);
+}
+
+#[test]
+fn a_hit_while_drinking_plays_stagger_or_death_instead_of_drink() {
+    // The stake hits on tick 11, the drink's tick 11.
+    for (damage, clip, blend) in [(1, "stagger", 2), (10_000, "death", 3)] {
+        let mut run = Run::new("", &stake_at((0.0, 2.0), damage, 10, 1000));
+        let mut a = run.hold(&[DRINK], &[]);
+        assert_eq!(a.playing, "drink");
+        while run.tick() < 11 {
+            a = run.idle();
+        }
+        assert_eq!(run.player().action, Action::Idle);
+        assert_eq!((a.playing.as_str(), a.start, a.blend), (clip, 11, blend));
+        assert_eq!(a.from.map(|f| f.clip), Some("drink".to_owned()));
+    }
+}
+
+#[test]
+fn dead_modeled_character_lies_on_its_face_or_back_lifted_whatever_side_it_was_hit_from() {
+    // Facing -Z, killed on tick 5 by a stake behind, in front, on the
+    // right a little ahead and on the left a little behind.
+    for (at, face_down) in [
+        ((0.0, 2.0), true),
+        ((0.0, -2.0), false),
+        ((2.0, -0.3), false),
+        ((-2.0, 0.3), true),
+    ] {
+        let mut run = Run::new("", &stake_at(at, 10_000, 4, 1000));
+        for _ in 0..5 {
+            run.idle();
+        }
+        assert!(run.game.health.is_dead(), "{at:?}");
+        let node = run.game.scene.transform(run.game.player);
+        assert_eq!(node.position, Vec3::new(0.0, DEAD_LIFT, 0.0), "{at:?}");
+        // Its shoulders stay level; its head points ahead, lying on its
+        // face, or behind, lying on its back.
+        let (right, up) = (node.rotation * Vec3::X, node.rotation * Vec3::Y);
+        assert!(right.abs_diff_eq(Vec3::X, 1e-6), "{at:?}: {right}");
+        let head = if face_down { Vec3::NEG_Z } else { Vec3::Z };
+        assert!(up.abs_diff_eq(head, 1e-6), "{at:?}: {up}");
+    }
+    // A capsule still tips over away from the hit, from where it stands.
+    let mut run = Run {
+        game: Game::from_source(&scene_of(
+            "mesh: Capsule(radius: 0.35, height: 1.8), \
+             character: (run_speed: 4.0, turn_speed: 720.0),",
+            "",
+            &stake_at((2.0, -0.3), 10_000, 4, 1000),
+        ))
+        .unwrap(),
+        input: ActionState::new(),
+    };
+    for _ in 0..5 {
+        run.step(&[], &[]);
+    }
+    assert!(run.game.health.is_dead());
+    let node = run.game.scene.transform(run.game.player);
+    assert_eq!(node.position, Vec3::ZERO);
+    let away = Vec3::new(-2.0, 0.0, 0.3).normalize();
+    let up = node.rotation * Vec3::Y;
+    assert!(up.abs_diff_eq(away, 1e-6), "{up}");
+}
+
+#[test]
+fn front_or_back_picks_the_side_nearer_to_the_fall() {
+    use std::f32::consts::PI;
+    let facing = 1.0;
+    // 80 degrees either side of the front, the back, then 103 degrees.
+    for (fall, want) in [
+        (1.0, 1.0),
+        (1.0 + 1.4, 1.0),
+        (1.0 - 1.4, 1.0),
+        (1.0 + PI, 1.0 + PI),
+        (1.0 + 1.8, 1.0 + PI),
+        (1.0 - 1.8, 1.0 + PI),
+    ] {
+        assert_eq!(front_or_back(fall, facing), want, "{fall}");
+    }
 }

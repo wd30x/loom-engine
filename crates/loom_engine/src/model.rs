@@ -591,20 +591,83 @@ impl Models {
             };
             clips.load(scene, id, animation, &skinned.skeleton)?;
         }
+        // Nodes hung on a bone of their parent's model.
+        for id in scene.ids() {
+            let Some(bone) = &scene.node(id).bone else {
+                continue;
+            };
+            let parent = scene
+                .node(id)
+                .parent
+                .expect("Scene::parse checks a node with a bone has a parent");
+            let model = scene
+                .node(parent)
+                .model
+                .as_ref()
+                .expect("Scene::parse checks a node with a bone has a parent with a model");
+            let context = || format!("node {:?}: bone {bone:?}", scene.path(id));
+            let skinned = match &models[&model.path].skinned {
+                Ok(skinned) => skinned,
+                Err(why) => {
+                    return Err(anyhow::anyhow!("model {}: {why}", model.path))
+                        .with_context(context);
+                }
+            };
+            if !skinned
+                .skeleton
+                .joints
+                .iter()
+                .any(|j| j.name.as_deref() == Some(bone.as_str()))
+            {
+                return Err(anyhow::anyhow!(
+                    "model {}: not a joint of the model's skin",
+                    model.path
+                ))
+                .with_context(context);
+            }
+        }
         Ok(Self { models, clips })
+    }
+
+    /// The model-space pose of animated `model` (one [`Models::load`] read)
+    /// at `tick`; `None` for a model without an animation.
+    pub fn pose(&self, model: &loom_scene::Model, tick: u64) -> Option<Vec<Mat4>> {
+        let animation = model.animation.as_ref()?;
+        let skinned = self.models[&model.path]
+            .skinned
+            .as_ref()
+            .expect("Models::load checked an animated model can be skinned");
+        Some(self.clips.pose(&skinned.skeleton, animation, tick))
+    }
+
+    /// Where a node hanging on `bone` of `model` is placed in model space,
+    /// with `model` in `pose` ([`Models::pose`]; `None`: its bind pose)
+    /// ([`anim::anchor`]). [`Models::load`] checked the bone.
+    pub fn anchor(&self, model: &loom_scene::Model, pose: Option<&[Mat4]>, bone: &str) -> Mat4 {
+        let skeleton = &self.models[&model.path]
+            .skinned
+            .as_ref()
+            .expect("Models::load checked a model with bones hung on it can be skinned")
+            .skeleton;
+        let joint = skeleton
+            .joints
+            .iter()
+            .position(|j| j.name.as_deref() == Some(bone))
+            .expect("Models::load checked the bone is a joint of the skin");
+        anim::anchor(skeleton, pose, joint)
     }
 
     /// What to draw for `model`, a model [`Models::load`] read, placed by
     /// `world`: its mesh, uploaded on first use; for an animated model, its
-    /// skinned mesh and the range of its joint matrices at `tick`, which
-    /// are appended to `joints`, and with `skeleton` its bones in that same
-    /// pose.
+    /// skinned mesh posed by `pose` ([`Models::pose`]) and the range of its
+    /// joint matrices, which are appended to `joints`, and with `skeleton`
+    /// its bones in that same pose.
     pub fn draw(
         &mut self,
         renderer: &mut Renderer,
         model: &loom_scene::Model,
         world: Mat4,
-        tick: u64,
+        pose: Option<&[Mat4]>,
         joints: &mut Vec<Mat4>,
         skeleton: Option<&mut DebugDraw>,
     ) -> Result<(MeshId, Option<JointRange>), RenderError> {
@@ -612,7 +675,7 @@ impl Models {
             .models
             .get_mut(&model.path)
             .expect("Models::load read every model of the scene");
-        let Some(animation) = &model.animation else {
+        let Some(pose) = pose else {
             if let Some(id) = loaded.id {
                 return Ok((id, None));
             }
@@ -632,12 +695,11 @@ impl Models {
                 id
             }
         };
-        let pose = self.clips.pose(&skinned.skeleton, animation, tick);
         if let Some(draw) = skeleton {
-            anim::draw_skeleton(&skinned.skeleton, &pose, world, draw);
+            anim::draw_skeleton(&skinned.skeleton, pose, world, draw);
         }
         let first = u32::try_from(joints.len()).expect("far fewer than 2^32 joints");
-        joints.extend(anim::joint_matrices(&skinned.skeleton, &pose));
+        joints.extend(anim::joint_matrices(&skinned.skeleton, pose));
         let count = u32::try_from(skinned.skeleton.joints.len()).expect("a skin's joints fit u16");
         Ok((id, Some(JointRange { first, count })))
     }

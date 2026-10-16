@@ -12,7 +12,7 @@ use super::common::{
 /// The bonfire: walk to it (diagonally 1-99, then along +Z 100-129), sit
 /// (E on 140), stand (E on 160), walk to the stake (170-349 along +X,
 /// 350-432 along -Z) and stand in front of it until it kills.
-const BONFIRE_SCRIPT: &str = concat!(
+pub(super) const BONFIRE_SCRIPT: &str = concat!(
     "(version: 1, tick_hz: 60, events: [",
     "(tick: 140, action: \"interact\", down: true), (tick: 141, action: \"interact\", down: false), ",
     "(tick: 160, action: \"interact\", down: true), (tick: 161, action: \"interact\", down: false)",

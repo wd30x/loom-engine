@@ -5,10 +5,12 @@ use std::fs;
 
 use serde_json::Value;
 
+use super::bonfire::BONFIRE_SCRIPT;
 use super::common::{
     assert_f32_bits, g2_3_demo, repo_root, run_headless_replay, run_headless_replay_on, test_dir,
     write_file,
 };
+use super::flask::FLASK_SCRIPT;
 
 /// The souls moves script: tap roll while running forward (a roll from
 /// tick 2), stop, tap roll again (a backstep from tick 41), then hold roll
@@ -411,8 +413,8 @@ fn souls_stake_hits_staggers_is_rolled_through_then_kills_and_the_character_resp
 }
 
 /// The built-in scene with its character drawn the old way: a capsule
-/// mesh of the same size, no model (`docs/architecture.md` section 11,
-/// "模型和动画").
+/// mesh of the same size, no model, so its flask hangs on no bone
+/// (`docs/architecture.md` section 11, "模型和动画").
 fn demo_as_capsule() -> String {
     let src = fs::read_to_string(repo_root().join("games/souls/src/demo.scene.ron"))
         .expect("the demo scene");
@@ -420,11 +422,13 @@ fn demo_as_capsule() -> String {
     let character =
         "character: (run_speed: 4.0, turn_speed: 720.0, capsule: (radius: 0.35, height: 1.8)),";
     let end = src.find(character).expect("the character line") + character.len();
+    let bone = r#"bone: "hand_l", "#;
+    assert_eq!(src.matches(bone).count(), 1, "the flask's bone");
     format!(
         "{}            mesh: Capsule(radius: 0.35, height: 1.8), color: (0.8, 0.25, 0.2),
                      character: (run_speed: 4.0, turn_speed: 720.0),{}",
         &src[..model],
-        &src[end..]
+        src[end..].replace(bone, "")
     )
 }
 
@@ -433,10 +437,14 @@ fn modeled_and_capsule_characters_dump_the_same_game_state() {
     let dir = test_dir("modeled_and_capsule_characters_dump_the_same_game_state");
     let capsule = write_file(&dir, "capsule.ron", &demo_as_capsule());
     // Lock-on, a light combo and a kill; running, hits, a stagger, a roll,
-    // a death and the respawn.
+    // a death and the respawn; sitting down at the bonfire, standing up, a
+    // death and the respawn there; drinks, one cut short by a hit, and
+    // sitting at the end.
     for (name, script, frames) in [
         ("kill", SOULS_KILL_SCRIPT, "450"),
         ("stake", SOULS_STAKE_SCRIPT, "763"),
+        ("bonfire", BONFIRE_SCRIPT, "900"),
+        ("flask", FLASK_SCRIPT, "800"),
     ] {
         let script = write_file(&dir, &format!("{name}.ron"), script);
         let dumps = [None, Some(capsule.as_path())].map(|scene| {

@@ -103,6 +103,8 @@ pub enum Problem {
     EmptyField(&'static str),
     #[error("animation needs a model on the same node")]
     AnimationWithoutModel,
+    #[error("bone needs a model on the parent node")]
+    BoneWithoutParentModel,
     #[error("animation play {0:?} is not one of its clips")]
     AnimationPlayUnknown(String),
     #[error("animation clip {0:?} is given twice")]
@@ -512,6 +514,10 @@ pub struct Node {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     pub transform: Transform,
+    /// A bone of the parent's model the node hangs on, on screen only
+    /// (`docs/architecture.md` section 19, "挂在骨骼上"); the parent has a
+    /// model. Never empty.
+    pub bone: Option<String>,
     pub mesh: Option<Mesh>,
     pub model: Option<Model>,
     pub camera: Option<Camera>,
@@ -806,6 +812,9 @@ impl Scene {
     }
 
     /// `parent world matrix * local matrix`, computed along the parent chain.
+    /// Scene-tree only: it does not include bone poses (a node with a
+    /// `bone` is placed as if it hung on its parent directly); rendering
+    /// adds those (`docs/architecture.md` section 19, "挂在骨骼上").
     pub fn world_matrix(&self, id: NodeId) -> Mat4 {
         let node = &self.nodes[id.0];
         let local = node.transform.matrix();
@@ -917,6 +926,9 @@ impl<'a> Builder<'a> {
             }
             let id = NodeId(self.nodes.len());
             let node = node_from_desc(desc, parent).map_err(fail)?;
+            if node.bone.is_some() && parent.is_none_or(|p| self.nodes[p.0].model.is_none()) {
+                return Err(fail(Problem::BoneWithoutParentModel));
+            }
             if node.collider.is_some() {
                 if let Some(ancestor) = moving_ancestor {
                     return Err(fail(Problem::ColliderAncestor(ancestor.to_owned())));
@@ -1064,6 +1076,9 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
     if desc.model.as_deref() == Some("") {
         return Err(Problem::EmptyField("model"));
     }
+    if desc.bone.as_deref() == Some("") {
+        return Err(Problem::EmptyField("bone"));
+    }
     let animation = desc.animation.as_ref().map(animation).transpose()?;
     if animation.is_some() && desc.model.is_none() {
         return Err(Problem::AnimationWithoutModel);
@@ -1094,6 +1109,7 @@ fn node_from_desc(desc: &NodeDesc, parent: Option<NodeId>) -> Result<Node, Probl
             rotation,
             scale,
         },
+        bone: desc.bone.clone(),
         mesh: desc.mesh.map(|kind| Mesh {
             kind,
             color: mesh_color,

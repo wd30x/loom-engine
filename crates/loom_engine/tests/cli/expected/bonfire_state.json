@@ -424,24 +424,24 @@
       ],
       "animation": {
         "clip": "idle",
-        "start": 420,
+        "start": 900,
         "offset": 0,
         "rate": 100,
         "from": {
-          "clip": "run",
-          "start": 353,
+          "clip": "death",
+          "start": 780,
           "offset": 0,
           "rate": 100
         },
-        "blend_start": 420,
+        "blend_start": 900,
         "blend": 6
       }
     },
     "player/flask": {
       "position": [
-        0.5,
-        1.2,
-        -0.3
+        -0.04,
+        -0.05,
+        -0.03
       ],
       "rotation": [
         0.0,
@@ -450,9 +450,9 @@
         1.0
       ],
       "scale": [
-        0.12,
-        0.25,
-        0.12
+        0.07,
+        0.14,
+        0.07
       ]
     },
     "stake": {
