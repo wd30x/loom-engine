@@ -1,7 +1,7 @@
 //! Which clip an enemy's body model plays, picked each tick from the state
-//! at its end (`docs/architecture.md` section 11, "模型和动画"). Only for
-//! an enemy with a model on its child named `body`; a capsule plays
-//! nothing.
+//! at its end (`docs/architecture.md` section 11, "Boss 的模型和动画").
+//! Only for an enemy with a model on its child named `body`; a capsule
+//! plays nothing.
 
 use crate::enemy::{EnemyCondition, EnemyParams, MoveKind};
 use crate::health::{Condition, Health};
@@ -16,7 +16,7 @@ use super::roles::Enemy;
 pub(super) const WALK_CLIP_SPEED: f32 = 2.5;
 
 /// The clips an enemy's body animation must have.
-pub(super) const ENEMY_CLIPS: [&str; 10] = [
+pub(super) const ENEMY_CLIPS: [&str; 12] = [
     "idle",
     "walk",
     "sweep",
@@ -25,6 +25,8 @@ pub(super) const ENEMY_CLIPS: [&str; 10] = [
     "combo",
     "combo_even",
     "combo_odd",
+    "spin",
+    "roar",
     "stagger",
     "death",
 ];
@@ -111,8 +113,7 @@ pub(super) fn choose(e: &Enemy, health: &Health) -> Choice {
     }
     let p = e.params();
     match (e.state, e.current) {
-        // The spin has no clip before E7.7: it stands.
-        (EnemyCondition::Attack, Some(kind)) if kind != MoveKind::Spin => {
+        (EnemyCondition::Attack, Some(kind)) => {
             let t = e.move_tick;
             let (clip, part, actual) = piece(p, kind, t);
             let written = written(clip);
@@ -130,9 +131,31 @@ pub(super) fn choose(e: &Enemy, health: &Health) -> Choice {
                 restart: first.then_some((offset, blend)),
             }
         }
+        // Two parts, each stretched on its own: up to the blast, then
+        // after it.
+        (EnemyCondition::Roar, _) => {
+            let roar = e.phase2.expect("only an enemy with a phase 2 roars");
+            let t = e.move_tick;
+            // The clip is written for the defaults.
+            let (blast, length) = (
+                default_ticks("roar_blast_tick"),
+                default_ticks("roar_ticks"),
+            );
+            let (offset, written, actual) = if t <= roar.blast_tick {
+                (0, blast, roar.blast_tick)
+            } else {
+                (blast, length - blast, roar.roar_ticks - roar.blast_tick)
+            };
+            let first = t == 1 || t == roar.blast_tick + 1;
+            let blend = if t == 1 { STARTUP_BLEND } else { 0 };
+            Choice {
+                clip: "roar",
+                rate: stretch(written, actual),
+                restart: first.then_some((u64::from(offset) * 100, blend)),
+            }
+        }
         (EnemyCondition::Chase, _) => steady("walk", rate(100.0 * p.step * 60.0 / WALK_CLIP_SPEED)),
-        // Standing, turning on the spot, resting; the roar has no clip
-        // before E7.7.
+        // Standing, turning on the spot, resting.
         _ => steady("idle", 100),
     }
 }

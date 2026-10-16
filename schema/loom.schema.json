@@ -3198,7 +3198,7 @@
             "an enemy needs hurt_radius, hurt_height, hp and lock_height, and is not a swinger",
             "an enemy: enemy_speed / 60, lunge_distance / lunge_active_ticks and, with phase2_at, enemy_speed / 60 / phase2_speed_scale are less than hurt_radius",
             "an enemy has no collider in its subtree",
-            "an enemy has no model itself; a model on its child named body has an animation with every clip an enemy plays (idle, walk, sweep, cleave, lunge, combo, combo_even, combo_odd, stagger, death)",
+            "an enemy has no model itself; a model on its child named body has an animation with every clip an enemy plays (idle, walk, sweep, cleave, lunge, combo, combo_even, combo_odd, spin, roar, stagger, death)",
             "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a lock target, hurtbox, swinger or enemy",
             "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children",
             "an enemy with boss_bar 1: its display_name has only the characters 32 to 126"

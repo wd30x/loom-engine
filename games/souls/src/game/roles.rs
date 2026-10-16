@@ -152,7 +152,7 @@ pub(super) struct Enemy {
 }
 
 /// An enemy's child named `body` with a model, which plays a clip for what
-/// the enemy does (`docs/architecture.md` section 11, "模型和动画").
+/// the enemy does (`docs/architecture.md` section 11, "Boss 的模型和动画").
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Body {
     pub(super) id: NodeId,
@@ -199,7 +199,7 @@ pub(super) struct Phase2 {
     pub(super) at: f32,
     params: EnemyParams,
     pub(super) roar_ticks: u32,
-    blast_tick: u32,
+    pub(super) blast_tick: u32,
     pub(super) damage: f32,
     pub(super) impact: f32,
     pub(super) reach: f32,
@@ -313,7 +313,7 @@ pub(crate) const NODE_CONSTRAINTS: [&str; 14] = [
     "an enemy has no collider in its subtree",
     "an enemy has no model itself; a model on its child named body has an animation with every \
      clip an enemy plays (idle, walk, sweep, cleave, lunge, combo, combo_even, combo_odd, \
-     stagger, death)",
+     spin, roar, stagger, death)",
     "a bonfire (a node with bonfire_range) is a root node, and not the camera, and not also a \
      lock target, hurtbox, swinger or enemy",
     "the bloodstain marker (the root node named bloodstain) has a mesh, and no props or children",

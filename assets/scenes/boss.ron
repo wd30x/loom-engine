@@ -208,7 +208,7 @@
             ],
             children: [
                 // The warden model plays a clip for what the boss does (docs/architecture.md
-                // section 11, "模型和动画"); the hurt props above are what is hit and collides.
+                // section 11, "Boss 的模型和动画"); the hurt props above are what is hit and collides.
                 (name: "body", model: "assets/models/boss.glb",
                     animation: (clips: [
                         ("idle", "assets/anims/boss/idle.ron"),
@@ -219,6 +219,8 @@
                         ("combo", "assets/anims/boss/combo.ron"),
                         ("combo_even", "assets/anims/boss/combo_even.ron"),
                         ("combo_odd", "assets/anims/boss/combo_odd.ron"),
+                        ("spin", "assets/anims/boss/spin.ron"),
+                        ("roar", "assets/anims/boss/roar.ron"),
                         ("stagger", "assets/anims/boss/stagger.ron"),
                         ("death", "assets/anims/boss/death.ron"),
                     ], play: "idle")),

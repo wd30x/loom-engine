@@ -692,6 +692,19 @@ Test-Check 'H17' 'view --ticks films the boss move clips, the same bytes twice' 
     $script:detail = "sha256 $((Get-FileHash "$out/h17_a.png").Hash)"
 }
 
+Test-Check 'H18' 'view --ticks films the boss roar and spin clips, the same bytes twice' {
+    foreach ($n in 'a', 'b') {
+        $r = Invoke-Loom @('view', '--scene', 'assets/scenes/boss_phase2_moves.ron', '--ticks', '14,20,40,50,53,56,59,90',
+            '--size', '600x420', '--screenshot', "$out/h18_$n.png")
+        Assert-ExitOk $r
+        Assert-True (($r.Json.ticks -join ',') -eq '14,20,40,50,53,56,59,90') "ticks are $($r.Json.ticks -join ',')"
+    }
+    Assert-SameBytes "$out/h18_a.png" "$out/h18_b.png"
+    $size = Get-PngSize "$out/h18_a.png"
+    Assert-True ($size -eq '4800x420') "PNG is $size"
+    $script:detail = "sha256 $((Get-FileHash "$out/h18_a.png").Hash)"
+}
+
 # ---------------------------------------------------------------- W: window
 
 if (-not $HeadlessOnly) {

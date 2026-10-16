@@ -119,6 +119,8 @@ loom view --scene assets/scenes/knight_rest.ron --ticks 3,10,20,30,45,60 --size 
 | `boss/combo.ron` | 75 tick | 否 | 连击第 1 刀：25 举到右肩上方，26–30 从右肩斜劈到左下 |
 | `boss/combo_even.ron` | 62 tick | 否 | 连击偶数刀：从左下开始，12 蓄在左下，13–17 往右上撩 |
 | `boss/combo_odd.ron` | 62 tick | 否 | 连击第 3 刀以后的奇数刀：从右上开始，12 蓄到右肩上方，13–17 斜劈到左下，同 `combo` |
+| `boss/spin.ron` | 102 tick | 否 | 回旋斩（E7.7 起，只在二阶段出）：22 平端起戟、往右转；50 蓄力：身体转向右边、再往右拧，双手平端的戟伸向身后；51–62 每 tick 一个关键帧，整个身体靠 `root` 原地向左转一整圈，每格 30°，戟伸在右边，从身后经右、前、左扫回身后；75 余势再转 50°；90 回正、放低戟；102 站立 |
+| `boss/roar.ron` | 70 tick | 否 | 咆哮（E7.7 起，进入二阶段时）：14 蓄力：下蹲、前俯、低头，戟收到身前、左拳在胸前；17、19 挺身；20 冲击波：直起后仰、仰头，两臂向上张开成 V 字，戟高举在右边（戟尖约 4.2 m）；32–54 保持咆哮、微微摇晃；62 放下手臂；70 站立 |
 | `boss/stagger.ron` | 30 tick | 否 | 硬直：3 被打得后仰、手臂甩开；8 右脚退半步；22 回到戒备；30 站稳 |
 | `boss/death.ron` | 40 tick | 否 | 死亡：四肢只在身体平面里动，戟平放在右腿旁、指向脚；30、40 躺着，四肢稍微张开，头偏向一边。游戏把 `body` 抬高 `enemy_dead_lift`（`boss.ron` 写 0.3 m，戟离身体平面最远 0.16 m） |
 
@@ -131,19 +133,22 @@ loom view --scene assets/scenes/knight_rest.ron --ticks 3,10,20,30,45,60 --size 
 | `lunge` | 0–35、35–45、45–80 | `lunge_*` 35、10、35 |
 | `combo` | 0–25、25–30、30–75 | `combo_*` 25、5、45 |
 | `combo_even`、`combo_odd` | 刀前的间隔 0–12、出招 12–17、后摇 17–62 | `combo_gap_ticks` 12，`combo_active_ticks` 5、`combo_recovery_ticks` 45 |
+| `spin` | 0–50、50–62、62–102 | `spin_*` 50、12、40 |
+| `roar` | 冲击波前 0–20、冲击波后 20–70 | `roar_blast_tick` 20、`roar_ticks` 70 |
 | `stagger` | 0–30 | `stagger_ticks` 30 |
 | `death` | 0–40 | 不随参数伸缩 |
 | `walk` | 整个循环 | `WALK_CLIP_SPEED` 2.5 m/s |
 
-- 分界 tick 上都有关键帧；出招期间每 tick 一个关键帧。四个招式的出招都从右往左扫（`combo_even` 从左往右），和命中判定的扫掠方向一致。
+- 分界 tick 上都有关键帧；出招期间每 tick 一个关键帧。招式的出招都从右往左扫（`combo_even` 从左往右，`spin` 是向左转一整圈），和命中判定的扫掠方向一致。
 - 连击首尾相接：`combo` 第 30 格 = `combo_even` 第 0 格，`combo_even` 第 17 格 = `combo_odd` 第 0 格，`combo_odd` 第 12 格 = `combo` 第 25 格。
 
 **怎么写的**：同 humanoid，用没进仓库的草稿工具（按引擎的偏移规则做正向运动学、两段骨骼 IK）算出关键帧，片段文件本身是源头。
 
-预览（smoke H17，左到右：sweep、cleave、lunge、combo 第 1 刀）：
+预览（smoke H17，左到右：sweep、cleave、lunge、combo 第 1 刀；H18，左到右：roar、spin，节点是二阶段的暗红）：
 
 ```
 loom view --scene assets/scenes/boss_moves.ron --ticks 20,30,35,40,47,60 --size 800x420 --screenshot out/boss_moves.png
+loom view --scene assets/scenes/boss_phase2_moves.ron --ticks 14,20,40,50,53,56,59,90 --size 600x420 --screenshot out/boss_phase2_moves.png
 ```
 
 ## 从 Blender 的动画转片段

@@ -37,7 +37,7 @@ const SIT_DROP: f32 = 0.5;
 pub(super) const DEAD_LIFT: f32 = 0.13;
 
 /// What an enemy's scene colors are multiplied by in phase 2: dark red.
-const PHASE2_TINT: Vec3 = Vec3::new(1.0, 0.3, 0.3);
+pub(super) const PHASE2_TINT: Vec3 = Vec3::new(1.0, 0.3, 0.3);
 
 /// The rotation of a node with health whose standing rotation is `base`:
 /// `base` itself while `Ok` (bit for bit), otherwise tipped over towards

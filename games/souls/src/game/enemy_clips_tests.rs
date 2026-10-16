@@ -11,7 +11,9 @@ use loom_core::input::{ActionState, TickInput};
 use loom_scene::{Animation, NodeId};
 
 use super::enemy_clips::ENEMY_CLIPS;
-use super::show::{DEAD_DIM, FLASH_TICKS, FLASH_TINT, front_or_back, pose};
+use super::show::{
+    DEAD_DIM, FLASH_TICKS, FLASH_TINT, PHASE2_TINT, WARN_COLOR, front_or_back, pose,
+};
 use super::*;
 use crate::enemy::EnemyCondition;
 
@@ -153,9 +155,14 @@ impl Run {
             self.idle();
             assert!(self.tick() < 100, "no move started");
         }
+        self.parts_while(EnemyCondition::Attack)
+    }
+
+    /// From now on while the enemy is in `state`, as [`Run::parts`].
+    fn parts_while(&mut self, state: EnemyCondition) -> (Vec<Part>, Animation) {
         let mut parts = Vec::new();
         let mut a = self.animation();
-        while self.enemy().state == EnemyCondition::Attack {
+        while self.enemy().state == state {
             if a.start == self.tick() {
                 assert_eq!(a.blend_start, a.start);
                 let e = self.enemy();
@@ -208,7 +215,7 @@ fn an_enemy_body_model_without_animation_is_rejected() {
 }
 
 #[test]
-fn an_enemy_body_animation_missing_one_of_the_ten_clips_is_rejected() {
+fn an_enemy_body_animation_missing_one_of_the_twelve_clips_is_rejected() {
     for missing in ENEMY_CLIPS {
         let children = format!(
             r#"(name: "body", model: "assets/models/boss.glb", {})"#,
@@ -336,13 +343,66 @@ fn a_combo_in_phase_2_plays_its_shorter_startups_and_gaps_faster() {
 }
 
 #[test]
-fn the_spin_plays_idle_and_so_does_the_rest_after_it() {
+fn the_spin_plays_its_parts_with_phase_2_startup_faster_then_rests_idle() {
     let mut run = Run::new(&[("phase2_at", 0.5), ("spin_weight", 1.0)]);
     run.game.enemies[0].stage = 2;
     let (parts, after) = run.parts();
-    assert!(parts.is_empty(), "{parts:?}");
-    assert_eq!(after.playing, "idle");
+    // Phase 2's 0.75: startup round(37.5) = 38, written for 50.
+    let startup = clips::stretch(50, 38);
+    assert_eq!(startup, 132);
+    assert_eq!(
+        parts,
+        [
+            part(1, "spin", 0, startup, 3),
+            part(39, "spin", 5000, 100, 0),
+            part(51, "spin", 6200, 100, 0),
+        ]
+    );
+    assert_eq!((after.playing.as_str(), after.blend), ("idle", 6));
     assert_eq!(run.enemy().state, EnemyCondition::Rest);
+}
+
+/// The enemy 1.5 m ahead, entering phase 2 at the character's first hit,
+/// with `overrides`: the hit tick and the roar's parts, as [`Run::parts`].
+fn roar_parts(overrides: &[(&str, f64)]) -> (u64, Vec<Part>, Animation) {
+    let mut props = vec![("phase2_at", 0.99)];
+    props.extend_from_slice(overrides);
+    let mut run = Run::at(-1.5, &props);
+    run.hold(&[ATTACK]);
+    while run.enemy().state != EnemyCondition::Roar {
+        run.idle();
+        assert!(run.tick() < 60, "no roar");
+    }
+    let hit = run.game.hurtboxes[0].last_hit.unwrap().tick;
+    assert_eq!(hit, run.tick());
+    let (parts, after) = run.parts_while(EnemyCondition::Roar);
+    (hit, parts, after)
+}
+
+#[test]
+fn the_roar_plays_from_the_hit_in_two_parts_split_at_the_blast() {
+    // As written: 20 ticks to the blast, 50 after it.
+    let (hit, parts, after) = roar_parts(&[]);
+    assert_eq!(
+        parts,
+        [part(1, "roar", 0, 100, 3), part(21, "roar", 2000, 100, 0)]
+    );
+    assert_eq!(after.start, hit + 70 - 1, "back to idle on its last tick");
+    assert_eq!((after.playing.as_str(), after.blend), ("idle", 6));
+    // An earlier blast and a longer roar stretch each part on its own.
+    let (_, parts, _) = roar_parts(&[("roar_blast_tick", 10.0), ("roar_ticks", 90.0)]);
+    let (before, later) = (clips::stretch(20, 10), clips::stretch(50, 80));
+    assert_eq!((before, later), (200, 63));
+    assert_eq!(
+        parts,
+        [
+            part(1, "roar", 0, before, 3),
+            part(11, "roar", 2000, later, 0)
+        ]
+    );
+    // The blast on the last tick: no part after it.
+    let (_, parts, _) = roar_parts(&[("roar_ticks", 20.0)]);
+    assert_eq!(parts, [part(1, "roar", 0, 100, 3)]);
 }
 
 // ------------------------------------------------------------------ walking
@@ -454,6 +514,41 @@ fn a_modeled_enemy_flashes_red_when_hit_and_darkens_dead() {
     assert_eq!(color(&dead), Vec3::ONE * DEAD_DIM);
     dead.idle();
     assert_eq!(color(&dead), Vec3::ONE * DEAD_DIM);
+}
+
+#[test]
+fn a_modeled_enemy_glows_warning_roaring_before_the_blast_then_turns_dark_red() {
+    let mut run = Run::at(-1.5, &[("phase2_at", 0.99)]);
+    let color = |run: &Run| {
+        run.game
+            .scene
+            .node(run.body())
+            .model
+            .as_ref()
+            .unwrap()
+            .color
+    };
+    run.hold(&[ATTACK]);
+    while run.enemy().state != EnemyCondition::Roar {
+        run.idle();
+    }
+    // The hit's flash first, then the warning until the blast on move tick
+    // 20, then phase 2's tint of the model's white.
+    assert_eq!(color(&run), FLASH_TINT);
+    while run.enemy().move_tick < 19 {
+        run.idle();
+        if u64::from(run.enemy().move_tick) > FLASH_TICKS {
+            assert_eq!(
+                color(&run),
+                WARN_COLOR,
+                "move tick {}",
+                run.enemy().move_tick
+            );
+        }
+    }
+    run.idle();
+    assert_eq!(run.enemy().move_tick, 20);
+    assert_eq!(color(&run), PHASE2_TINT);
 }
 
 // ------------------------------------------------------------------ boss.ron

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-const SCENES: [(&str, &str); 13] = [
+const SCENES: [(&str, &str); 14] = [
     (
         "souls demo",
         include_str!("../../../games/souls/src/demo.scene.ron"),
@@ -51,6 +51,10 @@ const SCENES: [(&str, &str); 13] = [
     (
         "boss moves",
         include_str!("../../../assets/scenes/boss_moves.ron"),
+    ),
+    (
+        "boss phase 2 moves",
+        include_str!("../../../assets/scenes/boss_phase2_moves.ron"),
     ),
 ];
 

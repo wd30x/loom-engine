@@ -1,0 +1,21 @@
+// Preview of the souls boss's phase 2 clips (docs/architecture.md sections 11 and 19), rendered
+// without a game, in place, tinted the dark red phase 2 multiplies the model by; the clips play
+// once and then hold their last pose. A film strip of it is smoke H18:
+//   loom view --scene assets/scenes/boss_phase2_moves.ron --ticks 14,20,40,50,53,56,59,90 --size 600x420 --screenshot out/boss_phase2_moves.png
+// Two bosses face loom's forward (-Z), seen from the front, a little to their left and above;
+// left to right on screen: roar (its blast on tick 20), spin (a full turn over ticks 50 to 62).
+(
+    version: 1,
+    camera: "cam",
+    ambient: (0.25, 0.25, 0.3),
+    nodes: [
+        (name: "cam", position: (-1.0, 3.4, -10.5), look_at: (0.0, 1.6, 0.0),
+            camera: (fov_y: 38.0, near: 0.1, far: 100.0)),
+        (name: "sun", rotation: (-50.0, 150.0, 0.0), light: (color: (1.0, 0.97, 0.9), intensity: 1.0)),
+        (name: "ground", mesh: Plane, scale: (40.0, 1.0, 40.0), color: (0.35, 0.35, 0.38)),
+        (name: "roar", position: (2.5, 0.0, 0.0), model: "assets/models/boss.glb", color: (1.0, 0.3, 0.3),
+            animation: (clips: [("roar", "assets/anims/boss/roar.ron")], play: "roar")),
+        (name: "spin", position: (-2.5, 0.0, 0.0), model: "assets/models/boss.glb", color: (1.0, 0.3, 0.3),
+            animation: (clips: [("spin", "assets/anims/boss/spin.ron")], play: "spin")),
+    ],
+)

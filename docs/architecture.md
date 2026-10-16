@@ -2319,6 +2319,8 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 - 模型新写一个 Blender 脚本 `tools/blender/boss.py`，骨骼和角色的 19 根完全相同（名字、父子、顺序），片段的轴约定照用。
 - 拆成两片：E7.6 接上待机、走路、四种招式、硬直、死亡；E7.7 做咆哮、回旋斩和二阶段的表现。
 - 手臂 `arm` 从 `boss.ron` 删掉，招式由片段表现。
+- E7.6 审查后用户接受（2026-10-16）：新 prop `enemy_dead_lift`；模型放在 `body` 上；二阶段颜色在 E7.6 就作用到模型上。
+- E7.7（用户决定 2026-10-16）：`roar`、`spin` 对所有用模型的敌人都必须有，不看有没有 `phase2_at`。
 
 **敌人的两种写法**：
 - 老写法：子节点 `body` 是 `mesh`（胶囊体），或者没有 `body`。行为和以前完全一样，游戏不碰动画。
@@ -2335,11 +2337,13 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 
 | 片段 | 用在 | 片段长度（tick） |
 |---|---|---|
-| `idle` | 站着、原地转身、休息，以及 E7.7 之前的咆哮、回旋斩 | 随意，循环 |
+| `idle` | 站着、原地转身、休息 | 随意，循环 |
 | `walk` | 走近（`chase`） | 循环；按 `WALK_CLIP_SPEED` = 2.5 m/s 写 |
 | `sweep`、`cleave`、`lunge` | 横扫、下劈、突进 | 各招默认的前摇 + 出招 + 后摇：68（30/8/30）、89（45/4/40）、80（35/10/35）。突进在原地写，节点由游戏移动 |
 | `combo` | 连击第 1 刀，从前摇到出招，以及只有 1 刀时的后摇 | 75（25/5/45） |
 | `combo_even`、`combo_odd` | 连击的偶数刀，和第 3 刀以后的奇数刀：从刀前的间隔到出招，以及最后一刀的后摇 | 62（12/5/45），12 是默认的 `combo_gap_ticks` |
+| `spin` | 回旋斩（E7.7 起） | 102（50/12/40）。出招的 12 tick 里整个身体靠 `root` 骨骼原地向左转一整圈（每 tick 一个关键帧，每格 30°），戟伸在身体右边，和判定扇形一样从身后经右、前、左扫回身后；节点的朝向不动 |
+| `roar` | 咆哮（E7.7 起） | 70：冲击波前 0–20、冲击波后 20–70，也就是默认的 `roar_blast_tick`、`roar_ticks` |
 | `stagger` | 硬直 | 30，不循环 |
 | `death` | 死亡 | 随意，不循环，停在最后一格直到复活；四肢只在身体所在的平面附近动（同角色） |
 
@@ -2349,13 +2353,17 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 **每个 tick 选片段**：在第 6 步、`show_arms` 之后做，只看这个 tick 结束时的状态，是状态的纯函数（`enemy_clips.rs` 的 `choose`）。按顺序取第一条：
 1. 健康状态是 `dead`：`death`，`rate` 100。`state_ticks` 等于 `revive_ticks` 的那个 tick（刚死）重播，`blend` 3。
 2. 健康状态是 `stagger`：`stagger`，`rate = round(100 × 30 / stagger_ticks)`。`state_ticks` 等于 `stagger_ticks` 的那个 tick（刚被打出硬直）重播，`blend` 2。
-3. 状态是 `attack`，招式不是 `spin`：按上表的片段，分段播，照角色攻击的办法：
+3. 状态是 `attack`：按上表的片段，分段播，照角色攻击的办法：
    - 每一段（前摇或刀前的间隔、出招、后摇）的第一个 tick 重播；
    - `offset` 是这一段在片段里的起点 × 100；
    - `rate = round(100 × 片段里这一段的 tick 数 / 实际这一段的 tick 数)`，所以二阶段的 `phase2_speed_scale` 也只是拉伸；
    - `blend`：这一招的第 1 个 tick 是 3，其余 0。
-4. 状态是 `chase`：`walk`，`rate = round(100 × 每 tick 步长 × 60 / WALK_CLIP_SPEED)`（二阶段步长变大，片段跟着快）。
-5. 其余（`idle`、转身、`rest`，以及 `spin`、`roar`）：`idle`，`rate` 100。
+4. 状态是 `roar`（E7.7 起）：`roar`，分两段：
+   - `move_tick` 从 1 到 `roar_blast_tick`：片段的 0–20，`rate = round(100 × 20 / roar_blast_tick)`，在 `move_tick == 1` 时从 0 开始，`blend` 3；
+   - `move_tick` 从 `roar_blast_tick + 1` 到 `roar_ticks`：片段的 20–70，`rate = round(100 × 50 / (roar_ticks - roar_blast_tick))`，在 `move_tick == roar_blast_tick + 1` 时从 2000 ctick 开始，`blend` 0；`roar_blast_tick == roar_ticks` 时没有这一段；
+   - 20、70 取 prop 的默认值。按「第 k 个 tick 显示第 k - 1 格」的约定，冲击波那个 tick 显示第 19 格，片段在 17–20 格里挺身张臂，所以看起来和冲击波同时。
+5. 状态是 `chase`：`walk`，`rate = round(100 × 每 tick 步长 × 60 / WALK_CLIP_SPEED)`（二阶段步长变大，片段跟着快）。
+6. 其余（`idle`、转身、`rest`）：`idle`，`rate` 100。
 - 什么时候调接口、`round`、速度下限、其余过渡用 6：同角色（`clips.rs` 的 `show`，两边共用）。
 
 **倒地**：新写法下，死了的敌人：
@@ -2373,14 +2381,16 @@ else: hp_trail = max(hp, hp_trail - hp_max / 60)       // 1 秒降完满血那�
 
 **颜色**：模型节点也在受伤方的 mesh 列表里：
 - 闪的时候用 `FLASH_TINT`，死了乘 `DEAD_DIM`，同角色；
-- 咆哮预警色、二阶段暗红照「二阶段」一节的规则作用到模型上（模型底色是白色，二阶段就是暗红）。这本来排在 E7.7，E7.6 实现时自然带上了。
+- 咆哮预警色、二阶段暗红照「二阶段」一节的规则作用到模型上（模型底色是白色，二阶段就是暗红）。这本来排在 E7.7，E7.6 实现时自然带上了；E7.7 加了测试，并在游戏里截图核对过。
 
-**场景**：`assets/scenes/boss.ron` 的 Boss 改成新写法：`body` 换成 `assets/models/boss.glb` 加 `assets/anims/boss/` 下的 10 个片段，删掉 `arm`，props 加 `enemy_dead_lift` 0.3。
+**场景**：`assets/scenes/boss.ron` 的 Boss 改成新写法：`body` 换成 `assets/models/boss.glb` 加 `assets/anims/boss/` 下的片段（E7.6 是 10 个，E7.7 加上 `spin`、`roar` 变成 12 个），删掉 `arm`，props 加 `enemy_dead_lift` 0.3。
 - 状态导出多了 `nodes."boss/body".animation`、少了 `boss/arm`，`game` 部分逐字节不变。
 - 招式预览场景 `assets/scenes/boss_moves.ron`：四个 Boss 原地播 `sweep`、`cleave`、`lunge`、`combo`，smoke H17 拍它的胶片图。
+- 二阶段招式预览 `assets/scenes/boss_phase2_moves.ron`（E7.7 起）：两个 Boss 原地播 `roar`、`spin`，节点颜色是二阶段的暗红 `(1.0, 0.3, 0.3)`，smoke H18 拍它的胶片图。
+- E7.7 起，`boss_phase2_state` 导出时 Boss 正在回旋斩的前摇，`nodes."boss/body".animation` 从 `idle` 变成 `spin`，`game` 部分不变。
 
-**已知限制**（E7.6）：
-- 咆哮、回旋斩没有片段，播 `idle`（E7.7 做）。
+**已知限制**（E7.6、E7.7）：
+- 咆哮期间敌人照旧转向角色，转的时候脚会滑。
 - 原地转身没有片段：站着转身时脚滑。
 - 片段只管好看，判定仍是扇形：下劈 4 tick 的出招里，戟刚从头顶落下就已经判定命中。
 
@@ -3115,7 +3125,7 @@ E6.2 审查时定：
 - **E7.4**：引擎加播放速度和片段起点；souls 的角色换成模型，接上移动和攻击（待机、跑、锁定时的横移和后退、冲刺、翻滚、后撤步、轻攻击三连、重攻击）。
 - **E7.5**：souls 角色的其余动作：硬直、死亡、喝原素瓶、篝火休息。
 - **E7.6**：Boss 换成模型，接上待机、走路、四种招式、硬直、死亡（第 11 节「Boss 的模型和动画」）。
-- **E7.7**：Boss 的咆哮、回旋斩片段和二阶段的表现（用户决定 2026-10-16，从 E7.6 拆出）。
+- **E7.7**：Boss 的咆哮、回旋斩片段和二阶段的表现（用户决定 2026-10-16，从 E7.6 拆出；第 11 节「Boss 的模型和动画」）。
 - 切片是规划者在 E7.2 规划时拆的（原来的 E7.2 太大，拆成 E7.2、E7.3）；「事件」没有单列：游戏自己知道什么时候换片段，要发事件由游戏发。
 
 E7.2 用户决定（2026-09-28）：

@@ -117,18 +117,18 @@
         1.0
       ],
       "animation": {
-        "clip": "idle",
-        "start": 471,
+        "clip": "spin",
+        "start": 502,
         "offset": 0,
-        "rate": 100,
+        "rate": 132,
         "from": {
-          "clip": "cleave",
-          "start": 432,
-          "offset": 4900,
+          "clip": "idle",
+          "start": 471,
+          "offset": 0,
           "rate": 100
         },
-        "blend_start": 471,
-        "blend": 6
+        "blend_start": 502,
+        "blend": 3
       }
     },
     "boss/hp_bar": {
